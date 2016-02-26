@@ -120,7 +120,7 @@ static int gen_lnode(struct device *dev,
 
 	cur_dev = to_msm_bus_node(dev);
 	if (!cur_dev) {
-		MSM_BUS_ERR("%s: Null device ptr", __func__);
+		// MSM_BUS_ERR("%s: Null device ptr", __func__);
 		goto exit_gen_lnode;
 	}
 
@@ -191,7 +191,7 @@ static int remove_lnode(struct msm_bus_node_device_type *cur_dev,
 	int ret = 0;
 
 	if (!cur_dev) {
-		MSM_BUS_ERR("%s: Null device ptr", __func__);
+		// MSM_BUS_ERR("%s: Null device ptr", __func__);
 		ret = -ENODEV;
 		goto exit_remove_lnode;
 	}
@@ -199,8 +199,8 @@ static int remove_lnode(struct msm_bus_node_device_type *cur_dev,
 	if (lnode_idx != -1) {
 		if (!cur_dev->num_lnodes ||
 				(lnode_idx > (cur_dev->num_lnodes - 1))) {
-			MSM_BUS_ERR("%s: Invalid Idx %d, num_lnodes %d",
-				__func__, lnode_idx, cur_dev->num_lnodes);
+			//MSM_BUS_ERR("%s: Invalid Idx %d, num_lnodes %d",
+			//	__func__, lnode_idx, cur_dev->num_lnodes);
 			ret = -ENODEV;
 			goto exit_remove_lnode;
 		}
@@ -233,7 +233,7 @@ static int prune_path(struct list_head *route_list, int dest, int src,
 		goto reset_links;
 
 	if (!dest_dev) {
-		MSM_BUS_ERR("%s: Can't find dest dev %d", __func__, dest);
+		//MSM_BUS_ERR("%s: Can't find dest dev %d", __func__, dest);
 		goto exit_prune_path;
 	}
 
@@ -318,13 +318,13 @@ static int getpath(struct device *src_dev, int dest, const char *cl_name)
 	INIT_LIST_HEAD(&black_list);
 
 	if (!src_dev) {
-		MSM_BUS_ERR("%s: Cannot locate src dev ", __func__);
+		//MSM_BUS_ERR("%s: Cannot locate src dev ", __func__);
 		goto exit_getpath;
 	}
 
 	src_node = to_msm_bus_node(src_dev);
 	if (!src_node) {
-		MSM_BUS_ERR("%s:Fatal, Source node not found", __func__);
+		//MSM_BUS_ERR("%s:Fatal, Source node not found", __func__);
 		goto exit_getpath;
 	}
 	src = src_node->node_info->id;
@@ -357,8 +357,8 @@ static int getpath(struct device *src_dev, int dest, const char *cl_name)
 						dev_connections[i]);
 					if (node_conn->node_info->
 							is_traversed) {
-						MSM_BUS_ERR("Circ Path %d\n",
-						node_conn->node_info->id);
+						//MSM_BUS_ERR("Circ Path %d\n",
+						//node_conn->node_info->id);
 						goto reset_traversed;
 					}
 					skip = chk_bl_list(&black_list,
@@ -553,7 +553,7 @@ static uint64_t aggregate_bus_req(struct msm_bus_node_device_type *bus_dev,
 	uint64_t sum_ab = 0;
 
 	if (!bus_dev || !to_msm_bus_node(bus_dev->node_info->bus_device)) {
-		MSM_BUS_ERR("Bus node pointer is Invalid");
+		//MSM_BUS_ERR("Bus node pointer is Invalid");
 		goto exit_agg_bus_req;
 	}
 
@@ -635,15 +635,15 @@ static int msm_bus_apply_rules(struct list_head *list, bool after_clk_commit)
 				msm_bus_device_match_adhoc);
 
 		if (!dev) {
-			MSM_BUS_ERR("Can't find dev node for %d", rule->id);
+			//MSM_BUS_ERR("Can't find dev node for %d", rule->id);
 			continue;
 		}
 		dev_info = to_msm_bus_node(dev);
 
 		ret = msm_bus_enable_limiter(dev_info, rule->throttle,
 							rule->lim_bw);
-		if (ret)
-			MSM_BUS_ERR("Failed to set limiter for %d", rule->id);
+		//if (ret)
+		//	MSM_BUS_ERR("Failed to set limiter for %d", rule->id);
 	}
 
 	return ret;
@@ -700,7 +700,7 @@ static int update_path(struct device *src_dev, int dest, uint64_t act_req_ib,
 	bool rules_registered = msm_rule_are_rules_registered();
 
 	if (IS_ERR_OR_NULL(src_dev)) {
-		MSM_BUS_ERR("%s: No source device", __func__);
+		//MSM_BUS_ERR("%s: No source device", __func__);
 		ret = -ENODEV;
 		goto exit_update_path;
 	}
@@ -708,7 +708,7 @@ static int update_path(struct device *src_dev, int dest, uint64_t act_req_ib,
 	next_dev = src_dev;
 
 	if (src_idx < 0) {
-		MSM_BUS_ERR("%s: Invalid lnode idx %d", __func__, src_idx);
+		//MSM_BUS_ERR("%s: Invalid lnode idx %d", __func__, src_idx);
 		ret = -ENXIO;
 		goto exit_update_path;
 	}
@@ -719,16 +719,16 @@ static int update_path(struct device *src_dev, int dest, uint64_t act_req_ib,
 		dev_info = to_msm_bus_node(next_dev);
 
 		if (curr_idx >= dev_info->num_lnodes) {
-			MSM_BUS_ERR("%s: Invalid lnode Idx %d num lnodes %d",
-			 __func__, curr_idx, dev_info->num_lnodes);
+			//("%s: Invalid lnode Idx %d num lnodes %d",
+			// __func__, curr_idx, dev_info->num_lnodes);
 			ret = -ENXIO;
 			goto exit_update_path;
 		}
 
 		lnode = &dev_info->lnode_list[curr_idx];
 		if (!lnode) {
-			MSM_BUS_ERR("%s: Invalid lnode ptr lnode %d",
-				 __func__, curr_idx);
+			//MSM_BUS_ERR("%s: Invalid lnode ptr lnode %d",
+			//	 __func__, curr_idx);
 			ret = -ENXIO;
 			goto exit_update_path;
 		}
@@ -778,7 +778,7 @@ static int remove_path(struct device *src_dev, int dst, uint64_t cur_ib,
 	 * this cient on all paths
 	 */
 	if (!src_dev) {
-		MSM_BUS_ERR("%s: Can't find source device", __func__);
+		//MSM_BUS_ERR("%s: Can't find source device", __func__);
 		ret = -ENODEV;
 		goto exit_remove_path;
 	}
@@ -786,8 +786,8 @@ static int remove_path(struct device *src_dev, int dst, uint64_t cur_ib,
 	ret = update_path(src_dev, dst, 0, 0, 0, 0, cur_ib, cur_ab, src_idx,
 							active_only);
 	if (ret) {
-		MSM_BUS_ERR("%s: Error zeroing out path ctx %d",
-					__func__, ACTIVE_CTX);
+		//MSM_BUS_ERR("%s: Error zeroing out path ctx %d",
+		//			__func__, ACTIVE_CTX);
 		goto exit_remove_path;
 	}
 
@@ -813,14 +813,14 @@ static void getpath_debug(int src, int curr, int active_only)
 	unsigned int hop = 1;
 	int idx;
 	struct msm_bus_node_device_type *devinfo;
-	int i;
+	//int i;
 
 	dev_node = bus_find_device(&msm_bus_type, NULL,
 				(void *) &src,
 				msm_bus_device_match_adhoc);
 
 	if (!dev_node) {
-		MSM_BUS_ERR("SRC NOT FOUND %d", src);
+		//MSM_BUS_ERR("SRC NOT FOUND %d", src);
 		return;
 	}
 
@@ -828,28 +828,28 @@ static void getpath_debug(int src, int curr, int active_only)
 	devinfo = to_msm_bus_node(dev_node);
 	dev_it = dev_node;
 
-	MSM_BUS_ERR("Route list Src %d", src);
+	//MSM_BUS_ERR("Route list Src %d", src);
 	while (dev_it) {
-		struct msm_bus_node_device_type *busdev =
-			to_msm_bus_node(devinfo->node_info->bus_device);
+		//struct msm_bus_node_device_type *busdev =
+		//	to_msm_bus_node(devinfo->node_info->bus_device);
 
-		MSM_BUS_ERR("Hop[%d] at Device %d ctx %d", hop,
-					devinfo->node_info->id, active_only);
+		//MSM_BUS_ERR("Hop[%d] at Device %d ctx %d", hop,
+		//			devinfo->node_info->id, active_only);
 
-		for (i = 0; i < NUM_CTX; i++) {
-			MSM_BUS_ERR("dev info sel ib %llu",
-						devinfo->node_bw[i].cur_clk_hz);
-			MSM_BUS_ERR("dev info sel ab %llu",
-						devinfo->node_bw[i].sum_ab);
-		}
+		//for (i = 0; i < NUM_CTX; i++) {
+		//	MSM_BUS_ERR("dev info sel ib %llu",
+		//				devinfo->node_bw[i].cur_clk_hz);
+		//	MSM_BUS_ERR("dev info sel ab %llu",
+		//				devinfo->node_bw[i].sum_ab);
+		//}
 
 		dev_it = devinfo->lnode_list[idx].next_dev;
 		idx = devinfo->lnode_list[idx].next;
 		if (dev_it)
 			devinfo = to_msm_bus_node(dev_it);
 
-		MSM_BUS_ERR("Bus Device %d", busdev->node_info->id);
-		MSM_BUS_ERR("Bus Clock %llu", busdev->clk[active_only].rate);
+		//MSM_BUS_ERR("Bus Device %d", busdev->node_info->id);
+		//MSM_BUS_ERR("Bus Clock %llu", busdev->clk[active_only].rate);
 
 		if (idx < 0)
 			break;
@@ -868,21 +868,21 @@ static void unregister_client_adhoc(uint32_t cl)
 
 	rt_mutex_lock(&msm_bus_adhoc_lock);
 	if (!cl) {
-		MSM_BUS_ERR("%s: Null cl handle passed unregister\n",
-				__func__);
+		//MSM_BUS_ERR("%s: Null cl handle passed unregister\n",
+		//		__func__);
 		goto exit_unregister_client;
 	}
 	client = handle_list.cl_list[cl];
 	pdata = client->pdata;
 	if (!pdata) {
-		MSM_BUS_ERR("%s: Null pdata passed to unregister\n",
-				__func__);
+		//MSM_BUS_ERR("%s: Null pdata passed to unregister\n",
+		//		__func__);
 		goto exit_unregister_client;
 	}
 
 	curr = client->curr;
 	if ((curr < 0) || (curr >= pdata->num_usecases)) {
-		MSM_BUS_ERR("Invalid index Defaulting curr to 0");
+		//MSM_BUS_ERR("Invalid index Defaulting curr to 0");
 		curr = 0;
 	}
 
@@ -920,8 +920,8 @@ static int alloc_handle_lst(int size)
 			* NUM_CL_HANDLES, GFP_KERNEL);
 		if (ZERO_OR_NULL_PTR(t_cl_list)) {
 			ret = -ENOMEM;
-			MSM_BUS_ERR("%s: Failed to allocate handles list",
-								__func__);
+			//MSM_BUS_ERR("%s: Failed to allocate handles list",
+			//					__func__);
 			goto exit_alloc_handle_lst;
 		}
 		handle_list.cl_list = t_cl_list;
@@ -933,8 +933,8 @@ static int alloc_handle_lst(int size)
 				GFP_KERNEL);
 		if (ZERO_OR_NULL_PTR(t_cl_list)) {
 			ret = -ENOMEM;
-			MSM_BUS_ERR("%s: Failed to allocate handles list",
-								__func__);
+			//MSM_BUS_ERR("%s: Failed to allocate handles list",
+			//					__func__);
 			goto exit_alloc_handle_lst;
 		}
 
@@ -964,8 +964,8 @@ static uint32_t gen_handle(struct msm_bus_client *client)
 		ret = alloc_handle_lst(NUM_CL_HANDLES);
 
 		if (ret) {
-			MSM_BUS_ERR("%s: Failed to allocate handle list",
-							__func__);
+			//MSM_BUS_ERR("%s: Failed to allocate handle list",
+			//				__func__);
 			goto exit_gen_handle;
 		}
 		handle = i + 1;
@@ -987,14 +987,14 @@ static uint32_t register_client_adhoc(struct msm_bus_scale_pdata *pdata)
 	rt_mutex_lock(&msm_bus_adhoc_lock);
 	client = kzalloc(sizeof(struct msm_bus_client), GFP_KERNEL);
 	if (!client) {
-		MSM_BUS_ERR("%s: Error allocating client data", __func__);
+		//MSM_BUS_ERR("%s: Error allocating client data", __func__);
 		goto exit_register_client;
 	}
 	client->pdata = pdata;
 
 	lnode = kzalloc(pdata->usecase->num_paths * sizeof(int), GFP_KERNEL);
 	if (ZERO_OR_NULL_PTR(lnode)) {
-		MSM_BUS_ERR("%s: Error allocating pathnode ptr!", __func__);
+		//MSM_BUS_ERR("%s: Error allocating pathnode ptr!", __func__);
 		goto exit_lnode_malloc_fail;
 	}
 	client->src_pnode = lnode;
@@ -1002,7 +1002,7 @@ static uint32_t register_client_adhoc(struct msm_bus_scale_pdata *pdata)
 	client->src_devs = kzalloc(pdata->usecase->num_paths *
 					sizeof(struct device *), GFP_KERNEL);
 	if (IS_ERR_OR_NULL(client->src_devs)) {
-		MSM_BUS_ERR("%s: Error allocating pathnode ptr!", __func__);
+		//MSM_BUS_ERR("%s: Error allocating pathnode ptr!", __func__);
 		goto exit_src_dev_malloc_fail;
 	}
 	client->curr = -1;
@@ -1012,24 +1012,24 @@ static uint32_t register_client_adhoc(struct msm_bus_scale_pdata *pdata)
 		dest = pdata->usecase->vectors[i].dst;
 
 		if ((src < 0) || (dest < 0)) {
-			MSM_BUS_ERR("%s:Invalid src/dst.src %d dest %d",
-				__func__, src, dest);
+			//MSM_BUS_ERR("%s:Invalid src/dst.src %d dest %d",
+			//	__func__, src, dest);
 			goto exit_invalid_data;
 		}
 		dev = bus_find_device(&msm_bus_type, NULL,
 				(void *) &src,
 				msm_bus_device_match_adhoc);
 		if (IS_ERR_OR_NULL(dev)) {
-			MSM_BUS_ERR("%s:Failed to find path.src %d dest %d",
-				__func__, src, dest);
+			//MSM_BUS_ERR("%s:Failed to find path.src %d dest %d",
+			//	__func__, src, dest);
 			goto exit_invalid_data;
 		}
 		client->src_devs[i] = dev;
 
 		lnode[i] = getpath(dev, dest, client->pdata->name);
 		if (lnode[i] < 0) {
-			MSM_BUS_ERR("%s:Failed to find path.src %d dest %d",
-				__func__, src, dest);
+			//MSM_BUS_ERR("%s:Failed to find path.src %d dest %d",
+			//	__func__, src, dest);
 			goto exit_invalid_data;
 		}
 	}
@@ -1062,14 +1062,14 @@ static int update_client_paths(struct msm_bus_client *client, bool log_trns,
 	struct device *src_dev;
 
 	if (!client) {
-		MSM_BUS_ERR("Client handle  Null");
+		//MSM_BUS_ERR("Client handle  Null");
 		ret = -ENXIO;
 		goto exit_update_client_paths;
 	}
 
 	pdata = client->pdata;
 	if (!pdata) {
-		MSM_BUS_ERR("Client pdata Null");
+		//MSM_BUS_ERR("Client pdata Null");
 		ret = -ENXIO;
 		goto exit_update_client_paths;
 	}
@@ -1107,8 +1107,8 @@ static int update_client_paths(struct msm_bus_client *client, bool log_trns,
 			slp_bw, curr_clk, curr_bw, lnode, pdata->active_only);
 
 		if (ret) {
-			MSM_BUS_ERR("%s: Update path failed! %d ctx %d\n",
-					__func__, ret, pdata->active_only);
+			//MSM_BUS_ERR("%s: Update path failed! %d ctx %d\n",
+			//		__func__, ret, pdata->active_only);
 			goto exit_update_client_paths;
 		}
 
@@ -1129,7 +1129,7 @@ static int update_context(uint32_t cl, bool active_only,
 
 	rt_mutex_lock(&msm_bus_adhoc_lock);
 	if (!cl) {
-		MSM_BUS_ERR("%s: Invalid client handle %d", __func__, cl);
+		//MSM_BUS_ERR("%s: Invalid client handle %d", __func__, cl);
 		ret = -ENXIO;
 		goto exit_update_context;
 	}
@@ -1146,15 +1146,15 @@ static int update_context(uint32_t cl, bool active_only,
 		goto exit_update_context;
 	}
 	if (pdata->active_only == active_only) {
-		MSM_BUS_ERR("No change in context(%d==%d), skip\n",
-					pdata->active_only, active_only);
+		//MSM_BUS_ERR("No change in context(%d==%d), skip\n",
+		//			pdata->active_only, active_only);
 		ret = -ENXIO;
 		goto exit_update_context;
 	}
 
 	if (ctx_idx >= pdata->num_usecases) {
-		MSM_BUS_ERR("Client %u passed invalid index: %d\n",
-			cl, ctx_idx);
+		//MSM_BUS_ERR("Client %u passed invalid index: %d\n",
+		//	cl, ctx_idx);
 		ret = -ENXIO;
 		goto exit_update_context;
 	}
@@ -1186,29 +1186,29 @@ static int update_request_adhoc(uint32_t cl, unsigned int index)
 	rt_mutex_lock(&msm_bus_adhoc_lock);
 
 	if (!cl) {
-		MSM_BUS_ERR("%s: Invalid client handle %d", __func__, cl);
+		//MSM_BUS_ERR("%s: Invalid client handle %d", __func__, cl);
 		ret = -ENXIO;
 		goto exit_update_request;
 	}
 
 	client = handle_list.cl_list[cl];
 	if (!client) {
-		MSM_BUS_ERR("%s: Invalid client pointer ", __func__);
+		//MSM_BUS_ERR("%s: Invalid client pointer ", __func__);
 		ret = -ENXIO;
 		goto exit_update_request;
 	}
 
 	pdata = client->pdata;
 	if (!pdata) {
-		MSM_BUS_ERR("%s: Client data Null.[client didn't register]",
-				__func__);
+		//MSM_BUS_ERR("%s: Client data Null.[client didn't register]",
+		//		__func__);
 		ret = -ENXIO;
 		goto exit_update_request;
 	}
 
 	if (index >= pdata->num_usecases) {
-		MSM_BUS_ERR("Client %u passed invalid index: %d\n",
-			cl, index);
+		//MSM_BUS_ERR("Client %u passed invalid index: %d\n",
+		//	cl, index);
 		ret = -ENXIO;
 		goto exit_update_request;
 	}
@@ -1257,7 +1257,7 @@ static int update_bw_adhoc(struct msm_bus_client_handle *cl, u64 ab, u64 ib)
 	rt_mutex_lock(&msm_bus_adhoc_lock);
 
 	if (!cl) {
-		MSM_BUS_ERR("%s: Invalid client handle %p", __func__, cl);
+		//MSM_BUS_ERR("%s: Invalid client handle %p", __func__, cl);
 		ret = -ENXIO;
 		goto exit_update_request;
 	}
@@ -1284,8 +1284,8 @@ static int update_bw_adhoc(struct msm_bus_client_handle *cl, u64 ab, u64 ib)
 		cl->cur_act_ib, cl->cur_act_ab, cl->first_hop, cl->active_only);
 
 	if (ret) {
-		MSM_BUS_ERR("%s: Update path failed! %d active_only %d\n",
-				__func__, ret, cl->active_only);
+		//MSM_BUS_ERR("%s: Update path failed! %d active_only %d\n",
+		//		__func__, ret, cl->active_only);
 		goto exit_update_request;
 	}
 
@@ -1311,7 +1311,7 @@ static int update_bw_context(struct msm_bus_client_handle *cl, u64 act_ab,
 
 	rt_mutex_lock(&msm_bus_adhoc_lock);
 	if (!cl) {
-		MSM_BUS_ERR("Invalid client handle %p", cl);
+		//MSM_BUS_ERR("Invalid client handle %p", cl);
 		ret = -ENXIO;
 		goto exit_change_context;
 	}
@@ -1320,7 +1320,7 @@ static int update_bw_context(struct msm_bus_client_handle *cl, u64 act_ab,
 		(cl->cur_act_ab == act_ab) &&
 		(cl->cur_slp_ib == slp_ib) &&
 		(cl->cur_slp_ab == slp_ab)) {
-		MSM_BUS_ERR("No change in vote");
+		//MSM_BUS_ERR("No change in vote");
 		goto exit_change_context;
 	}
 
@@ -1331,8 +1331,8 @@ static int update_bw_context(struct msm_bus_client_handle *cl, u64 act_ab,
 				cl->cur_act_ab, cl->cur_act_ab,  cl->first_hop,
 				cl->active_only);
 	if (ret) {
-		MSM_BUS_ERR("%s: Update path failed! %d active_only %d\n",
-				__func__, ret, cl->active_only);
+		//MSM_BUS_ERR("%s: Update path failed! %d active_only %d\n",
+		//		__func__, ret, cl->active_only);
 		goto exit_change_context;
 	}
 	commit_data();
@@ -1350,8 +1350,8 @@ static void unregister_adhoc(struct msm_bus_client_handle *cl)
 {
 	rt_mutex_lock(&msm_bus_adhoc_lock);
 	if (!cl) {
-		MSM_BUS_ERR("%s: Null cl handle passed unregister\n",
-				__func__);
+		//MSM_BUS_ERR("%s: Null cl handle passed unregister\n",
+		//		__func__);
 		goto exit_unregister_client;
 	}
 
@@ -1384,14 +1384,14 @@ register_adhoc(uint32_t mas, uint32_t slv, char *name, bool active_only)
 
 	client = kzalloc(sizeof(struct msm_bus_client_handle), GFP_KERNEL);
 	if (!client) {
-		MSM_BUS_ERR("%s: Error allocating client data", __func__);
+		//MSM_BUS_ERR("%s: Error allocating client data", __func__);
 		goto exit_register;
 	}
 
 	len = strnlen(name, MAX_STR_CL);
 	client->name = kzalloc((len + 1), GFP_KERNEL);
 	if (!client->name) {
-		MSM_BUS_ERR("%s: Error allocating client name buf", __func__);
+		//MSM_BUS_ERR("%s: Error allocating client name buf", __func__);
 		free_cl_mem(client);
 		goto exit_register;
 	}
@@ -1405,16 +1405,16 @@ register_adhoc(uint32_t mas, uint32_t slv, char *name, bool active_only)
 					(void *) &mas,
 					msm_bus_device_match_adhoc);
 	if (IS_ERR_OR_NULL(client->mas_dev)) {
-		MSM_BUS_ERR("%s:Failed to find path.src %d dest %d",
-			__func__, client->mas, client->slv);
+		//MSM_BUS_ERR("%s:Failed to find path.src %d dest %d",
+		//	__func__, client->mas, client->slv);
 		free_cl_mem(client);
 		goto exit_register;
 	}
 
 	client->first_hop = getpath(client->mas_dev, client->slv, client->name);
 	if (client->first_hop < 0) {
-		MSM_BUS_ERR("%s:Failed to find path.src %d dest %d",
-			__func__, client->mas, client->slv);
+		//MSM_BUS_ERR("%s:Failed to find path.src %d dest %d",
+		//	__func__, client->mas, client->slv);
 		free_cl_mem(client);
 		goto exit_register;
 	}
