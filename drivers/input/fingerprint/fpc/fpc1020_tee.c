@@ -93,12 +93,11 @@ struct fpc1020_data {
 	#endif
 	#if defined(CONFIG_FB)
 	struct notifier_block fb_notif;
-    #endif
+        #endif
 	struct work_struct pm_work;
 	int proximity_state; /* 0:far 1:near */
-	struct mutex irq_lock;
-	struct workqueue_struct *fpc_wq;
-	struct work_struct irq_work;
+	bool irq_enabled;
+	spinlock_t irq_lock;
 };
 
 static int fpc1020_request_named_gpio(struct fpc1020_data *fpc1020,
@@ -271,7 +270,14 @@ static ssize_t irq_get(struct device* device,
 			     char* buffer)
 {
 	struct fpc1020_data* fpc1020 = dev_get_drvdata(device);
-	int irq = gpio_get_value(fpc1020->irq_gpio);
+	bool irq_enabled;
+	int irq;
+
+	spin_lock(&fpc1020->irq_lock);
+	irq_enabled = fpc1020->irq_enabled;
+	spin_unlock(&fpc1020->irq_lock);
+
+	irq = irq_enabled && gpio_get_value(fpc1020->irq_gpio);
 	return scnprintf(buffer, PAGE_SIZE, "%i\n", irq);
 }
 
@@ -289,6 +295,35 @@ static ssize_t irq_ack(struct device* device,
 	return count;
 }
 static DEVICE_ATTR(irq, S_IRUSR | S_IWUSR, irq_get, irq_ack);
+
+//liuyan not merge now
+
+/*#ifdef VENDOR_EDIT //WayneChang, 2015/12/02, add for key to abs, simulate key in abs through virtual key system
+extern void int_touch(void);
+extern struct completion key_cm;
+extern bool virtual_key_enable;
+
+bool key_home_pressed = false;
+EXPORT_SYMBOL(key_home_pressed);
+#endif*/
+
+static void set_fpc_irq(struct fpc1020_data *fpc1020, bool enable)
+{
+	bool irq_enabled;
+
+	spin_lock(&fpc1020->irq_lock);
+	irq_enabled = fpc1020->irq_enabled;
+	fpc1020->irq_enabled = enable;
+	spin_unlock(&fpc1020->irq_lock);
+
+	if (enable == irq_enabled)
+		return;
+
+	if (enable)
+		enable_irq(gpio_to_irq(fpc1020->irq_gpio));
+	else
+		disable_irq(gpio_to_irq(fpc1020->irq_gpio));
+}
 
 static ssize_t report_home_set(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
@@ -379,29 +414,8 @@ static ssize_t proximity_state_set(struct device *dev,
 
 	fpc1020->proximity_state = !!val;
 
-	mutex_lock(&fpc1020->irq_lock);
-	if (!fpc1020->screen_state) {
-		if (fpc1020->proximity_state) {
-			disable_irq_wake(gpio_to_irq(fpc1020->irq_gpio));
-		} else {
-			enable_irq_wake(gpio_to_irq(fpc1020->irq_gpio));
-			rc = gpio_direction_output(fpc1020->rst_gpio, 1);
-			if (rc) {
-				dev_err(fpc1020->dev,
-					"gpio_direction_output failed.\n");
-				mutex_unlock(&fpc1020->irq_lock);
-				return rc;
-			}
-
-			gpio_set_value(fpc1020->rst_gpio, 1);
-			udelay(FPC1020_RESET_HIGH1_US);
-			gpio_set_value(fpc1020->rst_gpio, 0);
-			udelay(FPC1020_RESET_LOW_US);
-			gpio_set_value(fpc1020->rst_gpio, 1);
-			udelay(FPC1020_RESET_HIGH2_US);
-		}
-	}
-	mutex_unlock(&fpc1020->irq_lock);
+	if (!fpc1020->screen_state)
+		set_fpc_irq(fpc1020, !fpc1020->proximity_state);
 
 	return count;
 }
@@ -491,6 +505,10 @@ static void fpc1020_suspend_resume(struct work_struct *work)
 	struct fpc1020_data *fpc1020 =
 		container_of(work, typeof(*fpc1020), pm_work);
 
+ 	if (fpc1020->screen_state) {
+		set_fpc_irq(fpc1020, true);
+        }
+
 	sysfs_notify(&fpc1020->dev->kobj, NULL,
 				dev_attr_screen_state.attr.name);
 }
@@ -517,23 +535,14 @@ static int fb_notifier_callback(struct notifier_block *self, unsigned long event
 }
 #endif
 
-static void fpc1020_irq_work(struct work_struct *work)
+static irqreturn_t fpc1020_irq_handler(int irq, void *handle)
 {
-	struct fpc1020_data *fpc1020 =
-		container_of(work, typeof(*fpc1020), irq_work);
-	bool status;
-
-	mutex_lock(&fpc1020->irq_lock);
-	status = !fpc1020->screen_state && fpc1020->proximity_state;
-	mutex_unlock(&fpc1020->irq_lock);
-
-	if (status)
-		return;
+	struct fpc1020_data *fpc1020 = handle;
 
 	sysfs_notify(&fpc1020->dev->kobj, NULL, dev_attr_irq.attr.name);
 
 	if (fpc1020->screen_state)
-		return;
+		return IRQ_HANDLED;
 
 	wake_lock_timeout(&fpc1020->ttw_wl, msecs_to_jiffies(FPC_TTW_HOLD_TIME));
 
@@ -542,13 +551,6 @@ static void fpc1020_irq_work(struct work_struct *work)
 	input_sync(fpc1020->input_dev);
 	input_report_key(fpc1020->input_dev, KEY_FINGERPRINT, 0);
 	input_sync(fpc1020->input_dev);
-}
-
-static irqreturn_t fpc1020_irq_handler(int irq, void *handle)
-{
-	struct fpc1020_data *fpc1020 = handle;
-
-	queue_work(fpc1020->fpc_wq, &fpc1020->irq_work);
 
 	return IRQ_HANDLED;
 }
@@ -664,13 +666,6 @@ static int fpc1020_probe(struct platform_device *pdev)
     if (rc)
 		goto exit;
 
-	fpc1020->fpc_wq = create_singlethread_workqueue("fpc_wq");
-	if (!fpc1020->fpc_wq) {
-		rc = -ENOMEM;
-		goto exit;
-	}
-
-	INIT_WORK(&fpc1020->irq_work, fpc1020_irq_work);
 	INIT_WORK(&fpc1020->pm_work, fpc1020_suspend_resume);
 
     #if defined(CONFIG_FB)
@@ -680,6 +675,9 @@ static int fpc1020_probe(struct platform_device *pdev)
 		dev_err(fpc1020->dev, "Unable to register fb_notifier: %d\n", rc);
     fpc1020->screen_state = 1;
     #endif
+
+	spin_lock_init(&fpc1020->irq_lock);
+	fpc1020->irq_enabled = true;
 
 	irqf = IRQF_TRIGGER_RISING | IRQF_ONESHOT;
 	mutex_init(&fpc1020->lock);
@@ -699,7 +697,6 @@ static int fpc1020_probe(struct platform_device *pdev)
 	enable_irq_wake( gpio_to_irq( fpc1020->irq_gpio ) );
 	wake_lock_init(&fpc1020->ttw_wl, WAKE_LOCK_SUSPEND, "fpc_ttw_wl");
 	device_init_wakeup(fpc1020->dev, 1);
-	mutex_init(&fpc1020->irq_lock);
 
 	rc = sysfs_create_group(&dev->kobj, &attribute_group);
 	if (rc) {
