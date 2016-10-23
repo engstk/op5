@@ -25,7 +25,7 @@
 #define DIAG_DEBUG_POWER	0x0020
 #define DIAG_DEBUG_BRIDGE	0x0040
 
-#define DIAG_DEBUG
+//#define DIAG_DEBUG
 
 #ifdef DIAG_DEBUG
 extern uint16_t diag_debug_mask;
