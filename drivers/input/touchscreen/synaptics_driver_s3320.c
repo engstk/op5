@@ -177,13 +177,13 @@ int DisableGestureHaptic = 0;
 #endif
 
 /*********************for Debug LOG switch*******************/
-#define TPD_ERR(a, arg...)  pr_err(TPD_DEVICE ": " a, ##arg)
-#define TPDTM_DMESG(a, arg...)  printk(TPD_DEVICE ": " a, ##arg)
+#define TPD_ERR(a, arg...)  pr_debug(TPD_DEVICE ": " a, ##arg)
+#define TPDTM_DMESG(a, arg...)  pr_debug(TPD_DEVICE ": " a, ##arg)
 
 #define TPD_DEBUG(a, arg...)\
 	do {\
 		if (tp_debug)\
-		pr_err(TPD_DEVICE ": " a, ##arg);\
+		pr_debug(TPD_DEVICE ": " a, ##arg);\
 	} while (0)
 
 /*-------------------------------Global Variable-----------------------------*/
