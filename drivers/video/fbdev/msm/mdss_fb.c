@@ -897,9 +897,7 @@ static ssize_t mdss_fb_get_hbm_mode(struct device *dev,
 
 	level = mdss_fb_send_panel_event(mfd, MDSS_EVENT_PANEL_GET_HBM_MODE,
 			NULL);
-	ret = scnprintf(buf, PAGE_SIZE, "HBM mode = %d\n"
-	                                        "0-->HBM OFF\n"
-					                        "1-->HBM ON\n", level);
+	ret = scnprintf(buf, PAGE_SIZE, "%d\n", level);
 	return ret;
 }
 
@@ -939,10 +937,7 @@ static ssize_t mdss_fb_get_srgb_mode(struct device *dev,
 
 	level = mdss_fb_send_panel_event(mfd, MDSS_EVENT_PANEL_GET_SRGB_MODE,
 			NULL);
-	ret=scnprintf(buf, PAGE_SIZE, "mode = %d\n"
-					                        "0-->sRGB Mode OFF\n"
-											"1-->sRGB Mode ON\n",
-										    level);
+	ret=scnprintf(buf, PAGE_SIZE, "%d\n", level);
 	return ret;
 }
 
@@ -982,10 +977,7 @@ static ssize_t mdss_fb_get_adobe_rgb_mode(struct device *dev,
 
 	level = mdss_fb_send_panel_event(mfd, MDSS_EVENT_PANEL_GET_ADOBE_RGB_MODE,
 			NULL);
-	ret=scnprintf(buf, PAGE_SIZE, "mode = %d\n"
-					                        "0-->Adobe RGB Mode OFF\n"
-											"1-->Adobe RGB Mode ON\n",
-										    level);
+	ret=scnprintf(buf, PAGE_SIZE, "%d\n", level);
 	return ret;
 }
 
@@ -1024,10 +1016,7 @@ static ssize_t mdss_fb_get_dci_p3_mode(struct device *dev,
 
 	level = mdss_fb_send_panel_event(mfd, MDSS_EVENT_PANEL_GET_DCI_P3_MODE,
 			NULL);
-	ret=scnprintf(buf, PAGE_SIZE, "mode = %d\n"
-					                        "0-->DCI-P3 Mode OFF\n"
-											"1-->DCI-P3 Mode ON\n",
-										    level);
+	ret=scnprintf(buf, PAGE_SIZE, "%d\n", level);
 	return ret;
 }
 
@@ -1102,10 +1091,7 @@ static ssize_t mdss_fb_get_night_mode(struct device *dev,
 
 	level = mdss_fb_send_panel_event(mfd, MDSS_EVENT_PANEL_GET_NIGHT_MODE,
 			NULL);
-	ret=scnprintf(buf, PAGE_SIZE, "mode = %d\n"
-					                        "0-->Night Mode OFF\n"
-											"1-->Night Mode ON\n",
-										    level);
+	ret=scnprintf(buf, PAGE_SIZE, "%d\n", level);
 	return ret;
 }
 
