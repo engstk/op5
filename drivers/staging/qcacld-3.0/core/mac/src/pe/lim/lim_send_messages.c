@@ -284,6 +284,7 @@ tSirRetStatus lim_send_switch_chnl_params(tpAniSirGlobal pMac,
 			"Posting  CH_SWITCH_REQ to WMA failed"));
 		return eSIR_FAILURE;
 	}
+	pSessionEntry->ch_switch_in_progress = true;
 	return eSIR_SUCCESS;
 }
 

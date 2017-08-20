@@ -62,7 +62,7 @@
  * similar to the mentioned the WMA
  */
 #define WMA_TGT_NOISE_FLOOR_DBM (-96)
-#define WMA_TGT_RSSI_INVALID      96
+#define WMA_TGT_MAX_SNR         (WMA_TGT_NOISE_FLOOR_DBM * (-1))
 
 /*
  * Make sure that link monitor and keep alive
@@ -272,9 +272,6 @@ QDF_STATUS wma_roam_scan_bmiss_cnt(tp_wma_handle wma_handle,
 
 QDF_STATUS wma_roam_scan_offload_command(tp_wma_handle wma_handle,
 					 uint32_t command, uint32_t vdev_id);
-
-QDF_STATUS wma_process_roaming_config(tp_wma_handle wma_handle,
-				     tSirRoamOffloadScanReq *roam_req);
 
 QDF_STATUS wma_roam_preauth_chan_set(tp_wma_handle wma_handle,
 				     tpSwitchChannelParams params,
@@ -932,8 +929,6 @@ QDF_STATUS wma_process_lphb_conf_req(tp_wma_handle wma_handle,
 QDF_STATUS wma_process_dhcp_ind(tp_wma_handle wma_handle,
 				tAniDHCPInd *ta_dhcp_ind);
 
-QDF_STATUS wma_get_link_speed(WMA_HANDLE handle, tSirLinkSpeedInfo *pLinkSpeed);
-
 int wma_profile_data_report_event_handler(void *handle, uint8_t *event_buf,
 				       uint32_t len);
 
@@ -1047,16 +1042,14 @@ QDF_STATUS wma_enable_arp_ns_offload(tp_wma_handle wma,
 				     bool bArpOnly);
 
 /**
- * wma_configure_non_arp_broadcast_filter() - API to Enable/Disable Broadcast
- * filter
- * when target goes to wow suspend/resume mode
+ * wma_conf_hw_filter_mode() - configure hw filter to the given mode
  * @wma: wma handle
- * @bcastFilter: broadcast filter request
+ * @req: hardware filter request
  *
- * Return: QDF Status
+ * Return: QDF_STATUS
  */
-QDF_STATUS wma_configure_non_arp_broadcast_filter(tp_wma_handle wma,
-				struct broadcast_filter_request *bcast_filter);
+QDF_STATUS wma_conf_hw_filter_mode(tp_wma_handle wma,
+				   struct hw_filter_request *req);
 
 QDF_STATUS wma_process_cesium_enable_ind(tp_wma_handle wma);
 
@@ -1187,12 +1180,25 @@ void wma_dfs_detach(struct ieee80211com *dfs_ic);
 
 void wma_dfs_configure(struct ieee80211com *ic);
 
-struct dfs_ieee80211_channel *wma_dfs_configure_channel(
-						struct ieee80211com *dfs_ic,
-						uint32_t band_center_freq1,
-						uint32_t band_center_freq2,
-						struct wma_vdev_start_req
-						*req);
+/**
+ * wma_dfs_configure_channel() - configure DFS channel
+ * @dfs_ic: ieee80211com ptr
+ * @band_center_freq1: center frequency 1
+ * @band_center_freq2: center frequency 2
+ *       (valid only for 11ac vht 80plus80 mode)
+ * @req: vdev start request
+ *
+ * Set the Channel parameters in to DFS module
+ * Also,configure the DFS radar filters for
+ * matching the DFS phyerrors.
+ *
+ * Return: None
+ */
+void wma_dfs_configure_channel(struct ieee80211com *dfs_ic,
+				uint32_t band_center_freq1,
+				uint32_t band_center_freq2,
+				struct wma_vdev_start_req *req);
+
 void wma_set_vdev_mgmt_rate(tp_wma_handle wma, uint8_t vdev_id);
 void wma_set_sap_keepalive(tp_wma_handle wma, uint8_t vdev_id);
 

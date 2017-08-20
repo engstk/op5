@@ -1811,6 +1811,11 @@ lim_populate_peer_rate_set(tpAniSirGlobal pMac,
 			lim_log(pMac, LOG2, FL("%x "),
 				       pRates->supportedMCSSet[i]);
 
+		if (pRates->supportedMCSSet[0] == 0) {
+			pe_debug("Incorrect MCS 0 - 7. They must be supported");
+			pRates->supportedMCSSet[0] = 0xFF;
+		}
+
 		psessionEntry->supported_nss_1x1 =
 			((pRates->supportedMCSSet[1] != 0) ? false : true);
 		lim_log(pMac, LOG1, FL("HT supported nss 1x1: %d"),
@@ -1818,6 +1823,14 @@ lim_populate_peer_rate_set(tpAniSirGlobal pMac,
 	}
 	lim_populate_vht_mcs_set(pMac, pRates, pVHTCaps,
 			psessionEntry, psessionEntry->nss);
+
+	if (IS_DOT11_MODE_VHT(psessionEntry->dot11mode)) {
+		if ((pRates->vhtRxMCSMap & MCSMAPMASK2x2) == MCSMAPMASK2x2)
+			psessionEntry->nss = NSS_1x1_MODE;
+	} else if (pRates->supportedMCSSet[1] == 0) {
+		psessionEntry->nss = NSS_1x1_MODE;
+	}
+
 	return eSIR_SUCCESS;
 } /*** lim_populate_peer_rate_set() ***/
 
@@ -2132,6 +2145,7 @@ lim_add_sta(tpAniSirGlobal mac_ctx,
 	tSirRetStatus ret_code = eSIR_SUCCESS;
 	tSirMacAddr sta_mac, *sta_Addr;
 	tpSirAssocReq assoc_req;
+	uint8_t i, nw_type_11b = 0;
 	tLimIbssPeerNode *peer_node; /* for IBSS mode */
 	uint8_t *p2p_ie = NULL;
 
@@ -2225,8 +2239,30 @@ lim_add_sta(tpAniSirGlobal mac_ctx,
 	    LIM_IS_IBSS_ROLE(session_entry)) {
 		add_sta_params->htCapable = sta_ds->mlmStaContext.htCapability;
 		add_sta_params->vhtCapable =
-			 sta_ds->mlmStaContext.vhtCapability;
+			sta_ds->mlmStaContext.vhtCapability;
 	}
+	/*
+	 * 2G-AS platform: SAP associates with HT (11n)clients as 2x1 in 2G and
+	 * 2X2 in 5G
+	 * Non-2G-AS platform: SAP associates with HT (11n) clients as 2X2 in 2G
+	 * and 5G; and disable async dbs scan when HT client connects
+	 * 5G-AS: Don't care
+	 */
+	if (LIM_IS_AP_ROLE(session_entry) &&
+		(STA_ENTRY_PEER == sta_ds->staType) &&
+		!add_sta_params->vhtCapable &&
+		(session_entry->nss == 2)) {
+		session_entry->ht_client_cnt++;
+		if ((session_entry->ht_client_cnt == 1) &&
+			!(mac_ctx->lteCoexAntShare &&
+			IS_24G_CH(session_entry->currentOperChannel))) {
+			pe_debug("setting SMPS intolrent vdev_param");
+			wma_cli_set_command(session_entry->smeSessionId,
+				(int)WMI_VDEV_PARAM_SMPS_INTOLERANT,
+				1, VDEV_CMD);
+		}
+	}
+
 #ifdef FEATURE_WLAN_TDLS
 	/* SystemRole shouldn't be matter if staType is TDLS peer */
 	else if (STA_ENTRY_TDLS_PEER == sta_ds->staType) {
@@ -2484,6 +2520,19 @@ lim_add_sta(tpAniSirGlobal mac_ctx,
 
 	add_sta_params->nwType = session_entry->nwType;
 
+	if (!(add_sta_params->htCapable || add_sta_params->vhtCapable)) {
+		nw_type_11b = 1;
+		for (i = 0; i < SIR_NUM_11A_RATES; i++) {
+			if (sirIsArate(sta_ds->supportedRates.llaRates[i] &
+						0x7F)) {
+				nw_type_11b = 0;
+				break;
+			}
+		}
+		if (nw_type_11b)
+			add_sta_params->nwType = eSIR_11B_NW_TYPE;
+	}
+
 	msg_q.type = WMA_ADD_STA_REQ;
 
 	msg_q.reserved = 0;
@@ -2544,6 +2593,26 @@ lim_del_sta(tpAniSirGlobal pMac,
 		lim_log(pMac, LOGP,
 			FL("Unable to allocate memory during ADD_STA"));
 		return eSIR_MEM_ALLOC_FAILED;
+	}
+
+	/*
+	 * 2G-AS platform: SAP associates with HT (11n)clients as 2x1 in 2G and
+	 * 2X2 in 5G
+	 * Non-2G-AS platform: SAP associates with HT (11n) clients as 2X2 in 2G
+	 * and 5G; and enable async dbs scan when all HT clients are gone
+	 * 5G-AS: Don't care
+	 */
+	if (LIM_IS_AP_ROLE(psessionEntry) &&
+		(pStaDs->staType == STA_ENTRY_PEER) &&
+		!pStaDs->mlmStaContext.vhtCapability &&
+		(psessionEntry->nss == 2)) {
+		psessionEntry->ht_client_cnt--;
+		if (psessionEntry->ht_client_cnt == 0) {
+			pe_debug("clearing SMPS intolrent vdev_param");
+			wma_cli_set_command(psessionEntry->smeSessionId,
+				(int)WMI_VDEV_PARAM_SMPS_INTOLERANT,
+				0, VDEV_CMD);
+		}
 	}
 
 	/* */
@@ -3103,7 +3172,6 @@ lim_check_and_announce_join_success(tpAniSirGlobal mac_ctx,
 	uint32_t *noa2_duration_from_beacon = NULL;
 	uint32_t noa;
 	uint32_t total_num_noa_desc = 0;
-	uint32_t selfStaDot11Mode = 0;
 
 	qdf_mem_copy(current_ssid.ssId,
 		     session_entry->ssId.ssId, session_entry->ssId.length);
@@ -3240,9 +3308,7 @@ lim_check_and_announce_join_success(tpAniSirGlobal mac_ctx,
 	lim_post_sme_message(mac_ctx, LIM_MLM_JOIN_CNF,
 			     (uint32_t *) &mlm_join_cnf);
 
-	wlan_cfg_get_int(mac_ctx, WNI_CFG_DOT11_MODE, &selfStaDot11Mode);
-
-	if ((IS_DOT11_MODE_VHT(selfStaDot11Mode)) &&
+	if ((IS_DOT11_MODE_VHT(session_entry->dot11mode)) &&
 		beacon_probe_rsp->vendor_vht_ie.VHTCaps.present) {
 		session_entry->is_vendor_specific_vhtcaps = true;
 		session_entry->vendor_specific_vht_ie_type =
@@ -4236,6 +4302,7 @@ tSirRetStatus lim_sta_send_add_bss_pre_assoc(tpAniSirGlobal pMac, uint8_t update
 	pAddBssParams->currentOperChannel = bssDescription->channelId;
 	lim_log(pMac, LOG2, FL("currentOperChannel %d"),
 		pAddBssParams->currentOperChannel);
+
 	if (psessionEntry->vhtCapability &&
 		(IS_BSS_VHT_CAPABLE(pBeaconStruct->VHTCaps) ||
 		 IS_BSS_VHT_CAPABLE(pBeaconStruct->vendor_vht_ie.VHTCaps))) {

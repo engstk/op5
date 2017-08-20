@@ -84,6 +84,9 @@
 #define P2P_WILDCARD_SSID "DIRECT-"     /* TODO Put it in proper place; */
 #define P2P_WILDCARD_SSID_LEN 7
 
+/* Flags for processing single BSS */
+#define WLAN_SKIP_RSSI_UPDATE   0x01
+
 #ifdef WLAN_FEATURE_CONCURRENT_P2P
 #define MAX_NO_OF_P2P_SESSIONS  5
 #endif /* WLAN_FEATURE_CONCURRENT_P2P */
@@ -171,6 +174,8 @@ enum log_event_indicator {
  * @WLAN_LOG_REASON_NO_SCAN_RESULTS: no scan results to report from HDD
  * This enum contains the different reason codes for bug report
  * @WLAN_LOG_REASON_SCAN_NOT_ALLOWED: scan not allowed due to connection states
+ * @WLAN_LOG_REASON_HB_FAILURE: station triggered heart beat failure with AP
+ * @WLAN_LOG_REASON_ROAM_HO_FAILURE: Handover failed during LFR3 roaming
  */
 enum log_event_host_reason_code {
 	WLAN_LOG_REASON_CODE_UNUSED,
@@ -185,6 +190,8 @@ enum log_event_host_reason_code {
 	WLAN_LOG_REASON_SME_OUT_OF_CMD_BUF,
 	WLAN_LOG_REASON_NO_SCAN_RESULTS,
 	WLAN_LOG_REASON_SCAN_NOT_ALLOWED,
+	WLAN_LOG_REASON_HB_FAILURE,
+	WLAN_LOG_REASON_ROAM_HO_FAILURE
 };
 
 
@@ -812,7 +819,6 @@ typedef struct sAniSirLim {
 	tLimDisassocDeauthCnfReq limDisassocDeauthCnfReq;
 	uint8_t deferredMsgCnt;
 	tSirDFSChannelList dfschannelList;
-	uint8_t deauthMsgCnt;
 	uint8_t gLimIbssStaLimit;
 
 	/* Number of channel switch IEs sent so far */
@@ -823,6 +829,8 @@ typedef struct sAniSirLim {
 	QDF_STATUS(*add_bssdescr_callback)
 		(tpAniSirGlobal pMac, tpSirBssDescription buf,
 		uint32_t scan_id, uint32_t flags);
+	QDF_STATUS(*sme_msg_callback)
+		(tHalHandle hal, cds_msg_t *msg);
 	uint8_t retry_packet_cnt;
 	uint8_t scan_disabled;
 	uint8_t beacon_probe_rsp_cnt_per_scan;
@@ -958,6 +966,10 @@ typedef struct sAniSirGlobal {
 	/* 802.11p enable */
 	bool enable_dot11p;
 
+	bool allow_adj_ch_bcn;
+	/* DBS capability based on INI and FW capability */
+	uint8_t hw_dbs_capable;
+	/* Based on INI parameter */
 	uint32_t dual_mac_feature_disable;
 	sir_mgmt_frame_ind_callback mgmt_frame_ind_cb;
 	sir_p2p_ack_ind_callback p2p_ack_ind_cb;
@@ -967,6 +979,8 @@ typedef struct sAniSirGlobal {
 	uint8_t user_configured_nss;
 	bool sta_prefer_80MHz_over_160MHz;
 	enum  country_src reg_hint_src;
+	uint32_t rx_packet_drop_counter;
+	struct candidate_chan_info candidate_channel_info[QDF_MAX_NUM_CHAN];
 } tAniSirGlobal;
 
 typedef enum {

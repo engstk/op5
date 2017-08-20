@@ -208,7 +208,7 @@ static int hdd_lro_desc_find(struct hdd_lro_s *lro_info,
 		 &free_pool->lro_free_list_head,
 		 struct hdd_lro_desc_entry, lro_node);
 	if (NULL == entry) {
-		hdd_err("Could not allocate LRO desc!");
+		hdd_debug("Could not allocate LRO desc!");
 		return -ENOMEM;
 	}
 
@@ -284,7 +284,7 @@ static bool hdd_lro_eligible(struct hdd_lro_s *lro_info, struct sk_buff *skb,
 		return false;
 
 	if (0 != hdd_lro_desc_find(lro_info, skb, iph, tcph, desc)) {
-		hdd_err("finding the LRO desc failed");
+		hdd_debug("finding the LRO desc failed");
 		return false;
 	}
 
@@ -532,8 +532,14 @@ int hdd_lro_enable(hdd_context_t *hdd_ctx, hdd_adapter_t *adapter)
 		return 0;
 	}
 
-	/* Register the flush callback */
-	ol_register_lro_flush_cb(hdd_lro_flush, hdd_init_lro_mgr);
+	/*
+	 * In case of USB tethering, LRO is disabled. If SSR happened
+	 * during that time, then as part of SSR init, do not enable
+	 * the LRO again. Keep the LRO state same as before SSR.
+	 */
+	if (qdf_atomic_read(&hdd_ctx->vendor_disable_lro_flag))
+		return 0;
+
 	adapter->dev->features |= NETIF_F_LRO;
 
 	if (hdd_ctx->config->enable_tcp_delack) {
@@ -544,6 +550,17 @@ int hdd_lro_enable(hdd_context_t *hdd_ctx, hdd_adapter_t *adapter)
 	hdd_info("LRO Enabled");
 
 	return 0;
+}
+
+/**
+ * hdd_lro_create() - Allocate LRO managers via callbacks
+ *
+ * Return: none
+ */
+void hdd_lro_create(void)
+{
+	/* Register the flush callback */
+	ol_register_lro_flush_cb(hdd_lro_flush, hdd_init_lro_mgr);
 }
 
 static void hdd_deinit_lro_mgr(void *lro_info)
@@ -570,6 +587,15 @@ void hdd_lro_disable(hdd_context_t *hdd_ctx, hdd_adapter_t *adapter)
 		 QDF_STA_MODE != adapter->device_mode)
 		return;
 
+}
+
+/**
+ * hdd_lro_destroy() - Free LRO managers via callbacks
+ *
+ * Return: none
+ */
+void hdd_lro_destroy(void)
+{
 	/* Deregister the flush callback */
 	ol_deregister_lro_flush_cb(hdd_deinit_lro_mgr);
 
@@ -593,7 +619,9 @@ enum hdd_lro_rx_status hdd_lro_rx(hdd_context_t *hdd_ctx,
 	enum hdd_lro_rx_status status = HDD_LRO_NO_RX;
 
 	if (((adapter->dev->features & NETIF_F_LRO) != NETIF_F_LRO) ||
-			qdf_atomic_read(&hdd_ctx->disable_lro_in_concurrency))
+			qdf_atomic_read(&hdd_ctx->disable_lro_in_concurrency) ||
+			QDF_NBUF_CB_RX_PEER_CACHED_FRM(skb) ||
+			qdf_atomic_read(&hdd_ctx->disable_lro_in_low_tput))
 		return status;
 
 	if (QDF_NBUF_CB_RX_TCP_PROTO(skb)) {
@@ -694,4 +722,52 @@ void hdd_disable_lro_in_concurrency(hdd_context_t *hdd_ctx)
 		hdd_ctx->config->enable_tcp_delack = 1;
 	}
 	qdf_atomic_set(&hdd_ctx->disable_lro_in_concurrency, 1);
+}
+
+void hdd_disable_lro_for_low_tput(hdd_context_t *hdd_ctx, bool disable)
+{
+	if (disable)
+		qdf_atomic_set(&hdd_ctx->disable_lro_in_low_tput, 1);
+	else
+		qdf_atomic_set(&hdd_ctx->disable_lro_in_low_tput, 0);
+}
+
+/**
+ * hdd_lro_set_reset() - vendor command for Disable/Enable LRO
+ * @hdd_ctx: hdd context
+ * @hdd_adapter_t: adapter
+ * @enable_flag: enable or disable LRO.
+ *
+ * Return: none
+ */
+QDF_STATUS
+hdd_lro_set_reset(hdd_context_t *hdd_ctx, hdd_adapter_t *adapter,
+			       uint8_t enable_flag)
+{
+	if (enable_flag) {
+		qdf_atomic_set(&hdd_ctx->vendor_disable_lro_flag, 0);
+		hdd_lro_enable(hdd_ctx, adapter);
+	} else {
+		if (!hdd_ctx->config->lro_enable ||
+		    QDF_STA_MODE != adapter->device_mode)
+			return 0;
+
+		/* Disable LRO, Enable tcpdelack*/
+		qdf_atomic_set(&hdd_ctx->vendor_disable_lro_flag, 1);
+		adapter->dev->features &= ~NETIF_F_LRO;
+		hdd_debug("LRO Disabled");
+
+		if (!hdd_ctx->config->enable_tcp_delack) {
+			struct wlan_rx_tp_data rx_tp_data;
+
+			hdd_debug("Enable TCP delack as LRO is disabled.");
+			rx_tp_data.rx_tp_flags = TCP_DEL_ACK_IND;
+			rx_tp_data.level = hdd_ctx->cur_rx_level;
+			wlan_hdd_send_svc_nlink_msg(hdd_ctx->radio_index,
+				WLAN_SVC_WLAN_TP_IND, &rx_tp_data,
+				sizeof(rx_tp_data));
+			hdd_ctx->config->enable_tcp_delack = 1;
+		}
+	}
+	return 0;
 }

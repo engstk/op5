@@ -710,6 +710,30 @@ int wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 #endif
 #endif
 
+/**
+ * wlan_hdd_tdls_check_enable_tdls_scan - Check whether enable_tdls_scan ini
+ *     is true
+ * @hdd_ctx: hdd context
+ *
+ * This routine is called to check whether enable_tdls_scan is true or no.
+ *
+ * Return: true if enable_tdls_scan is true, else false
+ */
+bool wlan_hdd_tdls_check_enable_tdls_scan(hdd_context_t *hdd_ctx);
+
+/**
+ * wlan_hdd_tdls_check_peer_buf_capable - Checks whether self-Sta is sleep-sta
+ *     capable and all peer TDLS Sta are BufSta capable.
+ * @hdd_ctx: hdd context
+ * @connectedTdlsPeers: number of tdls peers
+ *
+ * This routine is called to check whether self-Sta is sleep-Sta capable and
+ * all peer TDLS Sta are BufSta capable
+ *
+ * Return: True if scan is allowed without tearing TDLS, else false
+ */
+bool wlan_hdd_tdls_check_peer_buf_capable(hdd_context_t *hdd_ctx,
+					  uint16_t connectedTdlsPeers);
 void hdd_update_tdls_ct_and_teardown_links(hdd_context_t *hdd_ctx);
 void wlan_hdd_tdls_disable_offchan_and_teardown_links(hdd_context_t *hddctx);
 
@@ -755,6 +779,21 @@ void wlan_hdd_tdls_notify_connect(hdd_adapter_t *adapter,
  * Return: None
  */
 void wlan_hdd_tdls_notify_disconnect(hdd_adapter_t *adapter, bool lfr_roam);
+
+/**
+ * wlan_hdd_check_conc_and_update_tdls_state - Check concurrency and update
+ *     FW TDLS state if needed
+ * @hdd_ctx: hdd context
+ * @disable_tdls: disable TDLS in FW TDLS state
+ *
+ * This routine is called to teardown TDLS links, and enable/disable TDLS mode
+ * in FW tdls state if concurrency is detected.
+ *
+ * Return: None
+ */
+void wlan_hdd_check_conc_and_update_tdls_state(hdd_context_t *hdd_ctx,
+					       bool disable_tdls);
+
 void wlan_hdd_change_tdls_mode(void *hdd_ctx);
 
 /**
@@ -788,6 +827,17 @@ int wlan_hdd_cfg80211_configure_tdls_mode(struct wiphy *wiphy,
 					int data_len);
 
 #else
+static inline bool
+wlan_hdd_tdls_check_enable_tdls_scan(hdd_context_t *hdd_ctx)
+{
+	return true;
+}
+static inline bool
+wlan_hdd_tdls_check_peer_buf_capable(hdd_context_t *hdd_ctx,
+				     uint16_t connectedTdlsPeers)
+{
+	return true;
+}
 static inline void hdd_update_tdls_ct_and_teardown_links(hdd_context_t *hdd_ctx)
 {
 }
@@ -829,6 +879,12 @@ static inline void wlan_hdd_tdls_notify_disconnect(hdd_adapter_t *adapter,
 {
 }
 
+static inline void
+wlan_hdd_check_conc_and_update_tdls_state(hdd_context_t *hdd_ctx,
+					  bool disable_tdls)
+{
+}
+
 static inline int wlan_hdd_cfg80211_configure_tdls_mode(struct wiphy *wiphy,
 					struct wireless_dev *wdev,
 					const void *data,
@@ -866,5 +922,7 @@ void hdd_wlan_tdls_enable_link_event(const uint8_t *peer_mac,
 	uint8_t is_off_chan_established) {}
 static inline void hdd_wlan_block_scan_by_tdls_event(void) {}
 #endif /* FEATURE_WLAN_DIAG_SUPPORT */
+
+void wlan_hdd_tdls_timers_stop(tdlsCtx_t *hdd_tdls_ctx);
 
 #endif /* __HDD_TDLS_H */

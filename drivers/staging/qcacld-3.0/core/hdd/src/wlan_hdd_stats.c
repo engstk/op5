@@ -1388,6 +1388,11 @@ __wlan_hdd_cfg80211_ll_stats_get(struct wiphy *wiphy,
 
 	LinkLayerStatsGetReq.staId = pAdapter->sessionId;
 
+	if (wlan_hdd_validate_session_id(pAdapter->sessionId)) {
+		hdd_err("invalid session id: %d", pAdapter->sessionId);
+		return -EINVAL;
+	}
+
 	context = &ll_stats_context;
 	spin_lock(&context->context_lock);
 	context->request_id = LinkLayerStatsGetReq.reqId;
@@ -1825,7 +1830,18 @@ static int __wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
 				  RCPI_MEASUREMENT_TYPE_AVG_MGMT);
 
 	wlan_hdd_get_station_stats(pAdapter);
-	sinfo->signal = pAdapter->hdd_stats.summary_stat.rssi;
+
+	if (pAdapter->hdd_stats.summary_stat.rssi)
+		pAdapter->rssi = pAdapter->hdd_stats.summary_stat.rssi;
+
+	/* for new connection there might be no valid previous RSSI */
+	if (!pAdapter->rssi) {
+		hdd_get_rssi_snr_by_bssid(pAdapter,
+				pHddStaCtx->conn_info.bssId.bytes,
+				&pAdapter->rssi, NULL);
+	}
+
+	sinfo->signal = pAdapter->rssi;
 	snr = pAdapter->hdd_stats.summary_stat.snr;
 	hdd_info("snr: %d, rssi: %d",
 		pAdapter->hdd_stats.summary_stat.snr,

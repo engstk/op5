@@ -178,7 +178,6 @@ int hif_napi_create(struct hif_opaque_softc   *hif_ctx,
 			HIF_WARN("%s: bad IRQ value for CE %d: %d",
 				 __func__, i, napii->irq);
 
-		qdf_spinlock_create(&napii->lro_unloading_lock);
 		init_dummy_netdev(&(napii->netdev));
 
 		NAPI_DEBUG("adding napi=%p to netdev=%p (poll=%p, bdgt=%d)",
@@ -294,7 +293,6 @@ int hif_napi_destroy(struct hif_opaque_softc *hif_ctx,
 				   napii->netdev.napi_list.prev,
 				   napii->netdev.napi_list.next);
 
-			qdf_spinlock_destroy(&napii->lro_unloading_lock);
 			netif_napi_del(&(napii->napi));
 
 			napid->ce_map &= ~(0x01 << ce);
@@ -394,12 +392,9 @@ void hif_napi_lro_flush_cb_deregister(struct hif_opaque_softc *hif_hdl,
 				HIF_DBG("deRegistering LRO for ce_id %d NAPI callback for %d flush_cb %p, lro_data %p\n",
 					i, napii->id, napii->lro_flush_cb,
 					napii->lro_ctx);
-				qdf_spin_lock_bh(&napii->lro_unloading_lock);
 				napii->lro_flush_cb = NULL;
 				lro_deinit_cb(napii->lro_ctx);
 				napii->lro_ctx = NULL;
-				qdf_spin_unlock_bh(
-					&napii->lro_unloading_lock);
 			}
 		}
 	} else {
@@ -846,15 +841,12 @@ int hif_napi_poll(struct hif_opaque_softc *hif_ctx,
 	hif_record_ce_desc_event(hif, NAPI_ID2PIPE(napi_info->id),
 				 NAPI_POLL_ENTER, NULL, NULL, cpu);
 
-	qdf_spin_lock_bh(&napi_info->lro_unloading_lock);
-
 	rc = ce_per_engine_service(hif, NAPI_ID2PIPE(napi_info->id));
 	NAPI_DEBUG("%s: ce_per_engine_service processed %d msgs",
 		    __func__, rc);
 
 	if (napi_info->lro_flush_cb)
 		napi_info->lro_flush_cb(napi_info->lro_ctx);
-	qdf_spin_unlock_bh(&napi_info->lro_unloading_lock);
 
 	/* do not return 0, if there was some work done,
 	 * even if it is below the scale
@@ -1622,14 +1614,15 @@ int hif_napi_cpu_blacklist(struct qca_napi_data *napid, enum qca_blacklist_op op
 		}
 		break;
 	case BLACKLIST_OFF:
-		if (ref_count)
+		if (ref_count) {
 			ref_count--;
-		rc = 0;
-		if (ref_count == 0) {
-			rc = core_ctl_set_boost(false);
-			NAPI_DEBUG("boost_off() returns %d - refcnt=%d",
-				   rc, ref_count);
-			hif_napi_bl_irq(napid, false);
+			rc = 0;
+			if (ref_count == 0) {
+				rc = core_ctl_set_boost(false);
+				NAPI_DEBUG("boost_off() returns %d - refcnt=%d",
+					   rc, ref_count);
+				hif_napi_bl_irq(napid, false);
+			}
 		}
 		break;
 	default:

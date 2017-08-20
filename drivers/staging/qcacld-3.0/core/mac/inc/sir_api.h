@@ -199,6 +199,7 @@ typedef enum {
  * @SIR_ROAMING_START: Firmware started roaming operation
  * @SIR_ROAMING_ABORT: Firmware aborted roaming operation, still connected.
  * @SIR_ROAM_SYNCH_COMPLETE: Roam sync propagation is complete.
+ * @SIR_ROAMING_INVOKE_FAIL: Firmware roaming failed.
  */
 enum sir_roam_op_code {
 	SIR_ROAM_SYNCH_PROPAGATION = 1,
@@ -207,6 +208,7 @@ enum sir_roam_op_code {
 	SIR_ROAMING_ABORT,
 	SIR_ROAM_SYNCH_COMPLETE,
 	SIR_ROAM_SYNCH_NAPI_OFF,
+	SIR_ROAMING_INVOKE_FAIL,
 };
 /**
  * Module ID definitions.
@@ -434,6 +436,7 @@ typedef struct sSirSmeReadyReq {
 	void *add_bssdescr_cb;
 	void *csr_roam_synch_cb;
 	void *pe_roam_synch_cb;
+	void *sme_msg_cb;
 } tSirSmeReadyReq, *tpSirSmeReadyReq;
 
 /**
@@ -734,12 +737,11 @@ typedef struct sSirBssDescription {
 	uint8_t mdiePresent;
 	/* MDIE for 11r, picked from the beacons */
 	uint8_t mdie[SIR_MDIE_SIZE];
-#ifdef FEATURE_WLAN_ESE
-	uint16_t QBSSLoad_present;
+	uint8_t QBSSLoad_present;
+	uint8_t qbss_chan_load;
 	uint16_t QBSSLoad_avail;
 	/* To achieve 8-byte alignment with ESE enabled */
 	uint32_t reservedPadding5;
-#endif
 	/* Please keep the structure 4 bytes aligned above the ieFields */
 
 	/* whether it is from a probe rsp */
@@ -752,7 +754,12 @@ typedef struct sSirBssDescription {
 	uint8_t reservedPadding4;
 	uint32_t tsf_delta;
 
+	uint8_t  ht_caps_present;
+	uint8_t  vht_caps_present;
+	uint8_t  beacomforming_capable;
+	uint8_t  chan_width;
 	uint32_t ieFields[1];
+
 } tSirBssDescription, *tpSirBssDescription;
 
 #ifdef FEATURE_WLAN_MCC_TO_SCC_SWITCH
@@ -841,6 +848,8 @@ typedef struct sSirSmeScanReq {
 	 * WNI_CFG_PASSIVE_MAXIMUM_CHANNEL_TIME) is used.
 	 */
 	uint32_t maxChannelTime;
+	uint32_t scan_probe_repeat_time;
+	uint32_t scan_num_probes;
 	enum wmi_dwelltime_adaptive_mode scan_adaptive_dwell_mode;
 	/**
 	 * returnAfterFirstMatch can take following values:
@@ -1200,8 +1209,14 @@ typedef struct sSirSmeJoinReq {
 	tAniBool spectrumMgtIndicator;
 	tSirMacPowerCapInfo powerCap;
 	tSirSupChnl supportedChannels;
+	bool enable_bcast_probe_rsp;
+	bool ignore_assoc_disallowed;
 	tSirBssDescription bssDescription;
-
+	/*
+	 * WARNING: Pls make bssDescription as last variable in struct
+	 * tSirSmeJoinReq as it has ieFields followed after this bss
+	 * description. Adding a variable after this corrupts the ieFields
+	 */
 } tSirSmeJoinReq, *tpSirSmeJoinReq;
 
 /* / Definition for reponse message to previously issued join request */
@@ -2559,6 +2574,14 @@ typedef struct sSirUpdateAPWPSIEsReq {
 	tSirAPWPSIEs APWPSIEs;
 } tSirUpdateAPWPSIEsReq, *tpSirUpdateAPWPSIEsReq;
 
+struct update_config {
+	uint16_t messageType;   /* eWNI_SME_UPDATE_CONFIG */
+	uint16_t length;
+	uint8_t sme_session_id;
+	uint16_t capab;
+	uint32_t value;
+};
+
 /*
  * enum sir_update_session_param_type - session param type
  * @SIR_PARAM_SSID_HIDDEN: ssidHidden parameter
@@ -2699,12 +2722,12 @@ typedef struct sSirNsOffloadReq {
 #endif /* WLAN_NS_OFFLOAD */
 
 /**
- * struct broadcast_filter_request - For enable/disable HW Broadcast Filter
- * @enable: value to enable disable feature
- * @bss_id: bss_id for get session.
+ * struct hw_filter_request - For enable/disable HW Filter
+ * @mode_bitmap: the hardware filter mode to configure
+ * @bssid: bss_id for get session.
  */
-struct broadcast_filter_request {
-	bool enable;
+struct hw_filter_request {
+	uint8_t mode_bitmap;
 	struct qdf_mac_addr bssid;
 };
 
@@ -2974,6 +2997,19 @@ typedef struct {
 	uint8_t data[1];
 } tSirPrefNetworkFoundInd, *tpSirPrefNetworkFoundInd;
 #endif /* FEATURE_WLAN_SCAN_PNO */
+
+
+/**
+ * struct candidate_chan_info - channel information for candidate
+ * @channel_num: channel number.
+ * @other_ap_count: other ap count on candidate channel.
+ * @max_rssi_on_channel: Max best  rssi on candiate channel
+ */
+struct candidate_chan_info {
+	uint8_t    channel_num;
+	uint8_t    other_ap_count;
+	int8_t     max_rssi_on_channel;
+};
 
 /*
  * ALLOWED_ACTION_FRAMES_BITMAP
@@ -3572,6 +3608,15 @@ typedef struct sAniSetTmLevelReq {
 	uint16_t newTmLevel;
 } tAniSetTmLevelReq, *tpAniSetTmLevelReq;
 
+/* access categories */
+enum sir_wifi_traffic_ac {
+	WIFI_AC_VO = 0,
+	WIFI_AC_VI = 1,
+	WIFI_AC_BE = 2,
+	WIFI_AC_BK = 3,
+	WIFI_AC_MAX = 4,
+};
+
 #ifdef FEATURE_WLAN_TDLS
 /* TDLS Request struct SME-->PE */
 typedef struct sSirTdlsSendMgmtReq {
@@ -3587,6 +3632,7 @@ typedef struct sSirTdlsSendMgmtReq {
 	/* For multi-session, for PE to locate peSession ID */
 	struct qdf_mac_addr bssid;
 	struct qdf_mac_addr peer_mac;
+	enum sir_wifi_traffic_ac ac;
 	/* Variable length. Dont add any field after this. */
 	uint8_t addIe[1];
 } tSirTdlsSendMgmtReq, *tpSirSmeTdlsSendMgmtReq;
@@ -3784,6 +3830,8 @@ typedef struct sSirScanOffloadReq {
 	tSirScanType scanType;
 	uint32_t minChannelTime;
 	uint32_t maxChannelTime;
+	uint32_t scan_probe_repeat_time;
+	uint32_t scan_num_probes;
 	uint32_t scan_id;
 	uint32_t scan_requestor_id;
 	/* in units of milliseconds, ignored when not connected */
@@ -4322,6 +4370,7 @@ typedef struct sSirSmeRoamOffloadSynchInd {
 	tpSirSmeJoinRsp join_rsp;
 	uint16_t aid;
 	struct sir_hw_mode_trans_ind hw_mode_trans_ind;
+	uint8_t nss;
 } roam_offload_synch_ind;
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
@@ -5222,15 +5271,6 @@ typedef struct {
 	uint32_t retriesLong;
 } tSirWifiRateStat, *tpSirWifiRateStat;
 
-/* access categories */
-typedef enum {
-	WIFI_AC_VO = 0,
-	WIFI_AC_VI = 1,
-	WIFI_AC_BE = 2,
-	WIFI_AC_BK = 3,
-	WIFI_AC_MAX = 4,
-} tSirWifiTrafficAc;
-
 /* wifi peer type */
 typedef enum {
 	WIFI_PEER_STA,
@@ -5540,6 +5580,17 @@ struct rssi_breach_event {
 	uint32_t     session_id;
 	int8_t       curr_rssi;
 	struct qdf_mac_addr  curr_bssid;
+};
+
+/**
+ * struct chip_pwr_save_fail_detected_params - chip power save failure detected
+ * event params
+ * @failure_reason_code:failure reason code
+ * @wake_lock_bitmap:bitmap for modules voting against sleep for long duration.
+ */
+struct chip_pwr_save_fail_detected_params {
+	uint32_t     failure_reason_code;
+	uint32_t     wake_lock_bitmap[4];
 };
 
 #define MAX_NUM_FW_SEGMENTS 4
@@ -6260,6 +6311,7 @@ struct sir_wake_lock_stats {
  * @pno_complete: pno complete wakeup count
  * @pno_match: pno match wakeup count
  * @oem_response: oem response wakeup count
+ * @pwr_save_fail_detected: pwr save fail detected wakeup count
  */
 struct sir_vdev_wow_stats {
 	uint32_t ucast;
@@ -6277,6 +6329,7 @@ struct sir_vdev_wow_stats {
 	uint32_t pno_complete;
 	uint32_t pno_match;
 	uint32_t oem_response;
+	uint32_t pwr_save_fail_detected;
 };
 
 /**
@@ -7007,4 +7060,17 @@ struct get_arp_stats_params {
 	uint8_t pkt_type;
 	uint32_t vdev_id;
 };
+
+/**
+ * struct sir_del_all_tdls_peers - delete all tdls peers
+ * @msg_type: type of message
+ * @msg_len: length of message
+ * @bssid: bssid of peer device
+ */
+struct sir_del_all_tdls_peers {
+	uint16_t msg_type;
+	uint16_t msg_len;
+	struct qdf_mac_addr bssid;
+};
+
 #endif /* __SIR_API_H */

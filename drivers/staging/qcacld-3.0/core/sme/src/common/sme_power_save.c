@@ -509,7 +509,7 @@ QDF_STATUS sme_enable_sta_ps_check(tpAniSirGlobal mac_ctx, uint32_t session_id)
 
 	/* Check whether the given session is Infra and in Connected State */
 	if (!csr_is_conn_state_connected_infra(mac_ctx, session_id)) {
-		sms_log(mac_ctx, LOGE, "Sta not infra/connected state %d",
+		sms_log(mac_ctx, LOG1, "Sta not infra/connected state %d",
 				session_id);
 		return QDF_STATUS_E_FAILURE;
 	}
@@ -987,24 +987,18 @@ tSirRetStatus sme_post_pe_message(tpAniSirGlobal mac_ctx, tpSirMsgQ msg)
 	return eSIR_SUCCESS;
 }
 
-/**
- * sme_ps_enable_auto_ps_timer(): Enable power-save auto timer with timeout
- * @hal_ctx:	HAL context
- * @session_id:	adapter session Id
- * @timeout:	timeout period in ms
- *
- * Returns:	0 on success, non-zero on failure
- */
 QDF_STATUS sme_ps_enable_auto_ps_timer(tHalHandle hal_ctx,
-	uint32_t session_id, uint32_t timeout)
+	uint32_t session_id, uint32_t timeout, bool force_trigger)
 {
 	tpAniSirGlobal mac_ctx = PMAC_STRUCT(hal_ctx);
 	struct ps_global_info *ps_global_info = &mac_ctx->sme.ps_global_info;
 	struct ps_params *ps_param = &ps_global_info->ps_params[session_id];
 	QDF_STATUS qdf_status;
 
-	if (!ps_global_info->auto_bmps_timer_val) {
-		sms_log(mac_ctx, LOGE, FL("auto_ps_timer is disabled in INI"));
+	if (!ps_global_info->auto_bmps_timer_val && !force_trigger) {
+		sms_log(mac_ctx, LOGE,
+			FL("auto_ps_timer disabled in INI, force_trigger %d"),
+			force_trigger);
 		return QDF_STATUS_SUCCESS;
 	}
 

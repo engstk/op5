@@ -2418,8 +2418,17 @@ int wmi_desc_pool_init(tp_wma_handle wma_handle, uint32_t pool_size)
  */
 void wmi_desc_pool_deinit(tp_wma_handle wma_handle)
 {
+	struct wmi_desc_t *wmi_desc;
+	uint8_t i;
+
 	qdf_spin_lock_bh(&wma_handle->wmi_desc_pool.wmi_desc_pool_lock);
 	if (wma_handle->wmi_desc_pool.array) {
+		for (i = 0; i < wma_handle->wmi_desc_pool.pool_size; i++) {
+			wmi_desc = (struct wmi_desc_t *)
+				    (&wma_handle->wmi_desc_pool.array[i]);
+			if (wmi_desc && wmi_desc->nbuf)
+				cds_packet_free(wmi_desc->nbuf);
+		}
 		qdf_mem_free(wma_handle->wmi_desc_pool.array);
 		wma_handle->wmi_desc_pool.array = NULL;
 	} else {
@@ -2433,6 +2442,9 @@ void wmi_desc_pool_deinit(tp_wma_handle wma_handle)
 	qdf_spinlock_destroy(&wma_handle->wmi_desc_pool.wmi_desc_pool_lock);
 }
 
+/* WMI MGMT TX wake lock timeout in milli seconds */
+#define WMI_MGMT_TX_WAKE_LOCK_DURATION 300
+
 /**
  * wmi_desc_get() - Get wmi descriptor from wmi free descriptor pool
  * @wma_handle: handle to wma
@@ -2442,6 +2454,7 @@ void wmi_desc_pool_deinit(tp_wma_handle wma_handle)
 struct wmi_desc_t *wmi_desc_get(tp_wma_handle wma_handle)
 {
 	struct wmi_desc_t *wmi_desc = NULL;
+	uint16_t num_free;
 
 	qdf_spin_lock_bh(&wma_handle->wmi_desc_pool.wmi_desc_pool_lock);
 	if (wma_handle->wmi_desc_pool.freelist) {
@@ -2449,8 +2462,19 @@ struct wmi_desc_t *wmi_desc_get(tp_wma_handle wma_handle)
 		wmi_desc = &wma_handle->wmi_desc_pool.freelist->wmi_desc;
 		wma_handle->wmi_desc_pool.freelist =
 			wma_handle->wmi_desc_pool.freelist->next;
+
+		qdf_wake_lock_timeout_acquire(&wma_handle->wow_wake_lock,
+					      WMI_MGMT_TX_WAKE_LOCK_DURATION);
+
+		num_free = wma_handle->wmi_desc_pool.num_free;
 	}
 	qdf_spin_unlock_bh(&wma_handle->wmi_desc_pool.wmi_desc_pool_lock);
+
+	if (wmi_desc)
+		WMA_LOGD("%s: num_free %d desc_id %d",
+			 __func__, num_free, wmi_desc->desc_id);
+	else
+		WMA_LOGE("%s: WMI descriptors are exhausted", __func__);
 
 	return wmi_desc;
 }
@@ -2464,12 +2488,25 @@ struct wmi_desc_t *wmi_desc_get(tp_wma_handle wma_handle)
  */
 void wmi_desc_put(tp_wma_handle wma_handle, struct wmi_desc_t *wmi_desc)
 {
+	uint16_t num_free;
+
 	qdf_spin_lock_bh(&wma_handle->wmi_desc_pool.wmi_desc_pool_lock);
 	((union wmi_desc_elem_t *)wmi_desc)->next =
 		wma_handle->wmi_desc_pool.freelist;
 	wma_handle->wmi_desc_pool.freelist = (union wmi_desc_elem_t *)wmi_desc;
 	wma_handle->wmi_desc_pool.num_free++;
+
+	if (wma_handle->wmi_desc_pool.num_free ==
+	    wma_handle->wmi_desc_pool.pool_size)
+		qdf_wake_lock_release(&wma_handle->wow_wake_lock,
+				      WIFI_POWER_EVENT_WAKELOCK_MGMT_TX);
+
+	num_free = wma_handle->wmi_desc_pool.num_free;
+
 	qdf_spin_unlock_bh(&wma_handle->wmi_desc_pool.wmi_desc_pool_lock);
+
+	WMA_LOGD("%s: num_free %d desc_id %d",
+		 __func__, num_free, wmi_desc->desc_id);
 }
 
 /**
@@ -2522,6 +2559,7 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 
 	if (NULL == wma_handle) {
 		WMA_LOGE("wma_handle is NULL");
+		cds_packet_free((void *)tx_frame);
 		return QDF_STATUS_E_FAILURE;
 	}
 	iface = &wma_handle->interfaces[vdev_id];
@@ -2530,6 +2568,7 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 
 	if (!txrx_vdev) {
 		WMA_LOGE("TxRx Vdev Handle is NULL");
+		cds_packet_free((void *)tx_frame);
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -2537,12 +2576,14 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 
 	if (frmType >= TXRX_FRM_MAX) {
 		WMA_LOGE("Invalid Frame Type Fail to send Frame");
+		cds_packet_free((void *)tx_frame);
 		return QDF_STATUS_E_FAILURE;
 	}
 
 	pMac = cds_get_context(QDF_MODULE_ID_PE);
 	if (!pMac) {
 		WMA_LOGE("pMac Handle is NULL");
+		cds_packet_free((void *)tx_frame);
 		return QDF_STATUS_E_FAILURE;
 	}
 	/*
@@ -2552,6 +2593,7 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 	if (!((frmType == TXRX_FRM_802_11_MGMT) ||
 	      (frmType == TXRX_FRM_802_11_DATA))) {
 		WMA_LOGE("No Support to send other frames except 802.11 Mgmt/Data");
+		cds_packet_free((void *)tx_frame);
 		return QDF_STATUS_E_FAILURE;
 	}
 #ifdef WLAN_FEATURE_11W
@@ -2670,6 +2712,7 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 
 		if (pdev == NULL) {
 			WMA_LOGE("%s: pdev pointer is not available", __func__);
+			cds_packet_free((void *)tx_frame);
 			return QDF_STATUS_E_FAULT;
 		}
 
@@ -2693,6 +2736,7 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 				} else {
 					WMA_LOGE("%s: Already one Data pending for Ack, reject Tx of data frame",
 						__func__);
+					cds_packet_free((void *)tx_frame);
 					return QDF_STATUS_E_FAILURE;
 				}
 			}
@@ -2702,6 +2746,7 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 			 * so Ack Complete Cb is must
 			 */
 			WMA_LOGE("No Ack Complete Cb. Don't Allow");
+			cds_packet_free((void *)tx_frame);
 			return QDF_STATUS_E_FAILURE;
 		}
 
@@ -2757,6 +2802,7 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 	ctrl_pdev = ol_txrx_get_ctrl_pdev_from_vdev(txrx_vdev);
 	if (ctrl_pdev == NULL) {
 		WMA_LOGE("ol_pdev_handle is NULL\n");
+		cds_packet_free((void *)tx_frame);
 		return QDF_STATUS_E_FAILURE;
 	}
 	is_high_latency = ol_cfg_is_high_latency(ctrl_pdev);
@@ -2850,7 +2896,16 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 		mgmt_param.qdf_ctx = cds_get_context(QDF_MODULE_ID_QDF_DEVICE);
 		wmi_desc = wmi_desc_get(wma_handle);
 		if (!wmi_desc) {
-			WMA_LOGE("%s: Failed to get wmi_desc", __func__);
+			/* Countinous failure can cause flooding of logs */
+			if (!qdf_do_mod(wma_handle->wmi_desc_fail_count,
+				MAX_PRINT_FAILURE_CNT))
+				WMA_LOGE("%s: Failed to get wmi_desc",
+					__func__);
+			else
+				WMA_LOGD("%s: Failed to get wmi_desc",
+					__func__);
+
+			wma_handle->wmi_desc_fail_count++;
 			status = QDF_STATUS_E_FAILURE;
 		} else {
 			mgmt_param.desc_id = wmi_desc->desc_id;
@@ -2881,7 +2936,11 @@ QDF_STATUS wma_tx_packet(void *wma_context, void *tx_frame, uint16_t frmLen,
 			tx_frm_download_comp_cb(wma_handle->mac_context,
 						tx_frame,
 						WMA_TX_FRAME_BUFFER_FREE);
-		WMA_LOGP("%s: Failed to send Mgmt Frame", __func__);
+		if (!qdf_do_mod(wma_handle->tx_fail_cnt, MAX_PRINT_FAILURE_CNT))
+			WMA_LOGE("%s: Failed to send Mgmt Frame", __func__);
+		else
+			WMA_LOGD("%s: Failed to send Mgmt Frame", __func__);
+		wma_handle->tx_fail_cnt++;
 		goto error;
 	}
 

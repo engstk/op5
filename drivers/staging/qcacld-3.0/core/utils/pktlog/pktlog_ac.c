@@ -304,6 +304,7 @@ int pktlog_disable(struct hif_opaque_softc *scn)
 		cds_get_context(QDF_MODULE_ID_TXRX);
 	struct ol_pktlog_dev_t *pl_dev;
 	struct ath_pktlog_info *pl_info;
+	uint8_t save_pktlog_state;
 
 	if (txrx_pdev == NULL ||
 			txrx_pdev->pl_dev == NULL ||
@@ -313,17 +314,36 @@ int pktlog_disable(struct hif_opaque_softc *scn)
 	pl_dev = txrx_pdev->pl_dev;
 	pl_info = pl_dev->pl_info;
 
+	if (pl_info->curr_pkt_state == PKTLOG_OPR_IN_PROGRESS ||
+	    pl_info->curr_pkt_state ==
+			PKTLOG_OPR_IN_PROGRESS_READ_START_PKTLOG_DISABLED ||
+	    pl_info->curr_pkt_state == PKTLOG_OPR_IN_PROGRESS_READ_COMPLETE ||
+	    pl_info->curr_pkt_state ==
+			PKTLOG_OPR_IN_PROGRESS_CLEARBUFF_COMPLETE)
+		return -EBUSY;
+
+	save_pktlog_state = pl_info->curr_pkt_state;
+	pl_info->curr_pkt_state = PKTLOG_OPR_IN_PROGRESS;
+
 	if (pktlog_wma_post_msg(0, WMI_PDEV_PKTLOG_DISABLE_CMDID, 0, 0)) {
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 		printk("Failed to disable pktlog in target\n");
 		return -1;
 	}
 
 	if (pl_dev->is_pktlog_cb_subscribed &&
 		wdi_pktlog_unsubscribe(txrx_pdev, pl_info->log_state)) {
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 		printk("Cannot unsubscribe pktlog from the WDI\n");
 		return -1;
 	}
 	pl_dev->is_pktlog_cb_subscribed = false;
+	pl_dev->is_pktlog_cb_subscribed = false;
+	if (save_pktlog_state == PKTLOG_OPR_IN_PROGRESS_READ_START)
+		pl_info->curr_pkt_state =
+			PKTLOG_OPR_IN_PROGRESS_READ_START_PKTLOG_DISABLED;
+	else
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 	return 0;
 }
 
@@ -342,10 +362,13 @@ void pktlog_init(struct hif_opaque_softc *scn)
 
 	OS_MEMZERO(pl_info, sizeof(*pl_info));
 	PKTLOG_LOCK_INIT(pl_info);
+	mutex_init(&pl_info->pktlog_mutex);
 
 	pl_info->buf_size = PKTLOG_DEFAULT_BUFSIZE;
 	pl_info->buf = NULL;
 	pl_info->log_state = 0;
+	pl_info->init_saved_state = 0;
+	pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 	pl_info->sack_thr = PKTLOG_DEFAULT_SACK_THR;
 	pl_info->tail_length = PKTLOG_DEFAULT_TAIL_LENGTH;
 	pl_info->thruput_thresh = PKTLOG_DEFAULT_THRUPUT_THRESH;
@@ -365,7 +388,7 @@ void pktlog_init(struct hif_opaque_softc *scn)
 	PKTLOG_SW_EVENT_SUBSCRIBER.callback = pktlog_callback;
 }
 
-int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
+static int __pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 		 bool ini_triggered, uint8_t user_triggered,
 		 uint32_t is_iwpriv_command)
 {
@@ -399,23 +422,34 @@ int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 	if (!pl_info)
 		return 0;
 
+	if (pl_info->curr_pkt_state < PKTLOG_OPR_IN_PROGRESS_CLEARBUFF_COMPLETE)
+		return -EBUSY;
+
+	pl_info->curr_pkt_state = PKTLOG_OPR_IN_PROGRESS;
 	/* is_iwpriv_command : 0 indicates its a vendor command
 	 * log_state: 0 indicates pktlog disable command
 	 * vendor_cmd_send flag; false means no vendor pktlog enable
 	 * command was sent previously
 	 */
 	if (is_iwpriv_command == 0 && log_state == 0 &&
-	    pl_dev->vendor_cmd_send == false)
+	    pl_dev->vendor_cmd_send == false) {
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 		return 0;
+	}
 
 	if (!pl_dev->tgt_pktlog_alloced) {
 		if (pl_info->buf == NULL) {
 			error = pktlog_alloc_buf(scn);
 
-			if (error != 0)
+			if (error != 0) {
+				pl_info->curr_pkt_state =
+					PKTLOG_OPR_NOT_IN_PROGRESS;
 				return error;
+			}
 
 			if (!pl_info->buf) {
+				pl_info->curr_pkt_state =
+					PKTLOG_OPR_NOT_IN_PROGRESS;
 				printk("%s: pktlog buf alloc failed\n",
 				       __func__);
 				ASSERT(0);
@@ -424,6 +458,7 @@ int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 
 		}
 
+		spin_lock_bh(&pl_info->log_lock);
 		pl_info->buf->bufhdr.version = CUR_PKTLOG_VER;
 		pl_info->buf->bufhdr.magic_num = PKTLOG_MAGIC_NUM;
 		pl_info->buf->wr_offset = 0;
@@ -432,6 +467,7 @@ int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 		pl_info->buf->bytes_written = 0;
 		pl_info->buf->msg_index = 1;
 		pl_info->buf->offset = PKTLOG_READ_OFFSET;
+		spin_unlock_bh(&pl_info->log_lock);
 
 		pl_info->start_time_thruput = os_get_timestamp();
 		pl_info->start_time_per = pl_info->start_time_thruput;
@@ -443,6 +479,7 @@ int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 		/* WDI subscribe */
 		if ((!pl_dev->is_pktlog_cb_subscribed) &&
 			wdi_pktlog_subscribe(txrx_pdev, log_state)) {
+			pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 			printk("Unable to subscribe to the WDI %s\n", __func__);
 			return -1;
 		}
@@ -450,6 +487,7 @@ int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 		/* WMI command to enable pktlog on the firmware */
 		if (pktlog_enable_tgt(scn, log_state, ini_triggered,
 				user_triggered)) {
+			pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 			printk("Device cannot be enabled, %s\n", __func__);
 			return -1;
 		}
@@ -457,16 +495,63 @@ int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
 		if (is_iwpriv_command == 0)
 			pl_dev->vendor_cmd_send = true;
 	} else {
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 		pl_dev->pl_funcs->pktlog_disable(scn);
 		if (is_iwpriv_command == 0)
 			pl_dev->vendor_cmd_send = false;
 	}
 
 	pl_info->log_state = log_state;
+	pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 	return 0;
 }
 
-int pktlog_setsize(struct hif_opaque_softc *scn, int32_t size)
+int pktlog_enable(struct hif_opaque_softc *scn, int32_t log_state,
+		 bool ini_triggered, uint8_t user_triggered,
+		 uint32_t is_iwpriv_command)
+{
+	struct ol_pktlog_dev_t *pl_dev;
+	struct ath_pktlog_info *pl_info;
+	struct ol_txrx_pdev_t *txrx_pdev;
+	int error;
+
+	if (!scn) {
+		pr_err("%s: Invalid scn context\n", __func__);
+		ASSERT(0);
+		return -EINVAL;
+	}
+
+	txrx_pdev = cds_get_context(QDF_MODULE_ID_TXRX);
+	if (!txrx_pdev) {
+		pr_err("%s: Invalid txrx_pdev context\n", __func__);
+		ASSERT(0);
+		return -EINVAL;
+	}
+
+	pl_dev = txrx_pdev->pl_dev;
+	if (!pl_dev) {
+		pr_err("%s: Invalid pktlog context\n", __func__);
+		ASSERT(0);
+		return -EINVAL;
+	}
+
+	pl_info = pl_dev->pl_info;
+
+	if (!pl_info)
+		return 0;
+
+
+	mutex_lock(&pl_info->pktlog_mutex);
+	error = __pktlog_enable(scn, log_state, ini_triggered,
+				user_triggered, is_iwpriv_command);
+	mutex_unlock(&pl_info->pktlog_mutex);
+	return error;
+}
+
+#define ONE_MEGABYTE (1024 * 1024)
+#define MAX_ALLOWED_PKTLOG_SIZE (16 * ONE_MEGABYTE)
+
+static int __pktlog_setsize(struct hif_opaque_softc *scn, int32_t size)
 {
 	ol_txrx_pdev_handle pdev_txrx_handle =
 		cds_get_context(QDF_MODULE_ID_TXRX);
@@ -481,26 +566,42 @@ int pktlog_setsize(struct hif_opaque_softc *scn, int32_t size)
 	pl_dev = pdev_txrx_handle->pl_dev;
 	pl_info = pl_dev->pl_info;
 
-	if (size < 0)
+	if (pl_info->curr_pkt_state < PKTLOG_OPR_NOT_IN_PROGRESS)
+		return -EBUSY;
+
+	pl_info->curr_pkt_state = PKTLOG_OPR_IN_PROGRESS;
+
+	if (size < ONE_MEGABYTE || size > MAX_ALLOWED_PKTLOG_SIZE) {
+		qdf_print("%s: Cannot Set Pktlog Buffer size of %d bytes."
+			"Min required is %d MB and Max allowed is %d MB.\n",
+			__func__, size, (ONE_MEGABYTE/ONE_MEGABYTE),
+			(MAX_ALLOWED_PKTLOG_SIZE/ONE_MEGABYTE));
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 		return -EINVAL;
+	}
 
 	if (size == pl_info->buf_size) {
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 		qdf_print("%s: Pktlog Buff Size is already of same size.",
 			  __func__);
 		return 0;
 	}
 
 	if (pl_info->log_state) {
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 		qdf_print("%s: Logging should be disabled before changing"
 			  "buffer size.", __func__);
 		return -EINVAL;
 	}
 
+	spin_lock_bh(&pl_info->log_lock);
 	if (pl_info->buf != NULL) {
 		if (pl_dev->is_pktlog_cb_subscribed &&
 			wdi_pktlog_unsubscribe(pdev_txrx_handle,
 					 pl_info->log_state)) {
+			pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 			printk("Cannot unsubscribe pktlog from the WDI\n");
+			spin_unlock_bh(&pl_info->log_lock);
 			return -EFAULT;
 		}
 		pktlog_release_buf(scn);
@@ -512,8 +613,32 @@ int pktlog_setsize(struct hif_opaque_softc *scn, int32_t size)
 		qdf_print("%s: New Pktlog Buff Size is %d\n", __func__, size);
 		pl_info->buf_size = size;
 	}
-
+	pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
+	spin_unlock_bh(&pl_info->log_lock);
 	return 0;
+}
+
+int pktlog_setsize(struct hif_opaque_softc *scn, int32_t size)
+{
+	int status;
+	ol_txrx_pdev_handle pdev_txrx_handle =
+		cds_get_context(QDF_MODULE_ID_TXRX);
+	struct ol_pktlog_dev_t *pl_dev;
+	struct ath_pktlog_info *pl_info;
+
+	if (pdev_txrx_handle == NULL ||
+			pdev_txrx_handle->pl_dev == NULL ||
+			pdev_txrx_handle->pl_dev->pl_info == NULL)
+		return -EFAULT;
+
+	pl_dev = pdev_txrx_handle->pl_dev;
+	pl_info = pl_dev->pl_info;
+
+	mutex_lock(&pl_info->pktlog_mutex);
+	status = __pktlog_setsize(scn, size);
+	mutex_unlock(&pl_info->pktlog_mutex);
+
+	return status;
 }
 
 int pktlog_clearbuff(struct hif_opaque_softc *scn, bool clear_buff)
@@ -522,6 +647,7 @@ int pktlog_clearbuff(struct hif_opaque_softc *scn, bool clear_buff)
 		cds_get_context(QDF_MODULE_ID_TXRX);
 	struct ol_pktlog_dev_t *pl_dev;
 	struct ath_pktlog_info *pl_info;
+	uint8_t save_pktlog_state;
 
 	if (pdev_txrx_handle == NULL ||
 			pdev_txrx_handle->pl_dev == NULL ||
@@ -534,7 +660,16 @@ int pktlog_clearbuff(struct hif_opaque_softc *scn, bool clear_buff)
 	if (!clear_buff)
 		return -EINVAL;
 
+	if (pl_info->curr_pkt_state < PKTLOG_OPR_IN_PROGRESS_READ_COMPLETE ||
+	    pl_info->curr_pkt_state ==
+				PKTLOG_OPR_IN_PROGRESS_CLEARBUFF_COMPLETE)
+		return -EBUSY;
+
+	save_pktlog_state = pl_info->curr_pkt_state;
+	pl_info->curr_pkt_state = PKTLOG_OPR_IN_PROGRESS;
+
 	if (pl_info->log_state) {
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 		qdf_print("%s: Logging should be disabled before clearing "
 			  "pktlog buffer.", __func__);
 		return -EINVAL;
@@ -548,14 +683,22 @@ int pktlog_clearbuff(struct hif_opaque_softc *scn, bool clear_buff)
 			pl_dev->tgt_pktlog_alloced = false;
 			pl_info->buf->rd_offset = -1;
 		} else {
+			pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 			qdf_print("%s: pktlog buffer size is not proper. "
 				  "Existing Buf size %d", __func__, pl_info->buf_size);
 			return -EFAULT;
 		}
 	} else {
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 		qdf_print("%s: pktlog buff is NULL", __func__);
 		return -EFAULT;
 	}
+
+	if (save_pktlog_state == PKTLOG_OPR_IN_PROGRESS_READ_COMPLETE)
+		pl_info->curr_pkt_state =
+			PKTLOG_OPR_IN_PROGRESS_CLEARBUFF_COMPLETE;
+	else
+		pl_info->curr_pkt_state = PKTLOG_OPR_NOT_IN_PROGRESS;
 
 	return 0;
 }

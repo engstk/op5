@@ -1946,6 +1946,25 @@ QDF_STATUS wmi_unified_get_stats_cmd(void *wmi_hdl,
 }
 
 /**
+ * wmi_unified_congestion_request_cmd() - send request to fw to get CCA
+ * @wmi_hdl: wma handle
+ * @vdev_id: vdev id
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS wmi_unified_congestion_request_cmd(void *wmi_hdl,
+		uint8_t vdev_id)
+{
+	wmi_unified_t wmi_handle = (wmi_unified_t) wmi_hdl;
+
+	if (wmi_handle->ops->send_congestion_cmd)
+		return wmi_handle->ops->send_congestion_cmd(wmi_handle,
+			   vdev_id);
+
+	return QDF_STATUS_E_FAILURE;
+}
+
+/**
  * wmi_unified_process_ll_stats_set_cmd() - link layer stats set request
  * @wmi_handle:       wmi handle
  * @set_req:  ll stats set request command params
@@ -2358,7 +2377,7 @@ QDF_STATUS wmi_unified_pktlog_wmi_send_cmd(void *wmi_hdl,
  */
 QDF_STATUS wmi_unified_add_wow_wakeup_event_cmd(void *wmi_hdl,
 					uint32_t vdev_id,
-					uint32_t bitmap,
+					uint32_t *bitmap,
 					bool enable)
 {
 	wmi_unified_t wmi_handle = (wmi_unified_t) wmi_hdl;
@@ -3177,16 +3196,17 @@ QDF_STATUS wmi_unified_enable_arp_ns_offload_cmd(void *wmi_hdl,
 	return QDF_STATUS_E_FAILURE;
 }
 
-QDF_STATUS wmi_unified_configure_broadcast_filter_cmd(void *wmi_hdl,
-			   uint8_t vdev_id, bool bc_filter)
+QDF_STATUS wmi_unified_conf_hw_filter_mode_cmd(void *wmi_hdl,
+					       uint8_t vdev_id,
+					       uint8_t mode_bitmap)
 {
-	wmi_unified_t wmi_handle = (wmi_unified_t) wmi_hdl;
+	wmi_unified_t wmi = wmi_hdl;
 
-	if (wmi_handle->ops->send_enable_broadcast_filter_cmd)
-		return wmi_handle->ops->send_enable_broadcast_filter_cmd(
-				wmi_handle, vdev_id, bc_filter);
+	if (!wmi->ops->send_conf_hw_filter_mode_cmd)
+		return QDF_STATUS_E_FAILURE;
 
-	return QDF_STATUS_E_FAILURE;
+	return wmi->ops->send_conf_hw_filter_mode_cmd(wmi, vdev_id,
+						      mode_bitmap);
 }
 
 /**

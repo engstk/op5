@@ -401,6 +401,27 @@ static struct wma_target_req *wma_find_vdev_req(tp_wma_handle wma,
 }
 
 /**
+ * wma_send_del_sta_self_resp() - send del sta self resp to Upper layer
+ * @param: params of del sta resp
+ *
+ * Return: none
+ */
+static inline void wma_send_del_sta_self_resp(struct del_sta_self_params *param)
+{
+	cds_msg_t sme_msg = {0};
+	QDF_STATUS status;
+
+	sme_msg.type = eWNI_SME_DEL_STA_SELF_RSP;
+	sme_msg.bodyptr = param;
+
+	status = cds_mq_post_message(QDF_MODULE_ID_SME, &sme_msg);
+	if (!QDF_IS_STATUS_SUCCESS(status)) {
+		WMA_LOGE("Failed to post eWNI_SME_DEL_STA_SELF_RSP");
+		qdf_mem_free(param);
+	}
+}
+
+/**
  * wma_vdev_detach_callback() - send vdev detach response to upper layer
  * @ctx: txrx node ptr
  *
@@ -412,8 +433,6 @@ static void wma_vdev_detach_callback(void *ctx)
 	struct wma_txrx_node *iface = (struct wma_txrx_node *)ctx;
 	struct del_sta_self_params *param;
 	struct wma_target_req *req_msg;
-	QDF_STATUS status = QDF_STATUS_SUCCESS;
-	cds_msg_t sme_msg = { 0 };
 
 	wma = cds_get_context(QDF_MODULE_ID_WMA);
 
@@ -450,15 +469,7 @@ static void wma_vdev_detach_callback(void *ctx)
 
 	qdf_mem_zero(iface, sizeof(*iface));
 	param->status = QDF_STATUS_SUCCESS;
-	sme_msg.type = eWNI_SME_DEL_STA_SELF_RSP;
-	sme_msg.bodyptr = param;
-	sme_msg.bodyval = 0;
-
-	status = cds_mq_post_message(QDF_MODULE_ID_SME, &sme_msg);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		WMA_LOGE("Failed to post eWNI_SME_ADD_STA_SELF_RSP");
-		qdf_mem_free(param);
-	}
+	wma_send_del_sta_self_resp(param);
 }
 
 
@@ -537,7 +548,6 @@ static QDF_STATUS wma_handle_vdev_detach(tp_wma_handle wma_handle,
 	uint8_t vdev_id = del_sta_self_req_param->session_id;
 	struct wma_txrx_node *iface = &wma_handle->interfaces[vdev_id];
 	struct wma_target_req *msg = NULL;
-	cds_msg_t sme_msg = { 0 };
 
 	status = wmi_unified_vdev_delete_send(wma_handle->wmi_handle, vdev_id);
 	if (QDF_IS_STATUS_ERROR(status)) {
@@ -596,17 +606,8 @@ out:
 		qdf_mem_free(iface->staKeyParams);
 	qdf_mem_zero(iface, sizeof(*iface));
 	del_sta_self_req_param->status = status;
-	if (generate_rsp) {
-		sme_msg.type = eWNI_SME_DEL_STA_SELF_RSP;
-		sme_msg.bodyptr = del_sta_self_req_param;
-		sme_msg.bodyval = 0;
-
-		status = cds_mq_post_message(QDF_MODULE_ID_SME, &sme_msg);
-		if (!QDF_IS_STATUS_SUCCESS(status)) {
-			WMA_LOGE("Failed to post eWNI_SME_DEL_STA_SELF_RSP");
-			qdf_mem_free(del_sta_self_req_param);
-		}
-	}
+	if (generate_rsp)
+		wma_send_del_sta_self_resp(del_sta_self_req_param);
 	return status;
 }
 /**
@@ -635,8 +636,13 @@ QDF_STATUS wma_vdev_detach(tp_wma_handle wma_handle,
 	if (!iface->handle) {
 		WMA_LOGE("handle of vdev_id %d is NULL vdev is already freed",
 			 vdev_id);
-		qdf_mem_free(pdel_sta_self_req_param);
-		pdel_sta_self_req_param = NULL;
+		pdel_sta_self_req_param->status = status;
+		if (generateRsp) {
+			wma_send_del_sta_self_resp(pdel_sta_self_req_param);
+		} else {
+			qdf_mem_free(pdel_sta_self_req_param);
+			pdel_sta_self_req_param = NULL;
+		}
 		return status;
 	}
 
@@ -672,6 +678,9 @@ static void wma_vdev_start_rsp(tp_wma_handle wma,
 			       resp_event)
 {
 	struct beacon_info *bcn;
+	ol_txrx_pdev_handle pdev;
+	ol_txrx_peer_handle peer = NULL;
+	uint8_t peer_id;
 
 #ifdef QCA_IBSS_SUPPORT
 	WMA_LOGD("%s: vdev start response received for %s mode", __func__,
@@ -728,6 +737,30 @@ static void wma_vdev_start_rsp(tp_wma_handle wma,
 	}
 	add_bss->smpsMode = host_map_smps_mode(resp_event->smps_mode);
 send_fail_resp:
+	if (add_bss->status != QDF_STATUS_SUCCESS) {
+		WMA_LOGE("%s: ADD BSS failure %d", __func__, add_bss->status);
+
+		/* Send vdev stop if vdev start was success*/
+		if (!resp_event->status)
+			if (wma_send_vdev_stop_to_fw(wma, resp_event->vdev_id))
+				WMA_LOGE("%s: %d Failed to send vdev stop", __func__, __LINE__);
+
+		pdev = cds_get_context(QDF_MODULE_ID_TXRX);
+		if (NULL == pdev)
+			WMA_LOGE("%s: Failed to get pdev", __func__);
+
+		if (pdev)
+			peer = ol_txrx_find_peer_by_addr(pdev,
+				add_bss->bssId, &peer_id);
+		if (!peer)
+			WMA_LOGE("%s Failed to find peer %pM", __func__,
+				add_bss->bssId);
+
+		if (peer)
+			wma_remove_peer(wma, add_bss->bssId,
+				resp_event->vdev_id, peer, false);
+	}
+
 	WMA_LOGD("%s: Sending add bss rsp to umac(vdev %d status %d)",
 		 __func__, resp_event->vdev_id, add_bss->status);
 	wma_send_msg(wma, WMA_ADD_BSS_RSP, (void *)add_bss, 0);
@@ -1030,6 +1063,9 @@ int wma_vdev_start_resp_handler(void *handle, uint8_t *cmd_param_info,
 			} else {
 				wma->interfaces[resp_event->vdev_id].vdev_up =
 					true;
+				if (iface->beacon_filter_enabled)
+					wma_add_beacon_filter(wma,
+							&iface->beacon_filter);
 			}
 		}
 
@@ -1200,6 +1236,42 @@ peer_detach:
 }
 
 /**
+ * wma_find_duplicate_peer_on_other_vdev() - Find if same peer exist
+ * on other vdevs
+ * @wma: wma handle
+ * @pdev: txrx pdev ptr
+ * @vdev_id: vdev id of vdev on which the peer
+ *           needs to be added
+ * @peer_mac: peer mac addr which needs to be added
+ *
+ * Check if peer with same MAC is present on vdev other then
+ * the provided vdev_id
+ *
+ * Return: true if same peer is present on vdev other then vdev_id
+ * else return false
+ */
+static bool wma_find_duplicate_peer_on_other_vdev(tp_wma_handle wma,
+	ol_txrx_pdev_handle pdev, uint8_t vdev_id, uint8_t *peer_mac)
+{
+	int i;
+	uint8_t peer_id;
+
+	for (i = 0; i < wma->max_bssid; i++) {
+		/* Need to check vdevs other than the vdev_id */
+		if (vdev_id == i ||
+		   !wma->interfaces[i].handle)
+			continue;
+		if (ol_txrx_find_peer_by_addr_and_vdev(pdev,
+			wma->interfaces[i].handle, peer_mac, &peer_id)) {
+			WMA_LOGE("%s :Duplicate peer %pM (peer id %d) already exist on vdev %d",
+				__func__, peer_mac, peer_id, i);
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
  * wma_create_peer() - send peer create command to fw
  * @wma: wma handle
  * @pdev: txrx pdev ptr
@@ -1221,12 +1293,22 @@ QDF_STATUS wma_create_peer(tp_wma_handle wma, ol_txrx_pdev_handle pdev,
 	struct peer_create_params param = {0};
 	uint8_t *mac_addr_raw;
 
+
 	if (++wma->interfaces[vdev_id].peer_count >
 	    wma->wlan_resource_config.num_peers) {
 		WMA_LOGP("%s, the peer count exceeds the limit %d", __func__,
 			 wma->interfaces[vdev_id].peer_count - 1);
 		goto err;
 	}
+
+	/*
+	 * Check if peer with same MAC exist on other Vdev, If so avoid
+	 * adding this peer, as it will cause FW to crash.
+	 */
+	if (wma_find_duplicate_peer_on_other_vdev(wma, pdev,
+	   vdev_id, peer_addr))
+		goto err;
+
 	peer = ol_txrx_peer_attach(vdev, peer_addr);
 	if (!peer) {
 		WMA_LOGE("%s : Unable to attach peer %pM", __func__, peer_addr);
@@ -1422,6 +1504,14 @@ static void wma_cleanup_target_req_param(struct wma_target_req *tgt_req)
 		qdf_mem_free(tgt_req->user_data);
 		tgt_req->user_data = NULL;
 	}
+
+	if (tgt_req->msg_type == WMA_SET_LINK_STATE && tgt_req->user_data) {
+		tpLinkStateParams params =
+			(tpLinkStateParams) tgt_req->user_data;
+		qdf_mem_free(params->callbackArg);
+		qdf_mem_free(tgt_req->user_data);
+		tgt_req->user_data = NULL;
+	}
 }
 
 /**
@@ -1460,6 +1550,127 @@ static QDF_STATUS wma_config_active_bpf_mode(t_wma_handle *wma, uint8_t vdev_id)
 						   uc_mode, mcbc_mode);
 }
 
+#ifdef FEATURE_AP_MCC_CH_AVOIDANCE
+/**
+ * wma_check_and_find_mcc_ap() - finds if device is operating AP
+ * in MCC mode or not
+ * @wma: wma handle.
+ * @vdev_id: vdev ID of device for which MCC has to be checked
+ *
+ * This function internally calls wma_find_mcc_ap finds if
+ * device is operating AP in MCC mode or not
+ *
+ * Return: none
+ */
+static void
+wma_check_and_find_mcc_ap(tp_wma_handle wma, uint8_t vdev_id)
+{
+	tpAniSirGlobal mac_ctx = cds_get_context(QDF_MODULE_ID_PE);
+
+	if (NULL == mac_ctx) {
+		WMA_LOGE("%s: Failed to get mac_ctx", __func__);
+		return;
+	}
+	if (mac_ctx->sap.sap_channel_avoidance)
+		wma_find_mcc_ap(wma, vdev_id, false);
+}
+#else
+static inline void
+wma_check_and_find_mcc_ap(tp_wma_handle wma, uint8_t vdev_id)
+{}
+#endif /* FEATURE_AP_MCC_CH_AVOIDANCE */
+
+/**
+ * wma_send_del_bss_response() - send del bss resp to upper layer
+ * @wma: wma handle.
+ * @vdev_id: vdev ID of device for which MCC has to be checked
+ *
+ * This function sends del bss resp to upper layer
+ *
+ * Return: none
+ */
+static void
+wma_send_del_bss_response(tp_wma_handle wma, struct wma_target_req *req,
+	uint8_t vdev_id)
+{
+	struct wma_txrx_node *iface;
+	struct beacon_info *bcn;
+	tpDeleteBssParams params;
+
+	if (!req) {
+		WMA_LOGE("%s req is NULL", __func__);
+		return;
+	}
+
+	iface = &wma->interfaces[vdev_id];
+	if (!iface->handle) {
+		WMA_LOGE("%s vdev id %d is already deleted",
+			 __func__, vdev_id);
+		if (req->user_data)
+			qdf_mem_free(req->user_data);
+		req->user_data = NULL;
+		return;
+	}
+
+	params = (tpDeleteBssParams) req->user_data;
+	if (wmi_unified_vdev_down_send(wma->wmi_handle,
+				vdev_id) !=
+				QDF_STATUS_SUCCESS) {
+		WMA_LOGE("Failed to send vdev down cmd: vdev %d",
+		 vdev_id);
+	} else {
+		wma->interfaces[vdev_id].vdev_up = false;
+		wma_check_and_find_mcc_ap(wma, vdev_id);
+	}
+	ol_txrx_vdev_flush(iface->handle);
+	WMA_LOGD("%s, vdev_id: %d, un-pausing tx_ll_queue for VDEV_STOP rsp",
+		 __func__, vdev_id);
+	ol_txrx_vdev_unpause(iface->handle,
+			 OL_TXQ_PAUSE_REASON_VDEV_STOP);
+	iface->pause_bitmap &= ~(1 << PAUSE_TYPE_HOST);
+	qdf_atomic_set(&iface->bss_status, WMA_BSS_STATUS_STOPPED);
+	WMA_LOGD("%s: (type %d subtype %d) BSS is stopped",
+		__func__, iface->type, iface->sub_type);
+
+	bcn = wma->interfaces[vdev_id].beacon;
+	if (bcn) {
+		struct ol_txrx_pdev_t *pdev;
+
+		pdev = cds_get_context(QDF_MODULE_ID_TXRX);
+		WMA_LOGD("%s: Freeing beacon struct %p, template memory %p",
+			__func__, bcn, bcn->buf);
+		if (bcn->dma_mapped && pdev)
+			qdf_nbuf_unmap_single(pdev->osdev, bcn->buf,
+					  QDF_DMA_TO_DEVICE);
+		qdf_nbuf_free(bcn->buf);
+		qdf_mem_free(bcn);
+		wma->interfaces[vdev_id].beacon = NULL;
+	}
+
+	/*
+	 * Timeout status means its WMA generated DEL BSS REQ when ADD
+	 * BSS REQ was timed out to stop the VDEV in this case no need
+	 * to send response to UMAC
+	 */
+	if (params->status == QDF_STATUS_FW_MSG_TIMEDOUT) {
+		qdf_mem_free(req->user_data);
+		req->user_data = NULL;
+		WMA_LOGE("%s: DEL BSS from ADD BSS timeout do not send resp to UMAC (vdev id %x)",
+			 __func__, vdev_id);
+	} else {
+		params->status = QDF_STATUS_SUCCESS;
+		wma_send_msg(wma, WMA_DELETE_BSS_RSP, (void *)params,
+			 0);
+	}
+
+	if (iface->del_staself_req != NULL) {
+		WMA_LOGA("scheduling defered deletion (vdev id %x)",
+		 vdev_id);
+		wma_vdev_detach(wma, iface->del_staself_req, 1);
+	}
+}
+
+
 /**
  * wma_vdev_stop_resp_handler() - vdev stop response handler
  * @handle: wma handle
@@ -1474,7 +1685,7 @@ int wma_vdev_stop_resp_handler(void *handle, uint8_t *cmd_param_info,
 	tp_wma_handle wma = (tp_wma_handle) handle;
 	WMI_VDEV_STOPPED_EVENTID_param_tlvs *param_buf;
 	wmi_vdev_stopped_event_fixed_param *resp_event;
-	struct wma_target_req *req_msg;
+	struct wma_target_req *req_msg, *del_req;
 	ol_txrx_peer_handle peer;
 	ol_txrx_pdev_handle pdev;
 	uint8_t peer_id;
@@ -1542,7 +1753,6 @@ int wma_vdev_stop_resp_handler(void *handle, uint8_t *cmd_param_info,
 	if (req_msg->msg_type == WMA_DELETE_BSS_REQ) {
 		tpDeleteBssParams params =
 			(tpDeleteBssParams) req_msg->user_data;
-		struct beacon_info *bcn;
 
 		if (resp_event->vdev_id > wma->max_bssid) {
 			WMA_LOGE("%s: Invalid vdev_id %d", __func__,
@@ -1560,6 +1770,10 @@ int wma_vdev_stop_resp_handler(void *handle, uint8_t *cmd_param_info,
 			status = -EINVAL;
 			goto free_req_msg;
 		}
+
+		/* CCA is required only for sta interface */
+		if (iface->type == WMI_VDEV_TYPE_STA)
+			wma_get_cca_stats(wma, resp_event->vdev_id);
 
 		/* Clear arp and ns offload cache */
 		qdf_mem_zero(&iface->ns_offload_req,
@@ -1585,62 +1799,28 @@ int wma_vdev_stop_resp_handler(void *handle, uint8_t *cmd_param_info,
 					 __func__, params->bssid);
 			wma_remove_peer(wma, params->bssid, resp_event->vdev_id,
 					peer, false);
+			if (peer && WMI_SERVICE_IS_ENABLED(
+			   wma->wmi_service_bitmap,
+			   WMI_SERVICE_SYNC_DELETE_CMDS)) {
+				WMA_LOGD(FL("Wait for the peer delete. vdev_id %d"),
+						 req_msg->vdev_id);
+				del_req = wma_fill_hold_req(wma,
+						   req_msg->vdev_id,
+						   WMA_DELETE_STA_REQ,
+						   WMA_DELETE_PEER_RSP,
+						   params,
+						   WMA_DELETE_STA_TIMEOUT);
+				if (!del_req) {
+					WMA_LOGE(FL("Failed to allocate request. vdev_id %d"),
+						 req_msg->vdev_id);
+					params->status = QDF_STATUS_E_NOMEM;
+				} else {
+					goto free_req_msg;
+				}
+			}
 		}
+		wma_send_del_bss_response(wma, req_msg, resp_event->vdev_id);
 
-		if (wmi_unified_vdev_down_send(wma->wmi_handle,
-						resp_event->vdev_id) !=
-						QDF_STATUS_SUCCESS) {
-			WMA_LOGE("Failed to send vdev down cmd: vdev %d",
-				 resp_event->vdev_id);
-		} else {
-			wma->interfaces[resp_event->vdev_id].vdev_up = false;
-#ifdef FEATURE_AP_MCC_CH_AVOIDANCE
-		if (mac_ctx->sap.sap_channel_avoidance)
-			wma_find_mcc_ap(wma, resp_event->vdev_id, false);
-#endif /* FEATURE_AP_MCC_CH_AVOIDANCE */
-		}
-		ol_txrx_vdev_flush(iface->handle);
-		WMA_LOGD("%s, vdev_id: %d, un-pausing tx_ll_queue for VDEV_STOP rsp",
-			 __func__, resp_event->vdev_id);
-		ol_txrx_vdev_unpause(iface->handle,
-				     OL_TXQ_PAUSE_REASON_VDEV_STOP);
-		iface->pause_bitmap &= ~(1 << PAUSE_TYPE_HOST);
-		qdf_atomic_set(&iface->bss_status, WMA_BSS_STATUS_STOPPED);
-		WMA_LOGD("%s: (type %d subtype %d) BSS is stopped",
-			 __func__, iface->type, iface->sub_type);
-		bcn = wma->interfaces[resp_event->vdev_id].beacon;
-
-		if (bcn) {
-			WMA_LOGD("%s: Freeing beacon struct %p, "
-				 "template memory %p", __func__, bcn, bcn->buf);
-			if (bcn->dma_mapped)
-				qdf_nbuf_unmap_single(pdev->osdev, bcn->buf,
-						      QDF_DMA_TO_DEVICE);
-			qdf_nbuf_free(bcn->buf);
-			qdf_mem_free(bcn);
-			wma->interfaces[resp_event->vdev_id].beacon = NULL;
-		}
-
-		/* Timeout status means its WMA generated DEL BSS REQ when ADD
-		 * BSS REQ was timed out to stop the VDEV in this case no need
-		 * to send response to UMAC
-		 */
-		if (params->status == QDF_STATUS_FW_MSG_TIMEDOUT) {
-			wma_cleanup_target_req_param(req_msg);
-			WMA_LOGE("%s: DEL BSS from ADD BSS timeout do not send "
-				 "resp to UMAC (vdev id %x)",
-				 __func__, resp_event->vdev_id);
-		} else {
-			params->status = QDF_STATUS_SUCCESS;
-			wma_send_msg(wma, WMA_DELETE_BSS_RSP, (void *)params,
-				     0);
-		}
-
-		if (iface->del_staself_req != NULL) {
-			WMA_LOGA("scheduling defered deletion (vdev id %x)",
-				 resp_event->vdev_id);
-			wma_vdev_detach(wma, iface->del_staself_req, 1);
-		}
 	} else if (req_msg->msg_type == WMA_SET_LINK_STATE) {
 		tpLinkStateParams params =
 			(tpLinkStateParams) req_msg->user_data;
@@ -1651,6 +1831,24 @@ int wma_vdev_stop_resp_handler(void *handle, uint8_t *cmd_param_info,
 				 params->bssid, req_msg->vdev_id);
 			wma_remove_peer(wma, params->bssid, req_msg->vdev_id,
 				peer, false);
+			if (WMI_SERVICE_IS_ENABLED(wma->wmi_service_bitmap,
+				    WMI_SERVICE_SYNC_DELETE_CMDS)) {
+				WMA_LOGI(FL("Wait for the peer delete. vdev_id %d"),
+						 req_msg->vdev_id);
+				del_req = wma_fill_hold_req(wma,
+						   req_msg->vdev_id,
+						   WMA_DELETE_STA_REQ,
+						   WMA_SET_LINK_PEER_RSP,
+						   params,
+						   WMA_DELETE_STA_TIMEOUT);
+				if (!del_req) {
+					WMA_LOGE(FL("Failed to allocate request. vdev_id %d"),
+						 req_msg->vdev_id);
+					params->status = QDF_STATUS_E_NOMEM;
+				} else {
+					goto free_req_msg;
+				}
+			}
 		}
 		if (wmi_unified_vdev_down_send(wma->wmi_handle,
 					req_msg->vdev_id) !=
@@ -1820,7 +2018,7 @@ ol_txrx_vdev_handle wma_vdev_attach(tp_wma_handle wma_handle,
 	    (self_sta_req->type == WMI_VDEV_TYPE_OCB) ||
 	    (self_sta_req->type == WMI_VDEV_TYPE_MONITOR) ||
 	    (self_sta_req->type == WMI_VDEV_TYPE_NDI)) {
-		WMA_LOGA("Creating self peer %pM, vdev_id %hu",
+		WMA_LOGD("Creating self peer %pM, vdev_id %hu",
 			 self_sta_req->self_mac_addr, self_sta_req->session_id);
 		status = wma_create_peer(wma_handle, txrx_pdev,
 					 txrx_vdev_handle,
@@ -2076,25 +2274,9 @@ QDF_STATUS wma_vdev_start(tp_wma_handle wma,
 	else if (req->is_quarter_rate)
 		temp_chan_info |=  (1 << WMI_CHAN_FLAG_QUARTER_RATE);
 
-	/*
-	 * If the channel has DFS set, flip on radar reporting.
-	 *
-	 * It may be that this should only be done for IBSS/hostap operation
-	 * as this flag may be interpreted (at some point in the future)
-	 * by the firmware as "oh, and please do radar DETECTION."
-	 *
-	 * If that is ever the case we would insert the decision whether to
-	 * enable the firmware flag here.
-	 */
-
-	/*
-	 * If the Channel is DFS,
-	 * set the WMI_CHAN_FLAG_DFS flag
-	 */
 	params.is_dfs = req->is_dfs;
 	params.is_restart = isRestart;
 	if ((QDF_GLOBAL_MONITOR_MODE != cds_get_conparam()) && req->is_dfs) {
-		params.flag_dfs = WMI_CHAN_FLAG_DFS;
 		temp_chan_info |=  (1 << WMI_CHAN_FLAG_DFS);
 		params.dis_hw_ack = true;
 		req->dfs_pri_multiplier = wma->dfs_pri_multiplier;
@@ -2111,6 +2293,11 @@ QDF_STATUS wma_vdev_start(tp_wma_handle wma,
 		 * does not support operation on DFS Channels.
 		 */
 		if (wma_is_vdev_in_ap_mode(wma, params.vdev_id) == true) {
+			/*
+			 * If the Channel is DFS,
+			 * set the WMI_CHAN_FLAG_DFS flag
+			 */
+			params.flag_dfs = WMI_CHAN_FLAG_DFS;
 			/*
 			 * If DFS regulatory domain is invalid,
 			 * then, DFS radar filters intialization
@@ -2131,16 +2318,13 @@ QDF_STATUS wma_vdev_start(tp_wma_handle wma,
 				return QDF_STATUS_E_FAILURE;
 			}
 
-			qdf_spin_lock_bh(&wma->dfs_ic->chan_lock);
 			if (isRestart)
 				wma->dfs_ic->disable_phy_err_processing = true;
 
 			/* provide the current channel to DFS */
-			wma->dfs_ic->ic_curchan =
-				wma_dfs_configure_channel(wma->dfs_ic,
+			wma_dfs_configure_channel(wma->dfs_ic,
 						params.band_center_freq1,
 						params.band_center_freq2, req);
-			qdf_spin_unlock_bh(&wma->dfs_ic->chan_lock);
 
 			wma_unified_dfs_phyerr_filter_offload_enable(wma);
 			dfs->disable_dfs_ch_switch =
@@ -2438,6 +2622,19 @@ int wma_peer_delete_handler(void *handle, uint8_t *cmd_param_info,
 		wma_handle_vdev_detach(wma, data->self_sta_param,
 				data->generate_rsp);
 		qdf_mem_free(data);
+	} else if (req_msg->type == WMA_SET_LINK_PEER_RSP) {
+		tpLinkStateParams params =
+			(tpLinkStateParams) req_msg->user_data;
+		if (wmi_unified_vdev_down_send(wma->wmi_handle,
+				req_msg->vdev_id) !=
+				QDF_STATUS_SUCCESS) {
+			WMA_LOGE("Failed to send vdev down cmd: vdev %d",
+					req_msg->vdev_id);
+		}
+		wma_send_msg(wma, WMA_SET_LINK_STATE_RSP, (void *)params, 0);
+
+	} else if (req_msg->type == WMA_DELETE_PEER_RSP) {
+		wma_send_del_bss_response(wma, req_msg, req_msg->vdev_id);
 	}
 	qdf_mem_free(req_msg);
 	return status;
@@ -2447,6 +2644,9 @@ static inline bool wma_crash_on_fw_timeout(bool crash_enabled)
 {
 	/* Discard FW timeouts and dont crash during SSR */
 	if (cds_is_driver_recovering())
+		return false;
+
+	if (cds_is_driver_unloading())
 		return false;
 
 	return crash_enabled;
@@ -2467,7 +2667,7 @@ void wma_hold_req_timer(void *data)
 	wma = cds_get_context(QDF_MODULE_ID_WMA);
 	if (NULL == wma) {
 		WMA_LOGE(FL("Failed to get wma"));
-		goto free_tgt_req;
+		return;
 	}
 
 	WMA_LOGA(FL("request %d is timed out for vdev_id - %d"),
@@ -2477,7 +2677,11 @@ void wma_hold_req_timer(void *data)
 	if (!msg) {
 		WMA_LOGE(FL("Failed to lookup request message - %d"),
 			 tgt_req->msg_type);
-		goto free_tgt_req;
+		/*
+		 * if find request failed, then firmware rsp should have
+		 * consumed the buffer. Do not free.
+		 */
+		return;
 	}
 
 	if (tgt_req->msg_type == WMA_ADD_STA_REQ) {
@@ -2522,15 +2726,47 @@ void wma_hold_req_timer(void *data)
 		}
 	} else if ((tgt_req->msg_type == WMA_DELETE_STA_REQ) &&
 		(tgt_req->type == WMA_DEL_P2P_SELF_STA_RSP_START)) {
+		struct del_sta_self_rsp_params *del_sta;
+		del_sta = (struct del_sta_self_rsp_params *)tgt_req->user_data;
+		del_sta->self_sta_param->status = QDF_STATUS_E_TIMEOUT;
 		WMA_LOGA(FL("wma delete sta p2p request timed out"));
-		QDF_ASSERT(0);
+
+		if (wma_crash_on_fw_timeout(wma->fw_timeout_crash)) {
+			QDF_BUG(0);
+		} else {
+			if (del_sta->generate_rsp)
+				wma_send_del_sta_self_resp(
+					del_sta->self_sta_param);
+		}
+		qdf_mem_free(tgt_req->user_data);
+	} else if ((tgt_req->msg_type == WMA_DELETE_STA_REQ) &&
+			(tgt_req->type == WMA_SET_LINK_PEER_RSP)) {
+		tpLinkStateParams params =
+			(tpLinkStateParams) tgt_req->user_data;
+
+		params->status = false;
+		WMA_LOGA(FL("wma delete peer for set link timed out"));
+		if (wma_crash_on_fw_timeout(wma->fw_timeout_crash) == true)
+			QDF_BUG(0);
+		else
+			wma_send_msg(wma, WMA_SET_LINK_STATE_RSP,
+					params, 0);
+	} else if ((tgt_req->msg_type == WMA_DELETE_STA_REQ) &&
+			(tgt_req->type == WMA_DELETE_PEER_RSP)) {
+		tpDeleteBssParams params =
+			(tpDeleteBssParams) tgt_req->user_data;
+
+		params->status = QDF_STATUS_E_TIMEOUT;
+		WMA_LOGE(FL("wma delete peer for del bss req timed out"));
+		if (wma_crash_on_fw_timeout(wma->fw_timeout_crash) == true)
+			QDF_BUG(0);
+		else
+			wma_send_msg(wma, WMA_DELETE_BSS_RSP, params, 0);
 	} else {
 		WMA_LOGE(FL("Unhandled timeout for msg_type:%d and type:%d"),
 				tgt_req->msg_type, tgt_req->type);
 		QDF_BUG(0);
 	}
-free_tgt_req:
-	qdf_mc_timer_destroy(&tgt_req->event_timeout);
 	qdf_mem_free(tgt_req);
 }
 
@@ -2559,16 +2795,12 @@ struct wma_target_req *wma_fill_hold_req(tp_wma_handle wma,
 		return NULL;
 	}
 
-	WMA_LOGE(FL("vdev_id %d msg %d type %d"), vdev_id, msg_type, type);
-
+	WMA_LOGD(FL("vdev_id %d msg %d type %d"), vdev_id, msg_type, type);
+	qdf_spin_lock_bh(&wma->wma_hold_req_q_lock);
 	req->vdev_id = vdev_id;
 	req->msg_type = msg_type;
 	req->type = type;
 	req->user_data = params;
-	qdf_mc_timer_init(&req->event_timeout, QDF_TIMER_TYPE_SW,
-			  wma_hold_req_timer, req);
-	qdf_mc_timer_start(&req->event_timeout, timeout);
-	qdf_spin_lock_bh(&wma->wma_hold_req_q_lock);
 	status = qdf_list_insert_back(&wma->wma_hold_req_queue, &req->node);
 	if (QDF_STATUS_SUCCESS != status) {
 		qdf_spin_unlock_bh(&wma->wma_hold_req_q_lock);
@@ -2577,6 +2809,9 @@ struct wma_target_req *wma_fill_hold_req(tp_wma_handle wma,
 		return NULL;
 	}
 	qdf_spin_unlock_bh(&wma->wma_hold_req_q_lock);
+	qdf_mc_timer_init(&req->event_timeout, QDF_TIMER_TYPE_SW,
+			  wma_hold_req_timer, req);
+	qdf_mc_timer_start(&req->event_timeout, timeout);
 	return req;
 }
 
@@ -2620,8 +2855,6 @@ void wma_vdev_resp_timer(void *data)
 	ol_txrx_pdev_handle pdev;
 	uint8_t peer_id;
 	struct wma_target_req *msg;
-	QDF_STATUS status = QDF_STATUS_SUCCESS;
-	cds_msg_t sme_msg = { 0 };
 #ifdef FEATURE_AP_MCC_CH_AVOIDANCE
 	tpAniSirGlobal mac_ctx = cds_get_context(QDF_MODULE_ID_PE);
 	if (NULL == mac_ctx) {
@@ -2775,20 +3008,11 @@ void wma_vdev_resp_timer(void *data)
 		params->status = QDF_STATUS_E_TIMEOUT;
 
 		WMA_LOGA("%s: WMA_DEL_STA_SELF_REQ timedout", __func__);
-		if (wma_crash_on_fw_timeout(wma->fw_timeout_crash) == true) {
+		if (wma_crash_on_fw_timeout(wma->fw_timeout_crash) == true)
 			QDF_BUG(0);
-		} else {
-			sme_msg.type = eWNI_SME_DEL_STA_SELF_RSP;
-			sme_msg.bodyptr = iface->del_staself_req;
-			sme_msg.bodyval = 0;
+		else
+			wma_send_del_sta_self_resp(iface->del_staself_req);
 
-			status = cds_mq_post_message(QDF_MODULE_ID_SME,
-						     &sme_msg);
-			if (!QDF_IS_STATUS_SUCCESS(status)) {
-				WMA_LOGE("Failed to post eWNI_SME_ADD_STA_SELF_RSP");
-				qdf_mem_free(iface->del_staself_req);
-			}
-		}
 		if (iface->addBssStaContext)
 			qdf_mem_free(iface->addBssStaContext);
 		if (iface->staKeyParams)
@@ -2871,14 +3095,11 @@ struct wma_target_req *wma_fill_vdev_req(tp_wma_handle wma,
 	}
 
 	WMA_LOGD("%s: vdev_id %d msg %d", __func__, vdev_id, msg_type);
+	qdf_spin_lock_bh(&wma->vdev_respq_lock);
 	req->vdev_id = vdev_id;
 	req->msg_type = msg_type;
 	req->type = type;
 	req->user_data = params;
-	qdf_mc_timer_init(&req->event_timeout, QDF_TIMER_TYPE_SW,
-			  wma_vdev_resp_timer, req);
-	qdf_mc_timer_start(&req->event_timeout, timeout);
-	qdf_spin_lock_bh(&wma->vdev_respq_lock);
 	status = qdf_list_insert_back(&wma->vdev_resp_queue, &req->node);
 	if (QDF_STATUS_SUCCESS != status) {
 		qdf_spin_unlock_bh(&wma->vdev_respq_lock);
@@ -2887,8 +3108,10 @@ struct wma_target_req *wma_fill_vdev_req(tp_wma_handle wma,
 		qdf_mem_free(req);
 		return NULL;
 	}
-
 	qdf_spin_unlock_bh(&wma->vdev_respq_lock);
+	qdf_mc_timer_init(&req->event_timeout, QDF_TIMER_TYPE_SW,
+			  wma_vdev_resp_timer, req);
+	qdf_mc_timer_start(&req->event_timeout, timeout);
 	return req;
 }
 
@@ -3008,6 +3231,7 @@ static void wma_add_bss_ap_mode(tp_wma_handle wma, tpAddBssParams add_bss)
 	QDF_STATUS ret;
 #endif /* WLAN_FEATURE_11W */
 	struct sir_hw_mode_params hw_mode = {0};
+	uint32_t wow_mask[WMI_WOW_MAX_EVENT_BM_LEN] = {0};
 
 	pdev = cds_get_context(QDF_MODULE_ID_TXRX);
 
@@ -3023,9 +3247,14 @@ static void wma_add_bss_ap_mode(tp_wma_handle wma, tpAddBssParams add_bss)
 
 		goto send_fail_resp;
 	}
-	if (SAP_WPS_DISABLED == add_bss->wps_state)
+	if (SAP_WPS_DISABLED == add_bss->wps_state) {
+		wma_set_wow_event_bitmap(WOW_PROBE_REQ_WPS_IE_EVENT,
+					 WMI_WOW_MAX_EVENT_BM_LEN,
+					 wow_mask);
+
 		wma_enable_disable_wakeup_event(wma, vdev_id,
-			(1 << WOW_PROBE_REQ_WPS_IE_EVENT), false);
+			wow_mask, false);
+	}
 	wma_set_bss_rate_flags(&wma->interfaces[vdev_id], add_bss);
 	status = wma_create_peer(wma, pdev, vdev, add_bss->bssId,
 				 WMI_PEER_TYPE_DEFAULT, vdev_id, false);
@@ -3098,7 +3327,7 @@ static void wma_add_bss_ap_mode(tp_wma_handle wma, tpAddBssParams add_bss)
 	if (!QDF_IS_STATUS_SUCCESS(status))
 		WMA_LOGE("wma_get_current_hw_mode failed");
 
-	if ((add_bss->nss == 2) && !hw_mode.dbs_cap) {
+	if (add_bss->nss == 2) {
 		req.preferred_rx_streams = 2;
 		req.preferred_tx_streams = 2;
 	} else {
@@ -3243,7 +3472,7 @@ static void wma_add_bss_ibss_mode(tp_wma_handle wma, tpAddBssParams add_bss)
 	if (!QDF_IS_STATUS_SUCCESS(status))
 		WMA_LOGE("wma_get_current_hw_mode failed");
 
-	if ((add_bss->nss == 2) && !hw_mode.dbs_cap) {
+	if (add_bss->nss == 2) {
 		req.preferred_rx_streams = 2;
 		req.preferred_tx_streams = 2;
 	} else {
@@ -3424,7 +3653,7 @@ static void wma_add_bss_sta_mode(tp_wma_handle wma, tpAddBssParams add_bss)
 			if (!QDF_IS_STATUS_SUCCESS(status))
 				WMA_LOGE("wma_get_current_hw_mode failed");
 
-			if ((add_bss->nss == 2) && !hw_mode.dbs_cap) {
+			if (add_bss->nss == 2) {
 				req.preferred_rx_streams = 2;
 				req.preferred_tx_streams = 2;
 			} else {
