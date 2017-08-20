@@ -75,6 +75,9 @@
 #define WMM_OUI_TYPE   "\x00\x50\xf2\x02\x01"
 #define WMM_OUI_TYPE_SIZE  5
 
+#define VENDOR1_AP_OUI_TYPE "\x00\xE0\x4C"
+#define VENDOR1_AP_OUI_TYPE_SIZE 3
+
 #define WLAN_BSS_MEMBERSHIP_SELECTOR_VHT_PHY 126
 #define WLAN_BSS_MEMBERSHIP_SELECTOR_HT_PHY 127
 #define BASIC_RATE_MASK   0x80
@@ -460,6 +463,7 @@ enum qca_nl80211_vendor_subcmds {
 
 	/* Set Specific Absorption Rate(SAR) Power Limits */
 	QCA_NL80211_VENDOR_SUBCMD_SET_SAR_LIMITS = 146,
+	QCA_NL80211_VENDOR_SUBCMD_CHIP_PWRSAVE_FAILURE = 148,
 	QCA_NL80211_VENDOR_SUBCMD_NUD_STATS_SET = 149,
 	QCA_NL80211_VENDOR_SUBCMD_NUD_STATS_GET = 150,
 };
@@ -741,6 +745,7 @@ enum qca_nl80211_vendor_subcmds_index {
 	QCA_NL80211_VENDOR_SUBCMD_P2P_LO_EVENT_INDEX,
 	QCA_NL80211_VENDOR_SUBCMD_SAP_CONDITIONAL_CHAN_SWITCH_INDEX,
 	QCA_NL80211_VENDOR_SUBCMD_NUD_STATS_GET_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_PWR_SAVE_FAIL_DETECTED_INDEX,
 };
 
 /**
@@ -849,6 +854,39 @@ enum qca_wlan_vendor_attr_tdls_disable {
 	QCA_WLAN_VENDOR_ATTR_TDLS_DISABLE_AFTER_LAST,
 	QCA_WLAN_VENDOR_ATTR_TDLS_DISABLE_MAX =
 		QCA_WLAN_VENDOR_ATTR_TDLS_DISABLE_AFTER_LAST - 1,
+};
+
+/**
+ * qca_chip_power_save_failure_reason: Power save failure reason
+ * @QCA_CHIP_POWER_SAVE_FAILURE_REASON_PROTOCOL: Indicates power save failure
+ * due to protocol/module.
+ * @QCA_CHIP_POWER_SAVE_FAILURE_REASON_HARDWARE: power save failure
+ * due to hardware
+ */
+enum qca_chip_power_save_failure_reason {
+	QCA_CHIP_POWER_SAVE_FAILURE_REASON_PROTOCOL = 0,
+	QCA_CHIP_POWER_SAVE_FAILURE_REASON_HARDWARE = 1,
+};
+
+/**
+ * qca_attr_chip_power_save_failure: attributes to vendor subcmd
+ * @QCA_NL80211_VENDOR_SUBCMD_CHIP_PWRSAVE_FAILURE. This carry the requisite
+ * information leading to the power save failure.
+ * @QCA_ATTR_CHIP_POWER_SAVE_FAILURE_INVALID : invalid
+ * @QCA_ATTR_CHIP_POWER_SAVE_FAILURE_REASON : power save failure reason
+ * represented by enum qca_chip_power_save_failure_reason
+ * @QCA_ATTR_CHIP_POWER_SAVE_FAILURE_LAST : Last
+ * @QCA_ATTR_CHIP_POWER_SAVE_FAILURE_MAX : Max value
+ */
+enum qca_attr_chip_power_save_failure {
+	QCA_ATTR_CHIP_POWER_SAVE_FAILURE_INVALID = 0,
+
+	QCA_ATTR_CHIP_POWER_SAVE_FAILURE_REASON = 1,
+
+	/* keep last */
+	QCA_ATTR_CHIP_POWER_SAVE_FAILURE_LAST,
+	QCA_ATTR_CHIP_POWER_SAVE_FAILURE_MAX =
+		QCA_ATTR_CHIP_POWER_SAVE_FAILURE_LAST - 1,
 };
 
 /**
@@ -2447,11 +2485,11 @@ enum qca_wlan_vendor_acs_hw_mode {
  * To be set with QCA_WLAN_VENDOR_ATTR_CONFIG_ACCESS_POLICY.
  *
  * @QCA_ACCESS_POLICY_ACCEPT_UNLESS_LISTED: Deny Wi-Fi Connections which match
- *»       with the specific configuration (IE) set, i.e. allow all the
- *»       connections which do not match the configuration.
+ *Â»       with the specific configuration (IE) set, i.e. allow all the
+ *Â»       connections which do not match the configuration.
  * @QCA_ACCESS_POLICY_DENY_UNLESS_LISTED: Accept Wi-Fi Connections which match
- *»       with the specific configuration (IE) set, i.e. deny all the
- *»       connections which do not match the configuration.
+ *Â»       with the specific configuration (IE) set, i.e. deny all the
+ *Â»       connections which do not match the configuration.
  */
 enum qca_access_policy {
 	QCA_ACCESS_POLICY_ACCEPT_UNLESS_LISTED,
@@ -2523,6 +2561,7 @@ enum qca_ignore_assoc_disallowed {
  *                  Ignore Assoc Disallowed[MBO]
  * @QCA_WLAN_VENDOR_ATTR_CONFIG_LAST: last config
  * @QCA_WLAN_VENDOR_ATTR_CONFIG_MAX: max config
+ * @QCA_WLAN_VENDOR_ATTR_CONFIG_LRO: enable/disable LRO
  */
 enum qca_wlan_vendor_config {
 	QCA_WLAN_VENDOR_ATTR_CONFIG_INVALID = 0,
@@ -2598,6 +2637,12 @@ enum qca_wlan_vendor_config {
 	/* Unsigned 8-bit, for setting qpower dynamically */
 	QCA_WLAN_VENDOR_ATTR_CONFIG_QPOWER = 25,
 	QCA_WLAN_VENDOR_ATTR_CONFIG_IGNORE_ASSOC_DISALLOWED = 26,
+	/*
+	 * 8 bit unsigned value to enable/disable LRO (Large Receive Offload)
+	 * on an interface.
+	 * 1 - Enable , 0 - Disable.
+	 */
+	QCA_WLAN_VENDOR_ATTR_CONFIG_LRO = 50,
 	/* keep last */
 	QCA_WLAN_VENDOR_ATTR_CONFIG_LAST,
 	QCA_WLAN_VENDOR_ATTR_CONFIG_MAX =
@@ -3441,7 +3486,19 @@ void hdd_select_cbmode(hdd_adapter_t *pAdapter, uint8_t operationChannel,
 
 uint8_t *wlan_hdd_cfg80211_get_ie_ptr(const uint8_t *ies_ptr, int length,
 				      uint8_t eid);
-
+/**
+ * wlan_hdd_is_ap_supports_immediate_power_save() - to find certain vendor APs
+ *				which do not support immediate power-save.
+ * @ies: beacon IE of the AP which STA is connecting/connected to
+ * @length: beacon IE length only
+ *
+ * This API takes the IE of connected/connecting AP and determines that
+ * whether it has specific vendor OUI. If it finds then it will return false to
+ * notify that AP doesn't support immediate power-save.
+ *
+ * Return: true or false based on findings
+ */
+bool wlan_hdd_is_ap_supports_immediate_power_save(uint8_t *ies, int length);
 void wlan_hdd_del_station(hdd_adapter_t *adapter);
 
 #if defined(USE_CFG80211_DEL_STA_V2)
@@ -3635,4 +3692,16 @@ void hdd_process_defer_disconnect(hdd_adapter_t *adapter);
  * Return: 0 for success, non-zero for failure
  */
 int wlan_hdd_try_disconnect(hdd_adapter_t *adapter);
+
+/**
+ * hdd_update_cca_info_cb() - stores congestion value in station context
+ * @context : HDD context
+ * @congestion : congestion
+ * @vdev_id : vdev id
+ *
+ * Return: None
+ */
+void hdd_update_cca_info_cb(void *context, uint32_t congestion,
+			uint32_t vdev_id);
+
 #endif

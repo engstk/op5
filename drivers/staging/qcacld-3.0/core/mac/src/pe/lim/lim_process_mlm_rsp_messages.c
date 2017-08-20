@@ -833,7 +833,7 @@ lim_fill_assoc_ind_params(tpAniSirGlobal mac_ctx,
 void lim_process_mlm_assoc_ind(tpAniSirGlobal pMac, uint32_t *pMsgBuf)
 {
 	uint32_t len;
-	tSirMsgQ msgQ;
+	cds_msg_t msg;
 	tSirSmeAssocInd *pSirSmeAssocInd;
 	tpDphHashNode pStaDs = 0;
 	tpPESession psessionEntry;
@@ -863,9 +863,9 @@ void lim_process_mlm_assoc_ind(tpAniSirGlobal pMac, uint32_t *pMsgBuf)
 	pSirSmeAssocInd->messageType = eWNI_SME_ASSOC_IND;
 	lim_fill_assoc_ind_params(pMac, (tpLimMlmAssocInd) pMsgBuf, pSirSmeAssocInd,
 				  psessionEntry);
-	msgQ.type = eWNI_SME_ASSOC_IND;
-	msgQ.bodyptr = pSirSmeAssocInd;
-	msgQ.bodyval = 0;
+	msg.type = eWNI_SME_ASSOC_IND;
+	msg.bodyptr = pSirSmeAssocInd;
+	msg.bodyval = 0;
 	pStaDs = dph_get_hash_entry(pMac,
 				    ((tpLimMlmAssocInd) pMsgBuf)->aid,
 				    &psessionEntry->dph.dphHashTable);
@@ -882,17 +882,12 @@ void lim_process_mlm_assoc_ind(tpAniSirGlobal pMac, uint32_t *pMsgBuf)
 	pSirSmeAssocInd->reassocReq = pStaDs->mlmStaContext.subType;
 	pSirSmeAssocInd->timingMeasCap = pStaDs->timingMeasCap;
 	MTRACE(mac_trace(pMac, TRACE_CODE_TX_SME_MSG,
-			 psessionEntry->peSessionId, msgQ.type));
+			 psessionEntry->peSessionId, msg.type));
 #ifdef FEATURE_WLAN_DIAG_SUPPORT_LIM    /* FEATURE_WLAN_DIAG_SUPPORT */
 	lim_diag_event_report(pMac, WLAN_PE_DIAG_ASSOC_IND_EVENT, psessionEntry, 0,
 			      0);
 #endif /* FEATURE_WLAN_DIAG_SUPPORT */
-	lim_sys_process_mmh_msg_api(pMac, &msgQ, ePROT);
-
-	PELOG1(lim_log(pMac, LOG1,
-		       FL
-			       ("Create CNF_WAIT_TIMER after received LIM_MLM_ASSOC_IND"));
-	       )
+	pe_debug("Create CNF_WAIT_TIMER after received LIM_MLM_ASSOC_IND");
 	/*
 	** turn on a timer to detect the loss of ASSOC CNF
 	**/
@@ -900,6 +895,7 @@ void lim_process_mlm_assoc_ind(tpAniSirGlobal pMac, uint32_t *pMsgBuf)
 			       (uint16_t) ((tpLimMlmAssocInd) pMsgBuf)->aid,
 			       psessionEntry);
 
+	pMac->lim.sme_msg_callback(pMac, &msg);
 } /*** end lim_process_mlm_assoc_ind() ***/
 
 /**
@@ -1452,9 +1448,12 @@ error:
 		if (lim_set_link_state
 			(mac_ctx, eSIR_LINK_DOWN_STATE, session_entry->bssId,
 			 session_entry->selfMacAddr, lim_join_result_callback,
-			 param) != eSIR_SUCCESS)
+			 param) != eSIR_SUCCESS) {
+			qdf_mem_free(param);
+			param = NULL;
 			lim_log(mac_ctx, LOGE,
 				FL("Failed to set the LinkState."));
+		}
 		return;
 	}
 
@@ -3194,6 +3193,7 @@ void lim_process_switch_channel_rsp(tpAniSirGlobal pMac, void *body)
 			FL("session does not exist for given sessionId"));
 		return;
 	}
+	psessionEntry->ch_switch_in_progress = false;
 	/* HAL fills in the tx power used for mgmt frames in this field. */
 	/* Store this value to use in TPC report IE. */
 	rrm_cache_mgmt_tx_power(pMac, pChnlParams->txMgmtPower, psessionEntry);

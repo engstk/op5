@@ -913,6 +913,28 @@ QDF_STATUS sme_qos_validate_params(tpAniSirGlobal pMac,
 	return status;
 }
 
+void sme_qos_remove_addts_delts_cmd(tpAniSirGlobal mac_ctx, uint8_t session_id)
+{
+	tListElem *entry;
+	tSmeCmd *command;
+
+	entry = csr_ll_peek_head(&mac_ctx->sme.smeCmdActiveList,
+				 LL_ACCESS_LOCK);
+	if (NULL == entry)
+		return;
+	command = GET_BASE_ADDR(entry, tSmeCmd, Link);
+	if ((eSmeCommandAddTs   == command->command ||
+	    eSmeCommandDelTs == command->command) &&
+	    command->sessionId == session_id) {
+		if (csr_ll_remove_entry(&mac_ctx->sme.smeCmdActiveList, entry,
+		    LL_ACCESS_LOCK)) {
+		    QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_INFO,
+			      "%s: removed addts/delts command", __func__);
+			qos_release_command(mac_ctx, command);
+		}
+	}
+}
+
 /*--------------------------------------------------------------------------
    \brief sme_qos_csr_event_ind() - The QoS sub-module in SME expects notifications
    from CSR when certain events occur as mentioned in sme_qos_csr_event_indType.
@@ -4400,7 +4422,6 @@ QDF_STATUS sme_qos_process_assoc_complete_ev(tpAniSirGlobal pMac, uint8_t sessio
 					  "%s: %d: On session %d AC %d is in wrong state %d",
 					  __func__, __LINE__, sessionId, ac,
 					  pACInfo->curr_state);
-				QDF_ASSERT(0);
 				break;
 			}
 		}
@@ -4440,7 +4461,6 @@ QDF_STATUS sme_qos_process_reassoc_req_ev(tpAniSirGlobal pMac, uint8_t sessionId
 		    (pSession->ac_info[1].curr_state != SME_QOS_HANDOFF) ||
 		    (pSession->ac_info[2].curr_state != SME_QOS_HANDOFF) ||
 		    (pSession->ac_info[3].curr_state != SME_QOS_HANDOFF)) {
-			QDF_ASSERT(0);
 			return QDF_STATUS_E_FAILURE;
 		}
 		sme_qos_process_ft_reassoc_req_ev(sessionId);
@@ -4529,7 +4549,6 @@ QDF_STATUS sme_qos_process_reassoc_req_ev(tpAniSirGlobal pMac, uint8_t sessionId
 				  "%s: %d: On session %d AC %d is in wrong state %d",
 				  __func__, __LINE__,
 				  sessionId, ac, pACInfo->curr_state);
-			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -4750,7 +4769,6 @@ QDF_STATUS sme_qos_process_reassoc_success_ev(tpAniSirGlobal mac_ctx,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  FL("session %d AC %d is in wrong state %d"),
 				  sessionid, ac, ac_info->curr_state);
-			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -4818,7 +4836,6 @@ QDF_STATUS sme_qos_process_reassoc_failure_ev(tpAniSirGlobal pMac,
 				  "%s: %d: On session %d AC %d is in wrong state %d",
 				  __func__, __LINE__,
 				  sessionId, ac, pACInfo->curr_state);
-			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -4873,7 +4890,6 @@ QDF_STATUS sme_qos_process_handoff_assoc_req_ev(tpAniSirGlobal pMac,
 				  "%s: %d: On session %d AC %d is in wrong state %d",
 				  __func__, __LINE__,
 				  sessionId, ac, pACInfo->curr_state);
-			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -4946,7 +4962,6 @@ QDF_STATUS sme_qos_process_handoff_success_ev(tpAniSirGlobal pMac,
 				  "%s: %d: On session %d AC %d is in wrong state %d",
 				  __func__, __LINE__,
 				  sessionId, ac, pACInfo->curr_state);
-			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -5006,7 +5021,6 @@ QDF_STATUS sme_qos_process_handoff_failure_ev(tpAniSirGlobal pMac,
 				  "%s: %d: On session %d AC %d is in wrong state %d",
 				  __func__, __LINE__,
 				  sessionId, ac, pACInfo->curr_state);
-			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -5182,7 +5196,6 @@ QDF_STATUS sme_qos_process_preauth_success_ind(tpAniSirGlobal mac_ctx,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  FL("Session %d AC %d is in wrong state %d"),
 				  sessionid, ac, ac_info->curr_state);
-			QDF_ASSERT(0);
 			break;
 		}
 	}

@@ -467,6 +467,7 @@ ol_rx_indication_handler(ol_txrx_pdev_handle pdev,
 	uint16_t chan2;
 	uint8_t phymode;
 	bool ret;
+	uint32_t msdu_count = 0;
 
 	htt_pdev = pdev->htt_pdev;
 	peer = ol_txrx_peer_find_by_id(pdev, peer_id);
@@ -586,7 +587,8 @@ ol_rx_indication_handler(ol_txrx_pdev_handle pdev,
 					htt_rx_amsdu_pop(htt_pdev,
 							 rx_ind_msg,
 							 &head_msdu,
-							 &tail_msdu);
+							 &tail_msdu,
+							 &msdu_count);
 #ifdef HTT_RX_RESTORE
 				if (htt_pdev->rx_ring.rx_reset) {
 					ol_rx_trigger_restore(htt_pdev,
@@ -644,7 +646,7 @@ ol_rx_indication_handler(ol_txrx_pdev_handle pdev,
 			for (i = 0; i < num_mpdus; i++) {
 				/* pull the MPDU's MSDUs off the buffer queue */
 				htt_rx_amsdu_pop(htt_pdev, rx_ind_msg, &msdu,
-						 &tail_msdu);
+						 &tail_msdu, &msdu_count);
 #ifdef HTT_RX_RESTORE
 				if (htt_pdev->rx_ring.rx_reset) {
 					ol_rx_trigger_restore(htt_pdev, msdu,
@@ -1410,7 +1412,7 @@ ol_rx_in_order_indication_handler(ol_txrx_pdev_handle pdev,
 	struct ol_txrx_peer_t *peer = NULL;
 	htt_pdev_handle htt_pdev = NULL;
 	int status;
-	qdf_nbuf_t head_msdu, tail_msdu = NULL;
+	qdf_nbuf_t head_msdu = NULL, tail_msdu = NULL;
 	uint8_t *rx_ind_data;
 	uint32_t *msg_word;
 	uint32_t msdu_count;
@@ -1453,7 +1455,8 @@ ol_rx_in_order_indication_handler(ol_txrx_pdev_handle pdev,
 	 * This also attaches each rx MSDU descriptor to the
 	 * corresponding rx MSDU network buffer.
 	 */
-	status = htt_rx_amsdu_pop(htt_pdev, rx_ind_msg, &head_msdu, &tail_msdu);
+	status = htt_rx_amsdu_pop(htt_pdev, rx_ind_msg, &head_msdu,
+				  &tail_msdu, &msdu_count);
 	ol_rx_ind_record_event(status, OL_RX_INDICATION_POP_END);
 
 	if (qdf_unlikely(0 == status)) {
@@ -1467,6 +1470,12 @@ ol_rx_in_order_indication_handler(ol_txrx_pdev_handle pdev,
 	   to consume the rx frames */
 	filled = htt_rx_msdu_buff_in_order_replenish(htt_pdev, msdu_count);
 	ol_rx_ind_record_event(filled, OL_RX_INDICATION_BUF_REPLENISH);
+
+	if (!head_msdu) {
+		TXRX_PRINT(TXRX_PRINT_LEVEL_WARN,
+			   "%s: No packet to send to HDD\n",  __func__);
+		return;
+	}
 
 	/* Send the chain of MSDUs to the OS */
 	/* rx_opt_proc takes a NULL-terminated list of msdu netbufs */
@@ -1534,7 +1543,7 @@ void ol_rx_pkt_dump_call(
 
 	peer = ol_txrx_peer_find_by_id(pdev, peer_id);
 	if (!peer) {
-		TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
+		TXRX_PRINT(TXRX_PRINT_LEVEL_INFO1,
 			"%s: peer with peer id %d is NULL", __func__,
 			peer_id);
 		return;

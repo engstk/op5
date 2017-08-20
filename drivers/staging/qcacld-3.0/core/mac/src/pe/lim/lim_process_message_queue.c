@@ -379,6 +379,9 @@ static void lim_process_hw_mode_trans_ind(tpAniSirGlobal mac, void *body)
 
 uint8_t static def_msg_decision(tpAniSirGlobal pMac, tpSirMsgQ limMsg)
 {
+	uint8_t type, subtype;
+	QDF_STATUS status;
+	bool mgmt_pkt_defer = true;
 
 /* this function should not changed */
 	if (pMac->lim.gLimSmeState == eLIM_SME_OFFLINE_STATE) {
@@ -395,6 +398,21 @@ uint8_t static def_msg_decision(tpAniSirGlobal pMac, tpSirMsgQ limMsg)
 	if ((!lim_is_system_in_scan_state(pMac))
 	    && (true != GET_LIM_PROCESS_DEFD_MESGS(pMac))
 	    && !pMac->lim.gLimSystemInScanLearnMode) {
+
+		if (limMsg->type == SIR_BB_XPORT_MGMT_MSG) {
+			/*
+			 * Dont defer beacon and probe response
+			 * because it will fill the defer queue quickly
+			 */
+			status = lim_util_get_type_subtype(limMsg->bodyptr,
+				&type, &subtype);
+			if (QDF_IS_STATUS_SUCCESS(status) &&
+				(type == SIR_MAC_MGMT_FRAME) &&
+				((subtype == SIR_MAC_MGMT_BEACON) ||
+				 (subtype == SIR_MAC_MGMT_PROBE_RSP)))
+				mgmt_pkt_defer = false;
+		}
+
 		if ((limMsg->type != WMA_ADD_BSS_RSP)
 		    && (limMsg->type != WMA_DELETE_BSS_RSP)
 		    && (limMsg->type != WMA_DELETE_BSS_HO_FAIL_RSP)
@@ -428,13 +446,10 @@ uint8_t static def_msg_decision(tpAniSirGlobal pMac, tpSirMsgQ limMsg)
 		     * after ADD TS request is sent over the air and
 		     * ADD TS response received over the air */
 		    !(limMsg->type == SIR_BB_XPORT_MGMT_MSG &&
-			pMac->lim.gLimAddtsSent)) {
-			PELOG1(lim_log
-			       (pMac, LOG1,
-			       FL
-					       ("Defer the current message %s , gLimProcessDefdMsgs is false and system is not in scan/learn mode"),
+			pMac->lim.gLimAddtsSent) &&
+			(mgmt_pkt_defer)) {
+			pe_debug("Defer the current message %s , gLimProcessDefdMsgs is false and system is not in scan/learn mode",
 				       lim_msg_str(limMsg->type));
-			       )
 			/* Defer processsing this message */
 			if (lim_defer_msg(pMac, limMsg) != TX_SUCCESS) {
 				QDF_TRACE(QDF_MODULE_ID_PE, LOGE,
@@ -710,8 +725,7 @@ uint32_t lim_defer_msg(tpAniSirGlobal pMac, tSirMsgQ *pMsg)
 			       LIM_TRACE_MAKE_RXMSG(pMsg->type, LIM_MSG_DEFERRED));
 		       )
 	} else {
-		lim_log(pMac, LOGE, FL("Dropped lim message (0x%X)"),
-			pMsg->type);
+		pe_err("Dropped lim message (0x%X) Message %s", pMsg->type, lim_msg_str(pMsg->type));
 		MTRACE(mac_trace_msg_rx
 			       (pMac, NO_SESSION,
 			       LIM_TRACE_MAKE_RXMSG(pMsg->type, LIM_MSG_DROPPED));
@@ -1444,6 +1458,7 @@ static void lim_process_messages(tpAniSirGlobal mac_ctx, tpSirMsgQ msg)
 	case eWNI_SME_SET_DUAL_MAC_CFG_REQ:
 	case eWNI_SME_SET_ANTENNA_MODE_REQ:
 	case eWNI_SME_UPDATE_ACCESS_POLICY_VENDOR_IE:
+	case eWNI_SME_UPDATE_CONFIG:
 		/* These messages are from HDD. Need to respond to HDD */
 		lim_process_normal_hdd_msg(mac_ctx, msg, true);
 		break;
@@ -1974,6 +1989,11 @@ static void lim_process_messages(tpAniSirGlobal mac_ctx, tpSirMsgQ msg)
 		break;
 	case eWNI_SME_DEFAULT_SCAN_IE:
 		lim_process_set_default_scan_ie_request(mac_ctx, msg->bodyptr);
+		qdf_mem_free((void *)msg->bodyptr);
+		msg->bodyptr = NULL;
+		break;
+	case eWNI_SME_DEL_ALL_TDLS_PEERS:
+		lim_process_sme_del_all_tdls_peers(mac_ctx, msg->bodyptr);
 		qdf_mem_free((void *)msg->bodyptr);
 		msg->bodyptr = NULL;
 		break;

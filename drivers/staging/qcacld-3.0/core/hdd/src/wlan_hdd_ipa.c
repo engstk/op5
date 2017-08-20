@@ -502,6 +502,7 @@ struct hdd_ipa_priv {
 	struct completion ipa_uc_sharing_stats_comp;
 	struct completion ipa_uc_set_quota_comp;
 #endif
+	struct completion ipa_resource_comp;
 };
 
 #define HDD_IPA_WLAN_FRAG_HEADER        sizeof(struct frag_header)
@@ -620,6 +621,8 @@ static struct hdd_ipa_tx_hdr ipa_tx_hdr = {
 #define IPA_UC_SHARING_STATES_WAIT_TIME	500
 #define IPA_UC_SET_QUOTA_WAIT_TIME	500
 #endif
+
+#define IPA_RESOURCE_COMP_WAIT_TIME	100
 
 static struct hdd_ipa_priv *ghdd_ipa;
 
@@ -1472,9 +1475,9 @@ static void __hdd_ipa_uc_stat_request(hdd_adapter_t *adapter, uint8_t reason)
 		(false == hdd_ipa->resource_loading)) {
 		hdd_ipa->stat_req_reason = reason;
 		qdf_mutex_release(&hdd_ipa->ipa_lock);
-		wma_cli_set_command(
-			(int)adapter->sessionId,
-			(int)WMA_VDEV_TXRX_GET_IPA_UC_FW_STATS_CMDID,
+		sme_ipa_uc_stat_request(WLAN_HDD_GET_HAL_CTX(adapter),
+			adapter->sessionId,
+			WMA_VDEV_TXRX_GET_IPA_UC_FW_STATS_CMDID,
 			0, VDEV_CMD);
 	} else {
 		qdf_mutex_release(&hdd_ipa->ipa_lock);
@@ -1678,6 +1681,7 @@ static int hdd_ipa_uc_enable_pipes(struct hdd_ipa_priv *hdd_ipa)
 			    __func__, result);
 		return result;
 	}
+	INIT_COMPLETION(hdd_ipa->ipa_resource_comp);
 	ol_txrx_ipa_uc_set_active(cds_ctx->pdev_txrx_ctx, true, false);
 	hdd_ipa->ipa_pipes_down = false;
 	return 0;
@@ -1749,6 +1753,13 @@ static int hdd_ipa_uc_handle_first_con(struct hdd_ipa_priv *hdd_ipa)
 			/* RM PROD request sync return
 			 * enable pipe immediately
 			 */
+			if (!hdd_ipa->ipa_pipes_down) {
+				HDD_IPA_LOG(QDF_TRACE_LEVEL_DEBUG,
+					"%s: IPA WDI Pipe already activated",
+					__func__);
+				return 0;
+			}
+
 			if (hdd_ipa_uc_enable_pipes(hdd_ipa)) {
 				HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
 					"%s: IPA WDI Pipe activation failed",
@@ -1756,6 +1767,10 @@ static int hdd_ipa_uc_handle_first_con(struct hdd_ipa_priv *hdd_ipa)
 				hdd_ipa->resource_loading = false;
 				return -EBUSY;
 			}
+		} else {
+			HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO,
+				    "%s: IPA WDI Pipe activation deferred",
+					__func__);
 		}
 	} else {
 		/* RM Disabled
@@ -1793,6 +1808,7 @@ static void hdd_ipa_uc_handle_last_discon(struct hdd_ipa_priv *hdd_ipa)
 	}
 
 	hdd_ipa->resource_unloading = true;
+	INIT_COMPLETION(hdd_ipa->ipa_resource_comp);
 	HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO, "%s: Disable FW RX PIPE", __func__);
 	ol_txrx_ipa_uc_set_active(cds_ctx->pdev_txrx_ctx, false, false);
 	HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO, "%s: Disable FW TX PIPE", __func__);
@@ -2067,6 +2083,7 @@ static void hdd_ipa_uc_op_cb(struct op_msg_type *op_msg, void *usr_ctxt)
 		hdd_ipa->activated_fw_pipe++;
 		if (HDD_IPA_UC_NUM_WDI_PIPE == hdd_ipa->activated_fw_pipe) {
 			hdd_ipa->resource_loading = false;
+			complete(&hdd_ipa->ipa_resource_comp);
 			if (hdd_ipa_uc_send_wdi_control_msg(true) < 0) {
 				qdf_mutex_release(&hdd_ipa->event_lock);
 				qdf_mem_free(op_msg);
@@ -2085,6 +2102,10 @@ static void hdd_ipa_uc_op_cb(struct op_msg_type *op_msg, void *usr_ctxt)
 		qdf_mutex_acquire(&hdd_ipa->ipa_lock);
 		hdd_ipa->activated_fw_pipe--;
 		if (!hdd_ipa->activated_fw_pipe) {
+			/*
+			 * Async return success from FW
+			 * Disable/suspend all the PIPEs
+			 */
 			hdd_ipa_uc_disable_pipes(hdd_ipa);
 			if (hdd_ipa_uc_send_wdi_control_msg(false) < 0) {
 				qdf_mutex_release(&hdd_ipa->event_lock);
@@ -2094,9 +2115,8 @@ static void hdd_ipa_uc_op_cb(struct op_msg_type *op_msg, void *usr_ctxt)
 			if (hdd_ipa_is_rm_enabled(hdd_ipa->hdd_ctx))
 				ipa_rm_release_resource(
 					IPA_RM_RESOURCE_WLAN_PROD);
-			/* Sync return success from IPA
-			* Enable/resume all the PIPEs */
 			hdd_ipa->resource_unloading = false;
+			complete(&hdd_ipa->ipa_resource_comp);
 			hdd_ipa_uc_proc_pending_event(hdd_ipa);
 			hdd_ipa->pending_cons_req = false;
 		}
@@ -2476,7 +2496,7 @@ static void hdd_ipa_init_uc_op_work(struct work_struct *work,
  * __hdd_ipa_wdi_meter_notifier_cb() - WLAN to IPA callback handler.
  * IPA calls to get WLAN stats or set quota limit.
  * @priv: pointer to private data registered with IPA (we register a
- *»       pointer to the global IPA context)
+ *Â»       pointer to the global IPA context)
  * @evt: the IPA event which triggered the callback
  * @data: data associated with the event
  *
@@ -2512,7 +2532,6 @@ static void __hdd_ipa_wdi_meter_notifier_cb(enum ipa_wdi_meter_evt_type evt,
 		}
 
 		INIT_COMPLETION(hdd_ipa->ipa_uc_sharing_stats_comp);
-		INIT_COMPLETION(hdd_ipa->ipa_uc_set_quota_comp);
 		hdd_ipa_uc_sharing_stats_request(adapter,
 					     wdi_sap_stats->reset_stats);
 		ret = wait_for_completion_timeout(
@@ -2567,6 +2586,7 @@ static void __hdd_ipa_wdi_meter_notifier_cb(enum ipa_wdi_meter_evt_type evt,
 			return;
 		}
 
+		INIT_COMPLETION(hdd_ipa->ipa_uc_set_quota_comp);
 		hdd_ipa_uc_set_quota(adapter, ipa_set_quota->set_quota,
 				     ipa_set_quota->quota_bytes);
 
@@ -2596,7 +2616,7 @@ static void __hdd_ipa_wdi_meter_notifier_cb(enum ipa_wdi_meter_evt_type evt,
  * hdd_ipa_wdi_meter_notifier_cb() - WLAN to IPA callback handler.
  * IPA calls to get WLAN stats or set quota limit.
  * @priv: pointer to private data registered with IPA (we register a
- *»       pointer to the global IPA context)
+ *Â»       pointer to the global IPA context)
  * @evt: the IPA event which triggered the callback
  * @data: data associated with the event
  *
@@ -2697,7 +2717,7 @@ QDF_STATUS hdd_ipa_uc_ol_init(hdd_context_t *hdd_ctx)
 	/* IPA requires total byte counts of Tx comp ring */
 	pipe_in.u.dl.comp_ring_size =
 		ipa_ctxt->ipa_resource.tx_comp_ring_size *
-		sizeof(qdf_dma_addr_t);
+		sizeof(target_paddr_t);
 	pipe_in.u.dl.ce_ring_base_pa =
 		ipa_ctxt->ipa_resource.ce_sr_base_paddr;
 	pipe_in.u.dl.ce_door_bell_pa = ipa_ctxt->ipa_resource.ce_reg_paddr;
@@ -2732,6 +2752,13 @@ QDF_STATUS hdd_ipa_uc_ol_init(hdd_context_t *hdd_ctx)
 
 		/* WLAN TX PIPE Handle */
 		ipa_ctxt->tx_pipe_handle = pipe_out.clnt_hdl;
+
+		if (ipa_ctxt->tx_pipe_handle == 0) {
+			HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
+				"TX Handle zero");
+			QDF_BUG(0);
+		}
+
 		HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO,
 			"CONS DB pipe out 0x%x TX PIPE Handle 0x%x",
 			(unsigned int)pipe_out.uc_door_bell_pa,
@@ -2783,14 +2810,24 @@ QDF_STATUS hdd_ipa_uc_ol_init(hdd_context_t *hdd_ctx)
 		ret = ipa_connect_wdi_pipe(&ipa_ctxt->prod_pipe_in, &pipe_out);
 		if (ret) {
 			HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
-				"ipa_connect_wdi_pipe falied for Rx: ret=%d",
+				"ipa_connect_wdi_pipe failed for Rx: ret=%d",
 				ret);
 			stat = QDF_STATUS_E_FAILURE;
+			ret = ipa_disconnect_wdi_pipe(ipa_ctxt->tx_pipe_handle);
+			if (ret)
+				HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
+					    "disconnect failed for TX: ret=%d",
+					    ret);
 			goto fail_return;
-
 		}
 		ipa_ctxt->rx_ready_doorbell_paddr = pipe_out.uc_door_bell_pa;
 		ipa_ctxt->rx_pipe_handle = pipe_out.clnt_hdl;
+		if (ipa_ctxt->rx_pipe_handle == 0) {
+			HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
+				"RX Handle zero");
+			QDF_BUG(0);
+		}
+
 		HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO,
 			"PROD DB pipe out 0x%x RX PIPE Handle 0x%x",
 			(unsigned int)pipe_out.uc_door_bell_pa,
@@ -2820,6 +2857,37 @@ QDF_STATUS hdd_ipa_uc_ol_init(hdd_context_t *hdd_ctx)
 fail_return:
 	EXIT();
 	return stat;
+}
+
+/**
+ * hdd_ipa_uc_ol_deinit() - Disconnect IPA TX and RX pipes
+ * @hdd_ctx: Global HDD context
+ *
+ * Return: 0 on success, negativer errno on error
+ */
+int hdd_ipa_uc_ol_deinit(hdd_context_t *hdd_ctx)
+{
+	struct hdd_ipa_priv *hdd_ipa = hdd_ctx->hdd_ipa;
+	int ret = 0;
+
+	if (!hdd_ipa_uc_is_enabled(hdd_ctx))
+		return ret;
+
+	if (!hdd_ipa->ipa_pipes_down)
+		hdd_ipa_uc_disable_pipes(hdd_ipa);
+
+	if (true == hdd_ipa->uc_loaded) {
+		HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO,
+			    "%s: Disconnect TX PIPE tx_pipe_handle=0x%x",
+			    __func__, hdd_ipa->tx_pipe_handle);
+		ret = ipa_disconnect_wdi_pipe(hdd_ipa->tx_pipe_handle);
+		HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO,
+			    "%s: Disconnect RX PIPE rx_pipe_handle=0x%x",
+			    __func__, hdd_ipa->rx_pipe_handle);
+		ret = ipa_disconnect_wdi_pipe(hdd_ipa->rx_pipe_handle);
+	}
+
+	return ret;
 }
 
 /**
@@ -3085,8 +3153,6 @@ static int __hdd_ipa_uc_ssr_deinit(void)
 	 * IPA submodule during SSR transient state. So deinit basic IPA
 	 * UC host side to be in sync with reloaded FW during SSR
 	 */
-	if (!hdd_ipa->ipa_pipes_down)
-		hdd_ipa_uc_disable_pipes(hdd_ipa);
 
 	qdf_mutex_acquire(&hdd_ipa->ipa_lock);
 	for (idx = 0; idx < WLAN_MAX_STA_COUNT; idx++) {
@@ -3094,16 +3160,6 @@ static int __hdd_ipa_uc_ssr_deinit(void)
 		hdd_ipa->assoc_stas_map[idx].sta_id = 0xFF;
 	}
 	qdf_mutex_release(&hdd_ipa->ipa_lock);
-
-	HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO,
-		    "%s: Disconnect TX PIPE tx_pipe_handle=0x%x",
-		    __func__, hdd_ipa->tx_pipe_handle);
-	ipa_disconnect_wdi_pipe(hdd_ipa->tx_pipe_handle);
-
-	HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO,
-		    "%s: Disconnect RX PIPE rx_pipe_handle=0x%x",
-		    __func__, hdd_ipa->rx_pipe_handle);
-	ipa_disconnect_wdi_pipe(hdd_ipa->rx_pipe_handle);
 
 	if (hdd_ipa_uc_sta_is_enabled(hdd_ipa->hdd_ctx))
 		hdd_ipa_uc_sta_reset_sta_connected(hdd_ipa);
@@ -5007,6 +5063,13 @@ static void hdd_ipa_cleanup_iface(struct hdd_ipa_iface_context *iface_context)
 {
 	if (iface_context == NULL)
 		return;
+	if (iface_context->adapter->magic != WLAN_HDD_ADAPTER_MAGIC) {
+		HDD_IPA_LOG(QDF_TRACE_LEVEL_DEBUG,
+			    "%s: bad adapter(%p).magic(%d)!",
+			    __func__, iface_context->adapter,
+			    iface_context->adapter->magic);
+		return;
+	}
 
 	hdd_ipa_clean_hdr(iface_context->adapter);
 
@@ -5301,50 +5364,74 @@ static int __hdd_ipa_wlan_evt(hdd_adapter_t *adapter, uint8_t sta_id,
 
 	/*
 	 * During IPA UC resource loading/unloading new events can be issued.
-	 * Store the events separately and handle them later.
 	 */
-	if (hdd_ipa_uc_is_enabled(hdd_ipa->hdd_ctx)) {
-		if (hdd_ipa->resource_loading) {
-			unsigned int pending_event_count;
-			struct ipa_uc_pending_event *pending_event = NULL;
+	if (hdd_ipa_uc_is_enabled(hdd_ipa->hdd_ctx) &&
+	    (hdd_ipa->resource_loading || hdd_ipa->resource_unloading)) {
+		unsigned int pending_event_count;
+		struct ipa_uc_pending_event *pending_event = NULL;
 
+		HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
+			    "%s:IPA resource %s inprogress",
+			    hdd_ipa_wlan_event_to_str(type),
+			    hdd_ipa->resource_loading ?
+			    "load" : "unload");
+
+		/* Wait until completion of the long/unloading */
+		ret = wait_for_completion_timeout(&hdd_ipa->ipa_resource_comp,
+				msecs_to_jiffies(IPA_RESOURCE_COMP_WAIT_TIME));
+		if (!ret) {
+			/*
+			 * If timed out, store the events separately and
+			 * handle them later.
+			 */
 			HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
-				    "IPA resource load inprogress");
+				    "IPA resource %s timed out",
+				    hdd_ipa->resource_loading ?
+				    "load" : "unload");
 
-			qdf_mutex_acquire(&hdd_ipa->ipa_lock);
+			if (hdd_ipa->resource_loading) {
+				qdf_mutex_acquire(&hdd_ipa->ipa_lock);
 
-			pending_event_count = qdf_list_size(&hdd_ipa->pending_event);
-			if (pending_event_count >= HDD_IPA_MAX_PENDING_EVENT_COUNT) {
-				hdd_notice("Reached max pending event count");
-				qdf_list_remove_front(&hdd_ipa->pending_event,
-						(qdf_list_node_t **)&pending_event);
-			} else {
-				pending_event =
-					(struct ipa_uc_pending_event *)qdf_mem_malloc(
-							sizeof(struct ipa_uc_pending_event));
-			}
+				pending_event_count =
+					qdf_list_size(&hdd_ipa->pending_event);
+				if (pending_event_count >=
+				    HDD_IPA_MAX_PENDING_EVENT_COUNT) {
+					hdd_debug(
+					    "Reached max pending event count");
+					qdf_list_remove_front(
+						&hdd_ipa->pending_event,
+						(qdf_list_node_t **)
+						&pending_event);
+				} else {
+					pending_event =
+						(struct ipa_uc_pending_event *)
+						qdf_mem_malloc(sizeof(
+						struct ipa_uc_pending_event));
+				}
 
-			if (!pending_event) {
-				HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
-				    "Pending event memory alloc fail");
+				if (!pending_event) {
+					HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
+					    "Pending event memory alloc fail");
+					qdf_mutex_release(&hdd_ipa->ipa_lock);
+					return -ENOMEM;
+				}
+
+				pending_event->adapter = adapter;
+				pending_event->sta_id = sta_id;
+				pending_event->type = type;
+				qdf_mem_copy(pending_event->mac_addr,
+					     mac_addr, QDF_MAC_ADDR_SIZE);
+				qdf_list_insert_back(&hdd_ipa->pending_event,
+						     &pending_event->node);
+
 				qdf_mutex_release(&hdd_ipa->ipa_lock);
-				return -ENOMEM;
 			}
-
-			pending_event->adapter = adapter;
-			pending_event->sta_id = sta_id;
-			pending_event->type = type;
-			qdf_mem_copy(pending_event->mac_addr,
-					mac_addr,
-					QDF_MAC_ADDR_SIZE);
-			qdf_list_insert_back(&hdd_ipa->pending_event,
-					&pending_event->node);
-
-			qdf_mutex_release(&hdd_ipa->ipa_lock);
 			return 0;
-		} else if (hdd_ipa->resource_unloading) {
-			hdd_err("%s: IPA resource unload inprogress", __func__);
-			return 0;
+		} else {
+			HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
+				    "IPA resource %s completed",
+				    hdd_ipa->resource_loading ?
+				    "load" : "unload");
 		}
 	}
 
@@ -5601,7 +5688,6 @@ static int __hdd_ipa_wlan_evt(hdd_adapter_t *adapter, uint8_t sta_id,
 					msg_ex->name);
 			return 0;
 		}
-
 		qdf_mutex_acquire(&hdd_ipa->event_lock);
 		if (!hdd_ipa_uc_find_add_assoc_sta(hdd_ipa, false, sta_id)) {
 			HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
@@ -5850,6 +5936,8 @@ static QDF_STATUS __hdd_ipa_init(hdd_context_t *hdd_ctx)
 			goto fail_create_sys_pipe;
 	}
 
+	init_completion(&hdd_ipa->ipa_resource_comp);
+
 	EXIT();
 	return QDF_STATUS_SUCCESS;
 
@@ -5940,7 +6028,8 @@ static QDF_STATUS __hdd_ipa_cleanup(hdd_context_t *hdd_ctx)
 		qdf_spin_unlock_bh(&hdd_ipa->pm_lock);
 
 		pm_tx_cb = (struct hdd_ipa_pm_tx_cb *)skb->cb;
-		ipa_free_skb(pm_tx_cb->ipa_tx_desc);
+		if (pm_tx_cb->ipa_tx_desc)
+			ipa_free_skb(pm_tx_cb->ipa_tx_desc);
 
 		qdf_spin_lock_bh(&hdd_ipa->pm_lock);
 	}
@@ -5960,16 +6049,6 @@ static QDF_STATUS __hdd_ipa_cleanup(hdd_context_t *hdd_ctx)
 			HDD_IPA_LOG(QDF_TRACE_LEVEL_ERROR,
 					"UC Ready CB deregister fail");
 		hdd_ipa_uc_rt_debug_deinit(hdd_ctx);
-		if (true == hdd_ipa->uc_loaded) {
-			HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO,
-			    "%s: Disconnect TX PIPE tx_pipe_handle=0x%x",
-			    __func__, hdd_ipa->tx_pipe_handle);
-			ipa_disconnect_wdi_pipe(hdd_ipa->tx_pipe_handle);
-			HDD_IPA_LOG(QDF_TRACE_LEVEL_INFO,
-			    "%s: Disconnect RX PIPE rx_pipe_handle=0x%x",
-			    __func__, hdd_ipa->rx_pipe_handle);
-			ipa_disconnect_wdi_pipe(hdd_ipa->rx_pipe_handle);
-		}
 		qdf_mutex_destroy(&hdd_ipa->event_lock);
 		qdf_mutex_destroy(&hdd_ipa->ipa_lock);
 		hdd_ipa_cleanup_pending_event(hdd_ipa);

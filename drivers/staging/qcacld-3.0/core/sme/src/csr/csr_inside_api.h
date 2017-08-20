@@ -93,17 +93,52 @@
 #define CSR_ROAMING_DFS_CHANNEL_ENABLED_NORMAL     (1)
 #define CSR_ROAMING_DFS_CHANNEL_ENABLED_ACTIVE     (2)
 
-#ifdef QCA_WIFI_3_0_EMU
-#define CSR_ACTIVE_SCAN_LIST_CMD_TIMEOUT (1000*30*20)
-#else
 #define CSR_ACTIVE_SCAN_LIST_CMD_TIMEOUT (1000*30)
-#endif
+
 /* ***************************************************************************
  * The MAX BSSID Count should be lower than the command timeout value and it
  * can be of a fraction of 3/4 of the total command timeout value.
  * ***************************************************************************/
 #define CSR_MAX_BSSID_COUNT     ((SME_ACTIVE_LIST_CMD_TIMEOUT_VALUE/4000) * 3)
 #define CSR_CUSTOM_CONC_GO_BI    100
+
+#define RSSI_THRESHOLD_5GHZ -70
+#define BEST_CANDIDATE_RSSI_WEIGHT 50
+#define MIN_RSSI (-100)
+#define MAX_RSSI 0
+#define BEST_CANDIDATE_AP_COUNT_WEIGHT 50
+#define BEST_CANDIDATE_MAX_COUNT 30
+#define BEST_CANDIDATE_MIN_COUNT 0
+#define ROAM_MAX_CHANNEL_WEIGHT 100
+#define DEFAULT_CHANNEL_UTILIZATION 50
+#define MAX_CHANNEL_UTILIZATION 100
+
+#define RSSI_WEIGHTAGE 25
+#define HT_CAPABILITY_WEIGHTAGE 7
+#define VHT_CAP_WEIGHTAGE 5
+#define BEAMFORMING_CAP_WEIGHTAGE 2
+#define CHAN_WIDTH_WEIGHTAGE 10
+#define CHAN_BAND_WEIGHTAGE 5
+#define WMM_WEIGHTAGE 0
+#define CCA_WEIGHTAGE 8
+#define OTHER_AP_WEIGHT 28
+#define PCL_WEIGHT 10
+
+#define MAX_AP_LOAD 255
+#define BEST_CANDIDATE_EXCELLENT_RSSI -40
+#define BEST_CANDIDATE_GOOD_RSSI -55
+#define BEST_CANDIDATE_POOR_RSSI -65
+#define BAD_RSSI  -80
+#define BEST_CANDIDATE_EXCELLENT_RSSI_WEIGHT 100
+#define BEST_CANDIDATE_GOOD_RSSI_WEIGHT 80
+#define BEST_CANDIDATE_BAD_RSSI_WEIGHT 60
+#define BEST_CANDIDATE_MAX_WEIGHT 100
+#define BEST_CANDIDATE_80MHZ 100
+#define BEST_CANDIDATE_40MHZ 70
+#define BEST_CANDIDATE_20MHZ 30
+#define BEST_CANDIDATE_PENALTY (3/10)
+#define BEST_CANDIDATE_MAX_BSS_SCORE 10000
+
 
 typedef enum {
 	eCsrNextScanNothing,
@@ -152,14 +187,18 @@ typedef struct tagCsrScanResult {
 	int32_t AgingCount;     /* This BSS is removed when it reaches 0 or less */
 	uint32_t preferValue;   /* The bigger the number, the better the BSS. This value override capValue */
 	uint32_t capValue;      /* The biggger the better. This value is in use only if we have equal preferValue */
-	/* This member must be the last in the structure because the end of tSirBssDescription (inside) is an */
-	/*    array with nonknown size at this time */
-
 	eCsrEncryptionType ucEncryptionType;    /* Preferred Encryption type that matched with profile. */
 	eCsrEncryptionType mcEncryptionType;
 	eCsrAuthType authType;  /* Preferred auth type that matched with the profile. */
+	int  bss_score;
 
 	tCsrScanResultInfo Result;
+	/*
+	 * WARNING - Do not add any element here
+	 * This member Result must be the last in the structure because the end
+	 * of tSirBssDescription (inside) is an array with nonknown size at
+	 * this time.
+	 */
 } tCsrScanResult;
 
 typedef struct {
@@ -223,7 +262,7 @@ extern void csr_release_roc_req_cmd(tpAniSirGlobal mac_ctx);
 bool csr_is_duplicate_bss_description(tpAniSirGlobal pMac,
 				      tSirBssDescription *pSirBssDesc1,
 				      tSirBssDescription *pSirBssDesc2,
-				      tDot11fBeaconIEs *pIes2, bool fForced);
+				      tDot11fBeaconIEs *pIes2);
 QDF_STATUS csr_roam_save_connected_bss_desc(tpAniSirGlobal pMac, uint32_t sessionId,
 					    tSirBssDescription *pBssDesc);
 bool csr_is_network_type_equal(tSirBssDescription *pSirBssDesc1,
@@ -262,7 +301,7 @@ tCsrScanResult *csr_scan_append_bss_description(tpAniSirGlobal pMac,
 						tSirBssDescription *
 						pSirBssDescription,
 						tDot11fBeaconIEs *pIes,
-						bool fForced, uint8_t sessionId);
+						uint8_t sessionId);
 void csr_scan_call_callback(tpAniSirGlobal pMac, tSmeCmd *pCommand,
 			    eCsrScanStatus scanStatus);
 QDF_STATUS csr_scan_copy_request(tpAniSirGlobal pMac, tCsrScanRequest *pDstReq,

@@ -633,6 +633,16 @@ QDF_STATUS wmi_unified_get_stats_cmd(void *wmi_hdl,
 		       struct pe_stats_req  *get_stats_param,
 			   uint8_t addr[IEEE80211_ADDR_LEN]);
 
+/**
+ * wmi_unified_congestion_request_cmd() - send request to fw to get CCA
+ * @wmi_hdl: wma handle
+ * @vdev_id: vdev id
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS wmi_unified_congestion_request_cmd(void *wmi_hdl,
+		uint8_t vdev_id);
+
 QDF_STATUS wmi_unified_snr_request_cmd(void *wmi_hdl);
 
 QDF_STATUS wmi_unified_snr_cmd(void *wmi_hdl, uint8_t vdev_id);
@@ -697,7 +707,7 @@ QDF_STATUS wmi_unified_pktlog_wmi_send_cmd(void *wmi_hdl,
 
 QDF_STATUS wmi_unified_add_wow_wakeup_event_cmd(void *wmi_hdl,
 					uint32_t vdev_id,
-					uint32_t bitmap,
+					uint32_t *bitmap,
 					bool enable);
 
 QDF_STATUS wmi_unified_wow_patterns_to_fw_cmd(void *wmi_hdl,
@@ -843,18 +853,20 @@ QDF_STATUS wmi_unified_enable_arp_ns_offload_cmd(void *wmi_hdl,
 			   uint8_t vdev_id);
 
 /**
- * wmi_unified_configure_broadcast_filter_cmd() - Enable/Disable Broadcast
- * filter
- * when target goes to wow suspend/resume mode
+ * wmi_unified_conf_hw_filter_mode_cmd() - Configure hardware filter
  * @wmi_hdl: wmi handle
  * @vdev_id: device identifier
- * @bc_filter: enable/disable Broadcast filter
+ * @config_bitmap: bitmap of packet types to drop
  *
+ * The hardware filter is only effective in DTIM mode. Use this configuration
+ * to blanket drop broadcast/multicast packets at the hardware level, without
+ * waking up the firmware
  *
- * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ * Return: QDF_STATUS
  */
-QDF_STATUS wmi_unified_configure_broadcast_filter_cmd(void *wmi_hdl,
-			   uint8_t vdev_id, bool bc_filter);
+QDF_STATUS wmi_unified_conf_hw_filter_mode_cmd(void *wmi_hdl,
+					       uint8_t vdev_id,
+					       uint8_t config_bitmap);
 
 QDF_STATUS wmi_unified_set_led_flashing_cmd(void *wmi_hdl,
 				struct flashing_req_params *flashing);

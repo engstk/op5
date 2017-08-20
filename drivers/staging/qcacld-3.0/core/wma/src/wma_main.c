@@ -1738,7 +1738,6 @@ static void wma_cleanup_vdev_resp_queue(tp_wma_handle wma)
 {
 	struct wma_target_req *req_msg = NULL;
 	qdf_list_node_t *node1 = NULL;
-	QDF_STATUS status;
 
 	qdf_spin_lock_bh(&wma->vdev_respq_lock);
 	if (!qdf_list_size(&wma->vdev_resp_queue)) {
@@ -1747,21 +1746,46 @@ static void wma_cleanup_vdev_resp_queue(tp_wma_handle wma)
 		return;
 	}
 
-	while (qdf_list_peek_front(&wma->vdev_resp_queue, &node1) !=
+	while (qdf_list_peek_front(&wma->vdev_resp_queue, &node1) ==
 				   QDF_STATUS_SUCCESS) {
 		req_msg = qdf_container_of(node1, struct wma_target_req, node);
-		status = qdf_list_remove_node(&wma->vdev_resp_queue, node1);
 		qdf_spin_unlock_bh(&wma->vdev_respq_lock);
-		if (status != QDF_STATUS_SUCCESS) {
-			WMA_LOGE(FL("Failed to remove req vdev_id %d type %d"),
-				 req_msg->vdev_id, req_msg->type);
-			return;
-		}
-		qdf_mc_timer_destroy(&req_msg->event_timeout);
-		qdf_mem_free(req_msg);
+		qdf_mc_timer_stop(&req_msg->event_timeout);
+		wma_vdev_resp_timer(req_msg);
 		qdf_spin_lock_bh(&wma->vdev_respq_lock);
 	}
 	qdf_spin_unlock_bh(&wma->vdev_respq_lock);
+}
+
+/**
+ * wma_cleanup_hold_req() - cleanup hold request queue
+ * @wma: wma handle
+ *
+ * Return: none
+ */
+static void wma_cleanup_hold_req(tp_wma_handle wma)
+{
+	struct wma_target_req *req_msg = NULL;
+	qdf_list_node_t *node1 = NULL;
+
+	qdf_spin_lock_bh(&wma->wma_hold_req_q_lock);
+	if (!qdf_list_size(&wma->wma_hold_req_queue)) {
+		qdf_spin_unlock_bh(&wma->wma_hold_req_q_lock);
+		WMA_LOGD(FL("request queue is empty"));
+		return;
+	}
+
+	while (QDF_STATUS_SUCCESS ==
+			qdf_list_peek_front(&wma->wma_hold_req_queue, &node1)) {
+		req_msg = qdf_container_of(node1, struct wma_target_req, node);
+		qdf_spin_unlock_bh(&wma->wma_hold_req_q_lock);
+		/* Cleanup timeout handler */
+		qdf_mc_timer_stop(&req_msg->event_timeout);
+		qdf_mc_timer_destroy(&req_msg->event_timeout);
+		wma_hold_req_timer(req_msg);
+		qdf_spin_lock_bh(&wma->wma_hold_req_q_lock);
+	}
+	qdf_spin_unlock_bh(&wma->wma_hold_req_q_lock);
 }
 
 /**
@@ -1782,6 +1806,7 @@ static void wma_shutdown_notifier_cb(void *priv)
 
 	qdf_event_set(&wma_handle->wma_resume_event);
 	wma_cleanup_vdev_resp_queue(wma_handle);
+	wma_cleanup_hold_req(wma_handle);
 }
 
 struct wma_version_info g_wmi_version_info;
@@ -2284,7 +2309,6 @@ QDF_STATUS wma_open(void *cds_context,
 	qdf_spinlock_create(&wma_handle->wma_hold_req_q_lock);
 	qdf_atomic_init(&wma_handle->is_wow_bus_suspended);
 	qdf_atomic_init(&wma_handle->scan_id_counter);
-	qdf_atomic_init(&wma_handle->num_pending_scans);
 
 	/* Register vdev start response event handler */
 	wmi_unified_register_event_handler(wma_handle->wmi_handle,
@@ -2486,6 +2510,18 @@ QDF_STATUS wma_open(void *cds_context,
 				WMI_DEBUG_MESG_FLUSH_COMPLETE_EVENTID,
 				wma_flush_complete_evt_handler,
 				WMA_RX_WORK_CTX);
+
+	wma_handle->ito_repeat_count = cds_cfg->ito_repeat_count;
+
+	wma_handle->auto_power_save_enabled =
+		cds_cfg->auto_power_save_fail_mode;
+	/* Register PWR_SAVE_FAIL event only in case of recovery(1) */
+	if (wma_handle->auto_power_save_enabled) {
+		wmi_unified_register_event_handler(wma_handle->wmi_handle,
+			WMI_PDEV_CHIP_POWER_SAVE_FAILURE_DETECTED_EVENTID,
+			wma_chip_power_save_failure_detected_handler,
+			WMA_RX_SERIALIZER_CTX);
+	}
 
 	wma_ndp_register_all_event_handlers(wma_handle);
 	wma_register_debug_callback();
@@ -3300,41 +3336,6 @@ end:
 }
 
 /**
- * wma_cleanup_hold_req() - cleanup hold request queue
- * @wma: wma handle
- *
- * Return: none
- */
-static void wma_cleanup_hold_req(tp_wma_handle wma)
-{
-	struct wma_target_req *req_msg = NULL;
-	qdf_list_node_t *node1 = NULL;
-	QDF_STATUS status;
-
-	qdf_spin_lock_bh(&wma->wma_hold_req_q_lock);
-	if (!qdf_list_size(&wma->wma_hold_req_queue)) {
-		qdf_spin_unlock_bh(&wma->wma_hold_req_q_lock);
-		WMA_LOGI(FL("request queue is empty"));
-		return;
-	}
-
-	while (QDF_STATUS_SUCCESS !=
-			qdf_list_peek_front(&wma->wma_hold_req_queue, &node1)) {
-		req_msg = qdf_container_of(node1, struct wma_target_req, node);
-		status = qdf_list_remove_node(&wma->wma_hold_req_queue, node1);
-		if (QDF_STATUS_SUCCESS != status) {
-			qdf_spin_unlock_bh(&wma->wma_hold_req_q_lock);
-			WMA_LOGE(FL("Failed to remove request for vdev_id %d type %d"),
-				 req_msg->vdev_id, req_msg->type);
-			return;
-		}
-		qdf_mc_timer_destroy(&req_msg->event_timeout);
-		qdf_mem_free(req_msg);
-	}
-	qdf_spin_unlock_bh(&wma->wma_hold_req_q_lock);
-}
-
-/**
  * wma_wmi_service_close() - close wma wmi service interface.
  * @cds_ctx: cds context
  *
@@ -3399,6 +3400,19 @@ QDF_STATUS wma_wmi_service_close(void *cds_ctx)
 			qdf_mem_free(wma_handle->interfaces[i].stats_rsp);
 			wma_handle->interfaces[i].stats_rsp = NULL;
 		}
+
+		if (wma_handle->interfaces[i].psnr_req) {
+			qdf_mem_free(wma_handle->
+				     interfaces[i].psnr_req);
+			wma_handle->interfaces[i].psnr_req = NULL;
+		}
+
+		if (wma_handle->interfaces[i].rcpi_req) {
+			qdf_mem_free(wma_handle->
+				     interfaces[i].rcpi_req);
+			wma_handle->interfaces[i].rcpi_req = NULL;
+		}
+
 	}
 
 	qdf_mem_free(wma_handle->interfaces);
@@ -4308,6 +4322,7 @@ static void wma_update_hdd_cfg(tp_wma_handle wma_handle)
 			      - WMI_TLV_HEADROOM;
 	wma_setup_egap_support(&tgt_cfg, wma_handle);
 	tgt_cfg.fw_mem_dump_enabled = wma_handle->fw_mem_dump_enabled;
+	tgt_cfg.tx_bfee_8ss_enabled = wma_handle->tx_bfee_8ss_enabled;
 	wma_update_hdd_cfg_ndp(wma_handle, &tgt_cfg);
 	wma_handle->tgt_cfg_update_cb(hdd_ctx, &tgt_cfg);
 }
@@ -4845,6 +4860,12 @@ int wma_rx_service_ready_event(void *handle, uint8_t *cmd_param_info,
 		WMA_LOGA("%s: WMA waiting for WMI_SERVICE_READY_EXT_EVENTID",
 				__func__);
 	}
+
+	if (WMI_SERVICE_IS_ENABLED(wma_handle->wmi_service_bitmap,
+				   WMI_SERVICE_8SS_TX_BFEE))
+		wma_handle->tx_bfee_8ss_enabled = true;
+	else
+		wma_handle->tx_bfee_8ss_enabled = false;
 
 	return 0;
 }
@@ -6299,7 +6320,10 @@ void wma_mc_discard_msg(cds_msg_t *msg)
 	case WMA_PROCESS_FW_EVENT:
 		qdf_nbuf_free(((wma_process_fw_event_params *)msg->bodyptr)->
 			      evt_buf);
-	break;
+		break;
+	case WMA_SET_LINK_STATE:
+		qdf_mem_free(((tpLinkStateParams) msg->bodyptr)->callbackArg);
+		break;
 	}
 
 	if (msg->bodyptr) {
@@ -6800,10 +6824,6 @@ QDF_STATUS wma_mc_process_msg(void *cds_context, cds_msg_t *msg)
 					  (tDisableIntraBssFwd *) msg->bodyptr);
 		qdf_mem_free(msg->bodyptr);
 		break;
-	case WMA_GET_LINK_SPEED:
-		wma_get_link_speed(wma_handle, msg->bodyptr);
-		qdf_mem_free(msg->bodyptr);
-		break;
 	case WMA_MODEM_POWER_STATE_IND:
 		wma_notify_modem_power_state(wma_handle,
 				(tSirModemPowerStateInd *) msg->bodyptr);
@@ -7199,14 +7219,12 @@ QDF_STATUS wma_mc_process_msg(void *cds_context, cds_msg_t *msg)
 				 (struct sme_rcpi_req *)msg->bodyptr);
 		qdf_mem_free(msg->bodyptr);
 		break;
-	case WMA_ENABLE_BCAST_FILTER:
-		wma_configure_non_arp_broadcast_filter(wma_handle,
-			(struct broadcast_filter_request *) msg->bodyptr);
+	case WMA_CONF_HW_FILTER: {
+		struct hw_filter_request *req = msg->bodyptr;
+
+		qdf_status = wma_conf_hw_filter_mode(wma_handle, req);
 		break;
-	case WMA_DISABLE_HW_BCAST_FILTER:
-		wma_configure_non_arp_broadcast_filter(wma_handle,
-			(struct broadcast_filter_request *) msg->bodyptr);
-		break;
+	}
 	case WMA_SET_ARP_STATS_REQ:
 		wma_set_arp_req_stats(wma_handle,
 			(struct set_arp_stats_params *)msg->bodyptr);
@@ -7565,3 +7583,12 @@ int wma_lro_init(struct wma_lro_config_cmd_t *lro_config)
 	return 0;
 }
 #endif
+
+
+void wma_ipa_uc_stat_request(wma_cli_set_cmd_t *privcmd)
+{
+	tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
+
+	if (wma_set_priv_cfg(wma, privcmd))
+		WMA_LOGE("Failed to set wma priv congiuration");
+}

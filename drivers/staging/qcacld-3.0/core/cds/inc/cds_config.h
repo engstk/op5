@@ -116,6 +116,7 @@ enum active_bpf_mode {
  * @force_target_assert_enabled: Indicate whether target assert enabled or not
  * @active_bpf_mode: Setting that determines how BPF is applied in active mode
  * @rps_enabled: RPS enabled in SAP mode
+ * @ito_repeat_count: Indicates ito repeated count
  * Structure for holding cds ini parameters.
  */
 
@@ -174,5 +175,7 @@ struct cds_config_info {
 	bool force_target_assert_enabled;
 	enum active_bpf_mode active_bpf_mode;
 	bool rps_enabled;
+	bool auto_power_save_fail_mode;
+	uint8_t ito_repeat_count;
 };
 #endif /* !defined( __CDS_CONFIG_H ) */
