@@ -462,9 +462,6 @@ QDF_STATUS (*send_get_stats_cmd)(wmi_unified_t wmi_handle,
 		       struct pe_stats_req  *get_stats_param,
 			   uint8_t addr[IEEE80211_ADDR_LEN]);
 
-QDF_STATUS (*send_congestion_cmd)(wmi_unified_t wmi_handle,
-			A_UINT8 vdev_id);
-
 QDF_STATUS (*send_snr_request_cmd)(wmi_unified_t wmi_handle);
 
 QDF_STATUS (*send_snr_cmd)(wmi_unified_t wmi_handle, uint8_t vdev_id);
@@ -538,7 +535,7 @@ QDF_STATUS
 
 QDF_STATUS (*send_add_wow_wakeup_event_cmd)(wmi_unified_t wmi_handle,
 					uint32_t vdev_id,
-					uint32_t *bitmap,
+					uint32_t bitmap,
 					bool enable);
 
 QDF_STATUS (*send_wow_patterns_to_fw_cmd)(wmi_unified_t wmi_handle,

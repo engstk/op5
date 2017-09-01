@@ -175,7 +175,6 @@ struct cds_config_info {
 	bool force_target_assert_enabled;
 	enum active_bpf_mode active_bpf_mode;
 	bool rps_enabled;
-	bool auto_power_save_fail_mode;
 	uint8_t ito_repeat_count;
 };
 #endif /* !defined( __CDS_CONFIG_H ) */

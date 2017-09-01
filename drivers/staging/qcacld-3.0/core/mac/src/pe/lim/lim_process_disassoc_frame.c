@@ -118,14 +118,14 @@ lim_process_disassoc_frame(tpAniSirGlobal pMac, uint8_t *pRxPacketInfo,
 	if (LIM_IS_STA_ROLE(psessionEntry) &&
 		((eLIM_SME_WT_DISASSOC_STATE == psessionEntry->limSmeState) ||
 		(eLIM_SME_WT_DEAUTH_STATE == psessionEntry->limSmeState))) {
-		if (!(psessionEntry->disassocmsgcnt & 0xF)) {
-			pe_info("received Disassoc frame in %s"
+		if (!(pMac->lim.disassocMsgCnt & 0xF)) {
+			pr_info("received Disassoc frame in %s"
 				"(already processing previously received Disassoc frame)"
 				"Dropping this.. Disassoc Failed %d",
-				lim_sme_state_str(psessionEntry->limSmeState),
-					   ++psessionEntry->disassocmsgcnt);
+						lim_sme_state_str(psessionEntry->limSmeState),
+					   ++pMac->lim.disassocMsgCnt);
 		} else {
-			psessionEntry->disassocmsgcnt++;
+			pMac->lim.disassocMsgCnt++;
 		}
 		return;
 	}
@@ -210,8 +210,9 @@ lim_process_disassoc_frame(tpAniSirGlobal pMac, uint8_t *pRxPacketInfo,
 		return;
 	}
 
-	if (psessionEntry->disassocmsgcnt != 0)
-		psessionEntry->disassocmsgcnt = 0;
+	if (pMac->lim.disassocMsgCnt != 0) {
+		pMac->lim.disassocMsgCnt = 0;
+	}
 
 	/** If we are in the Wait for ReAssoc Rsp state */
 	if (lim_is_reassoc_in_progress(pMac, psessionEntry)) {

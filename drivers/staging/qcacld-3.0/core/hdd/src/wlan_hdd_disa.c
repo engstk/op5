@@ -159,16 +159,6 @@ nla_put_failure:
 	return -EINVAL;
 }
 
-static const struct nla_policy
-encrypt_decrypt_policy[QCA_WLAN_VENDOR_ATTR_ENCRYPTION_TEST_MAX + 1] = {
-	[QCA_WLAN_VENDOR_ATTR_ENCRYPTION_TEST_NEEDS_DECRYPTION] = {
-		.type = NLA_FLAG},
-	[QCA_WLAN_VENDOR_ATTR_ENCRYPTION_TEST_KEYID] = {
-		.type = NLA_U8},
-	[QCA_WLAN_VENDOR_ATTR_ENCRYPTION_TEST_CIPHER] = {
-		.type = NLA_U32},
-};
-
 /**
  * hdd_fill_encrypt_decrypt_params () - parses data from user space
  * and fills encrypt/decrypt parameters
@@ -191,7 +181,7 @@ static int hdd_fill_encrypt_decrypt_params(struct encrypt_decrypt_req_params
 	uint8_t fc[2];
 
 	if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_ENCRYPTION_TEST_MAX,
-		      data, data_len, encrypt_decrypt_policy)) {
+		      data, data_len, NULL)) {
 		hdd_err("Invalid ATTR");
 		return -EINVAL;
 	}
@@ -253,8 +243,8 @@ static int hdd_fill_encrypt_decrypt_params(struct encrypt_decrypt_req_params
 		return -EINVAL;
 	}
 	len = nla_len(tb[QCA_WLAN_VENDOR_ATTR_ENCRYPTION_TEST_PN]);
-	if (!len || len > sizeof(encrypt_decrypt_params->pn)) {
-		hdd_err("Invalid PN length %u", len);
+	if (!len) {
+		hdd_err("Invalid PN length");
 		return -EINVAL;
 	}
 
@@ -270,8 +260,8 @@ static int hdd_fill_encrypt_decrypt_params(struct encrypt_decrypt_req_params
 		return -EINVAL;
 	}
 	len = nla_len(tb[QCA_WLAN_VENDOR_ATTR_ENCRYPTION_TEST_DATA]);
-	if (len < MIN_MAC_HEADER_LEN) {
-		hdd_err("Invalid header and payload length %u", len);
+	if (!len) {
+		hdd_err("Invalid header and payload length");
 		return -EINVAL;
 	}
 
@@ -308,10 +298,6 @@ static int hdd_fill_encrypt_decrypt_params(struct encrypt_decrypt_req_params
 
 	hdd_notice("mac_hdr_len %d", mac_hdr_len);
 
-	if (len < mac_hdr_len) {
-		hdd_err("Invalid header and payload length %u", len);
-		return -EINVAL;
-	}
 	qdf_mem_copy(encrypt_decrypt_params->mac_header,
 			tmp, mac_hdr_len);
 

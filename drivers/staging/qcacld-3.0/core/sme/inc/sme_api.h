@@ -722,7 +722,7 @@ QDF_STATUS sme_send_tdls_mgmt_frame(tHalHandle hHal, uint8_t sessionId,
 		const tSirMacAddr peerMac, uint8_t frame_type,
 		uint8_t dialog, uint16_t status,
 		uint32_t peerCapability, uint8_t *buf,
-		uint8_t len, uint8_t responder, enum sir_wifi_traffic_ac ac);
+		uint8_t len, uint8_t responder);
 QDF_STATUS sme_change_tdls_peer_sta(tHalHandle hHal, uint8_t sessionId,
 		const tSirMacAddr peerMac,
 		tCsrStaParams *pstaParams);
@@ -1368,7 +1368,6 @@ QDF_STATUS sme_encrypt_decrypt_msg(tHalHandle hal,
 QDF_STATUS sme_set_cts2self_for_p2p_go(tHalHandle hal);
 void sme_set_prefer_80MHz_over_160MHz(tHalHandle hal,
 		bool sta_prefer_80MHz_over_160MHz);
-void sme_set_allow_adj_ch_bcn(tHalHandle hal, bool allow_adj_ch_bcn);
 QDF_STATUS sme_update_tx_fail_cnt_threshold(tHalHandle hal_handle,
 		uint8_t session_id, uint32_t tx_fail_count);
 QDF_STATUS sme_update_short_retry_limit_threshold(tHalHandle hal_handle,
@@ -1518,65 +1517,6 @@ QDF_STATUS sme_rso_cmd_status_cb(tHalHandle hal,
 void sme_set_5g_band_pref(tHalHandle hal_handle,
 			  struct sme_5g_band_pref_params *pref_params);
 
-/**
- * sme_congestion_register_callback(): registers congestion callback
- * @hal: handler for HAL
- * @congestion_cb: congestion callback
- *
- * Return: QDF_STATUS
- */
-QDF_STATUS sme_congestion_register_callback(tHalHandle hal,
-	void (*congestion_cb)(void *, uint32_t congestion, uint32_t vdev_id));
-
 QDF_STATUS sme_delete_all_tdls_peers(tHalHandle hal, uint8_t session_id);
-
-/**
- * sme_set_chip_pwr_save_fail_cb() - set chip power save failure callback
- * @hal: global hal handle
- * @cb: callback function pointer
- *
- * This function stores the chip power save failure callback function.
- *
- * Return: QDF_STATUS enumeration.
- */
-QDF_STATUS sme_set_chip_pwr_save_fail_cb(tHalHandle hal, void (*cb)(void *,
-				 struct chip_pwr_save_fail_detected_params *));
-/**
- * sme_process_msg_callback() - process callback message from LIM
- * @hal: global hal handle
- * @msg: cds message
- *
- * This function process the callback messages from LIM.
- *
- * Return: QDF_STATUS enumeration.
- */
-QDF_STATUS sme_process_msg_callback(tHalHandle hal, cds_msg_t *msg);
-
-/**
- * sme_ipa_uc_stat_request() - set ipa config parameters
- * @vdev_id: virtual device for the command
- * @param_id: parameter id
- * @param_val: parameter value
- * @req_cat: parameter category
- *
- * Return: QDF_STATUS_SUCCESS or non-zero on failure
- */
-QDF_STATUS sme_ipa_uc_stat_request(tHalHandle hal,
-			uint32_t vdev_id, uint32_t param_id,
-			uint32_t param_val, uint32_t req_cat);
-
-/**
- * sme_cli_set_command() - SME wrapper API over WMA "set" command
- * processor cmd
- * @vdev_id: virtual device for the command
- * @param_id: parameter id
- * @sval: parameter value
- * @vpdev: parameter category
- *
- * Command handler for set operations
- *
- * Return: 0 on success, errno on failure
- */
-int sme_cli_set_command(int vdev_id, int param_id, int sval, int vpdev);
 
 #endif /* #if !defined( __SME_API_H ) */

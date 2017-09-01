@@ -1291,7 +1291,7 @@ static void hdd_send_association_event(struct net_device *dev,
 			&pAdapter->prev_fwd_tx_packets,
 			&pAdapter->prev_fwd_rx_packets);
 		spin_unlock_bh(&pHddCtx->bus_bw_lock);
-		hdd_bus_bw_compute_timer_start(pHddCtx);
+		hdd_start_bus_bw_compute_timer(pAdapter);
 #endif
 #endif
 	} else if (eConnectionState_IbssConnected ==    /* IBss Associated */
@@ -1335,7 +1335,7 @@ static void hdd_send_association_event(struct net_device *dev,
 		pAdapter->prev_fwd_tx_packets = 0;
 		pAdapter->prev_fwd_rx_packets = 0;
 		spin_unlock_bh(&pHddCtx->bus_bw_lock);
-		hdd_bus_bw_compute_timer_try_stop(pHddCtx);
+		hdd_stop_bus_bw_compute_timer(pAdapter);
 #endif
 	}
 	cds_dump_concurrency_info();
@@ -1497,9 +1497,8 @@ static QDF_STATUS hdd_dis_connect_handler(hdd_adapter_t *pAdapter,
 	}
 	/* notify apps that we can't pass traffic anymore */
 	hdd_notice("Disabling queues");
-	wlan_hdd_netif_queue_control(pAdapter,
-				     WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER,
-				     WLAN_CONTROL_PATH);
+	wlan_hdd_netif_queue_control(pAdapter, WLAN_NETIF_TX_DISABLE_N_CARRIER,
+				   WLAN_CONTROL_PATH);
 
 	if (hdd_ipa_is_enabled(pHddCtx))
 		hdd_ipa_wlan_evt(pAdapter, pHddStaCtx->conn_info.staId[0],
@@ -1899,6 +1898,11 @@ static void hdd_send_re_assoc_event(struct net_device *dev,
 	tHalHandle hal_handle = WLAN_HDD_GET_HAL_CTX(pAdapter);
 
 	qdf_mem_zero(&roam_profile, sizeof(roam_profile));
+
+	if (pAdapter->defer_disconnect) {
+		hdd_debug("Do not send roam event as discon will be processed");
+		goto done;
+	}
 
 	if (!rspRsnIe) {
 		hdd_err("Unable to allocate RSN IE");
@@ -2538,30 +2542,32 @@ static QDF_STATUS hdd_association_completion_handler(hdd_adapter_t *pAdapter,
 							QDF_TRACE_LEVEL_DEBUG,
 							pFTAssocReq,
 							assocReqlen);
-						roam_bss =
-							hdd_cfg80211_get_bss(
-								pAdapter->wdev.wiphy,
-								chan,
+						if (!pAdapter->defer_disconnect) {
+							roam_bss =
+								hdd_cfg80211_get_bss(
+									pAdapter->wdev.wiphy,
+									chan,
+									pRoamInfo->bssid.bytes,
+									pRoamInfo->u.
+									pConnectedProfile->SSID.ssId,
+									pRoamInfo->u.
+									pConnectedProfile->SSID.length);
+							cfg80211_roamed_bss(dev,
+								roam_bss,
+								pFTAssocReq,
+								assocReqlen,
+								pFTAssocRsp,
+								assocRsplen,
+								GFP_KERNEL);
+							wlan_hdd_send_roam_auth_event(
+								pAdapter,
 								pRoamInfo->bssid.bytes,
-								pRoamInfo->u.
-								pConnectedProfile->SSID.ssId,
-								pRoamInfo->u.
-								pConnectedProfile->SSID.length);
-						cfg80211_roamed_bss(dev,
-							roam_bss,
-							pFTAssocReq,
-							assocReqlen,
-							pFTAssocRsp,
-							assocRsplen,
-							GFP_KERNEL);
-						wlan_hdd_send_roam_auth_event(
-							pAdapter,
-							pRoamInfo->bssid.bytes,
-							pFTAssocReq,
-							assocReqlen,
-							pFTAssocRsp,
-							assocRsplen,
-							pRoamInfo);
+								pFTAssocReq,
+								assocReqlen,
+								pFTAssocRsp,
+								assocRsplen,
+								pRoamInfo);
+						}
 					}
 					if (sme_get_ftptk_state
 						    (WLAN_HDD_GET_HAL_CTX(pAdapter),
@@ -2888,7 +2894,7 @@ static QDF_STATUS hdd_association_completion_handler(hdd_adapter_t *pAdapter,
 
 		hdd_info("Disabling queues");
 		wlan_hdd_netif_queue_control(pAdapter,
-					   WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER,
+					   WLAN_NETIF_TX_DISABLE_N_CARRIER,
 					   WLAN_CONTROL_PATH);
 	}
 
@@ -3410,7 +3416,7 @@ roam_roam_connect_status_update_handler(hdd_adapter_t *pAdapter,
 		/* Stop only when we are inactive */
 		hdd_info("Disabling queues");
 		wlan_hdd_netif_queue_control(pAdapter,
-					   WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER,
+					   WLAN_NETIF_TX_DISABLE_N_CARRIER,
 					   WLAN_CONTROL_PATH);
 		hdd_conn_set_connection_state(pAdapter,
 					      eConnectionState_NotConnected);
@@ -3772,14 +3778,6 @@ hdd_roam_tdls_status_update_handler(hdd_adapter_t *pAdapter,
 		curr_peer =
 			wlan_hdd_tdls_find_peer(pAdapter,
 						pRoamInfo->peerMac.bytes);
-
-		if (!curr_peer) {
-			mutex_unlock(&pHddCtx->tdls_lock);
-			hdd_debug("peer doesn't exists");
-			status = QDF_STATUS_SUCCESS;
-			break;
-		}
-
 		wlan_hdd_tdls_indicate_teardown(pAdapter, curr_peer,
 						pRoamInfo->reasonCode);
 		hdd_send_wlan_tdls_teardown_event(eTDLS_TEARDOWN_BSS_DISCONNECT,
@@ -4697,7 +4695,7 @@ hdd_sme_roam_callback(void *pContext, tCsrRoamInfo *pRoamInfo, uint32_t roamId,
 		hdd_info("Roam Synch Ind: NAPI Serialize ON");
 		hdd_napi_serialize(1);
 		wlan_hdd_netif_queue_control(pAdapter,
-				WLAN_STOP_ALL_NETIF_QUEUE,
+				WLAN_NETIF_TX_DISABLE,
 				WLAN_CONTROL_PATH);
 		status = hdd_roam_deregister_sta(pAdapter,
 					pHddStaCtx->conn_info.staId[0]);
@@ -4712,17 +4710,14 @@ hdd_sme_roam_callback(void *pContext, tCsrRoamInfo *pRoamInfo, uint32_t roamId,
 		hdd_info("After Roam Synch Comp: NAPI Serialize OFF");
 		hdd_napi_serialize(0);
 		hdd_set_roaming_in_progress(false);
-		if (roamResult == eCSR_ROAM_RESULT_FAILURE)
-			pAdapter->roam_ho_fail = true;
-		else
-			pAdapter->roam_ho_fail = false;
-		complete(&pAdapter->roaming_comp_var);
+		if (pAdapter->defer_disconnect)
+			hdd_process_defer_disconnect(pAdapter);
 		break;
 	case eCSR_ROAM_SHOULD_ROAM:
 		/* notify apps that we can't pass traffic anymore */
 		hdd_info("Disabling queues");
 		wlan_hdd_netif_queue_control(pAdapter,
-					   WLAN_STOP_ALL_NETIF_QUEUE,
+					   WLAN_NETIF_TX_DISABLE,
 					   WLAN_CONTROL_PATH);
 		if (pHddStaCtx->ft_carrier_on == false) {
 			wlan_hdd_netif_queue_control(pAdapter,
@@ -4735,7 +4730,7 @@ hdd_sme_roam_callback(void *pContext, tCsrRoamInfo *pRoamInfo, uint32_t roamId,
 			hdd_info("Roaming started due to connection lost");
 			hdd_info("Disabling queues");
 			wlan_hdd_netif_queue_control(pAdapter,
-					WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER,
+					WLAN_NETIF_TX_DISABLE_N_CARRIER,
 					WLAN_CONTROL_PATH);
 			break;
 		}
@@ -4745,8 +4740,7 @@ hdd_sme_roam_callback(void *pContext, tCsrRoamInfo *pRoamInfo, uint32_t roamId,
 		hdd_napi_serialize(0);
 		cds_set_connection_in_progress(false);
 		hdd_set_roaming_in_progress(false);
-		pAdapter->roam_ho_fail = false;
-		complete(&pAdapter->roaming_comp_var);
+		pAdapter->defer_disconnect = 0;
 
 		qdf_ret_status =
 			hdd_dis_connect_handler(pAdapter, pRoamInfo, roamId,
@@ -4967,7 +4961,7 @@ hdd_sme_roam_callback(void *pContext, tCsrRoamInfo *pRoamInfo, uint32_t roamId,
 	case eCSR_ROAM_START:
 		hdd_info("Process ROAM_START from firmware");
 		wlan_hdd_netif_queue_control(pAdapter,
-				WLAN_STOP_ALL_NETIF_QUEUE,
+				WLAN_NETIF_TX_DISABLE,
 				WLAN_CONTROL_PATH);
 		hdd_napi_serialize(1);
 		cds_set_connection_in_progress(true);
@@ -4982,8 +4976,11 @@ hdd_sme_roam_callback(void *pContext, tCsrRoamInfo *pRoamInfo, uint32_t roamId,
 				WLAN_CONTROL_PATH);
 		cds_set_connection_in_progress(false);
 		hdd_set_roaming_in_progress(false);
-		pAdapter->roam_ho_fail = false;
-		complete(&pAdapter->roaming_comp_var);
+		/*
+		 * If disconnect operation is in deferred state, do it now.
+		 */
+		if (pAdapter->defer_disconnect)
+			hdd_process_defer_disconnect(pAdapter);
 		break;
 
 	default:

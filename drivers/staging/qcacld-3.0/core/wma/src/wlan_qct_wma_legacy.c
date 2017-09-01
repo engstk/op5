@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -108,28 +108,37 @@ static tSirRetStatus wma_post_cfg_msg(tpAniSirGlobal pMac, tSirMsgQ *pMsg)
 tSirRetStatus u_mac_post_ctrl_msg(void *pSirGlobal, tSirMbMsg *pMb)
 {
 	tSirMsgQ msg;
-	tSirRetStatus status = eSIR_SUCCESS;
 	tpAniSirGlobal pMac = (tpAniSirGlobal) pSirGlobal;
 
+	tSirMbMsg *pMbLocal;
 	msg.type = pMb->type;
 	msg.bodyval = 0;
-	msg.bodyptr = pMb;
+
+	pMbLocal = qdf_mem_malloc(pMb->msgLen);
+	if (!pMbLocal) {
+		WMA_LOGE("Memory allocation failed! Can't send 0x%x\n",
+			 msg.type);
+		return eSIR_MEM_ALLOC_FAILED;
+	}
+
+	qdf_mem_copy((void *)pMbLocal, (void *)pMb, pMb->msgLen);
+	msg.bodyptr = pMbLocal;
 
 	switch (msg.type & HAL_MMH_MB_MSG_TYPE_MASK) {
 	case WMA_MSG_TYPES_BEGIN:       /* Posts a message to the HAL MsgQ */
-		status = wma_post_ctrl_msg(pMac, &msg);
+		wma_post_ctrl_msg(pMac, &msg);
 		break;
 
 	case SIR_LIM_MSG_TYPES_BEGIN:   /* Posts a message to the LIM MsgQ */
-		status = lim_post_msg_api(pMac, &msg);
+		lim_post_msg_api(pMac, &msg);
 		break;
 
 	case SIR_CFG_MSG_TYPES_BEGIN:   /* Posts a message to the CFG MsgQ */
-		status = wma_post_cfg_msg(pMac, &msg);
+		wma_post_cfg_msg(pMac, &msg);
 		break;
 
 	case SIR_PMM_MSG_TYPES_BEGIN:   /* Posts a message to the LIM MsgQ */
-		status = sme_post_pe_message(pMac, &msg);
+		sme_post_pe_message(pMac, &msg);
 		break;
 
 	case SIR_PTT_MSG_TYPES_BEGIN:
@@ -142,10 +151,7 @@ tSirRetStatus u_mac_post_ctrl_msg(void *pSirGlobal, tSirMbMsg *pMb)
 		return eSIR_FAILURE;
 	}
 
-	if (status != eSIR_SUCCESS)
-		qdf_mem_free(msg.bodyptr);
-
-	return status;
+	return eSIR_SUCCESS;
 
 } /* u_mac_post_ctrl_msg() */
 

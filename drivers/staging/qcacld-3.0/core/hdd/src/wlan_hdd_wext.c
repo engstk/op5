@@ -3778,17 +3778,16 @@ int wlan_hdd_get_linkspeed_for_peermac(hdd_adapter_t *pAdapter,
 	status = sme_get_link_speed(WLAN_HDD_GET_HAL_CTX(pAdapter),
 				    linkspeed_req,
 				    &context, hdd_get_link_speed_cb);
-	qdf_mem_free(linkspeed_req);
 	errno = qdf_status_to_os_return(status);
 	if (errno) {
 		hdd_err("Unable to retrieve statistics for link speed");
+		qdf_mem_free(linkspeed_req);
 	} else {
 		rc = wait_for_completion_timeout
 			(&context.completion,
 			 msecs_to_jiffies(WLAN_WAIT_TIME_STATS));
 		if (!rc) {
-			hdd_err("SME timed out while retrieving link speed: %d",
-				errno);
+			hdd_err("SME timed out while retrieving link speed");
 			errno = -ETIMEDOUT;
 		}
 	}
@@ -4020,7 +4019,7 @@ uint8_t *wlan_hdd_get_vendor_oui_ie_ptr(uint8_t *oui, uint8_t oui_size,
 			       eid, elem_len, left);
 			return NULL;
 		}
-		if ((elem_id == eid) && (elem_len >= oui_size)) {
+		if (elem_id == eid) {
 			if (memcmp(&ptr[2], oui, oui_size) == 0)
 				return ptr;
 		}
@@ -7080,7 +7079,7 @@ static int __iw_set_mlme(struct net_device *dev,
 
 			hdd_notice("Disabling queues");
 			wlan_hdd_netif_queue_control(pAdapter,
-					WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER,
+					WLAN_NETIF_TX_DISABLE_N_CARRIER,
 					WLAN_CONTROL_PATH);
 
 		} else {
@@ -11518,17 +11517,6 @@ static int __iw_set_packet_filter_params(struct net_device *dev,
 		return -EINVAL;
 	}
 
-	if (adapter->device_mode != QDF_STA_MODE) {
-		hdd_err("Packet filter not supported for this mode :%d",
-			adapter->device_mode);
-		return -ENOTSUPP;
-	}
-
-	if (!hdd_conn_is_connected(WLAN_HDD_GET_STATION_CTX_PTR(adapter))) {
-		hdd_err("Packet filter not supported in disconnected state");
-		return -ENOTSUPP;
-	}
-
 	/* copy data using copy_from_user */
 	request = mem_alloc_copy_from_user_helper(priv_data.pointer,
 						   priv_data.length);
@@ -13631,11 +13619,6 @@ static const struct iw_priv_args we_private_args[] = {
 	 IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
 	 "hostroamdelay"}
 	,
-
-	{WLAN_PRIV_SET_FTIES,
-	 IW_PRIV_TYPE_CHAR | MAX_FTIE_SIZE,
-	 0,
-	 "set_ft_ies"},
 };
 
 const struct iw_handler_def we_handler_def = {

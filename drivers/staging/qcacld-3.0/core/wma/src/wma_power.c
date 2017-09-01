@@ -829,7 +829,7 @@ void wma_enable_sta_ps_mode(tp_wma_handle wma, tpEnablePsParams ps_req)
 
 	if (wma->ito_repeat_count) {
 		WMA_LOGI("Set ITO count to %d for vdevId %d",
-					wma->ito_repeat_count, vdev_id);
+				wma->ito_repeat_count, vdev_id);
 
 		ret = wma_unified_set_sta_ps_param(wma->wmi_handle,
 			vdev_id,
@@ -837,13 +837,10 @@ void wma_enable_sta_ps_mode(tp_wma_handle wma, tpEnablePsParams ps_req)
 			wma->ito_repeat_count);
 		if (QDF_IS_STATUS_ERROR(ret)) {
 			WMA_LOGE("Set ITO count failed vdevId %d Error %d",
-								vdev_id, ret);
+			vdev_id, ret);
 			return;
 		}
 	}
-
-	/* power save request succeeded */
-	iface->in_bmps = true;
 }
 
 /**
@@ -857,7 +854,6 @@ void wma_disable_sta_ps_mode(tp_wma_handle wma, tpDisablePsParams ps_req)
 {
 	QDF_STATUS ret;
 	uint32_t vdev_id = ps_req->sessionid;
-	struct wma_txrx_node *iface = &wma->interfaces[vdev_id];
 
 	WMA_LOGD("Disable Sta Mode Ps vdevId %d", vdev_id);
 
@@ -867,7 +863,7 @@ void wma_disable_sta_ps_mode(tp_wma_handle wma, tpDisablePsParams ps_req)
 		WMA_LOGE("Disable Sta Mode Ps Failed vdevId %d", vdev_id);
 		return;
 	}
-	iface->in_bmps = false;
+
 	/* Disable UAPSD incase if additional Req came */
 	if (eSIR_ADDON_DISABLE_UAPSD == ps_req->psSetting) {
 		WMA_LOGD("Disable Uapsd vdevId %d", vdev_id);
@@ -1743,7 +1739,6 @@ QDF_STATUS wma_set_idle_ps_config(void *wma_ptr, uint32_t idle_ps)
 		WMA_LOGE("Fail to Set Idle Ps Config %d", idle_ps);
 		return QDF_STATUS_E_FAILURE;
 	}
-	 wma->in_imps = idle_ps;
 
 	WMA_LOGD("Successfully Set Idle Ps Config %d", idle_ps);
 	return QDF_STATUS_SUCCESS;
@@ -1967,7 +1962,7 @@ static void wma_set_vdev_resume_dtim(tp_wma_handle wma, uint8_t vdev_id)
 				__func__);
 
 		if (wlan_cfg_get_int(mac,
-					WNI_CFG_PS_WOW_DATA_INACTIVITY_TIMEOUT,
+			WNI_CFG_PS_WOW_DATA_INACTIVITY_TIMEOUT,
 					&cfg_data_val) != eSIR_SUCCESS) {
 			QDF_TRACE(QDF_MODULE_ID_WMA, QDF_TRACE_LEVEL_ERROR,
 			"Failed to get WOW_DATA_INACTIVITY_TIMEOUT");
@@ -1983,11 +1978,11 @@ static void wma_set_vdev_resume_dtim(tp_wma_handle wma, uint8_t vdev_id)
 					vdev_id,
 			WMI_STA_PS_PARAM_MAX_RESET_ITO_COUNT_ON_TIM_NO_TXRX,
 					ito_repeat_count_value);
-		WMA_LOGD("%s: Setting ito_repeat_count_value %d.", __func__,
+			WMA_LOGD("%s: Setting ito_repeat_count_value %d.", __func__,
 					ito_repeat_count_value);
 
-		if (ret)
-			WMA_LOGE("%s: Setting ITO count failed.", __func__);
+			if (ret)
+				WMA_LOGE("%s: Setting ITO count failed.", __func__);
 		}
 
 		if (wlan_cfg_get_int(mac, WNI_CFG_MAX_PS_POLL,

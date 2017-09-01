@@ -996,8 +996,7 @@ QDF_STATUS sme_ps_enable_auto_ps_timer(tHalHandle hal_ctx,
 	QDF_STATUS qdf_status;
 
 	if (!ps_global_info->auto_bmps_timer_val && !force_trigger) {
-		sms_log(mac_ctx, LOGE,
-			FL("auto_ps_timer disabled in INI, force_trigger %d"),
+		sms_log(mac_ctx, LOGW, FL("auto_ps_timer is disabled in INI, force_trigger-%d"),
 			force_trigger);
 		return QDF_STATUS_SUCCESS;
 	}

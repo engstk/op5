@@ -222,15 +222,6 @@ static inline uint8_t *pld_pcie_get_wlan_mac_address(struct device *dev,
 	*num = 0;
 	return NULL;
 }
-
-static inline void pld_pcie_increment_driver_load_cnt(void)
-{
-}
-
-static inline int pld_pcie_get_driver_load_cnt(void)
-{
-	return 0;
-}
 #else
 int pld_pcie_get_fw_files_for_target(struct pld_fw_files *pfw_files,
 				     u32 target_type, u32 target_version);
@@ -321,15 +312,5 @@ static inline uint8_t *pld_pcie_get_wlan_mac_address(struct device *dev,
 {
 	return cnss_common_get_wlan_mac_address(dev, num);
 }
-
-static inline void pld_pcie_increment_driver_load_cnt(void)
-{
-}
-
-static inline int pld_pcie_get_driver_load_cnt(void)
-{
-	return 0;
-}
-
 #endif
 #endif

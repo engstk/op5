@@ -466,7 +466,7 @@ static uint16_t __lim_get_sme_join_req_size_for_alloc(uint8_t *pBuf)
 
 	pBuf += sizeof(uint16_t);
 	len = lim_get_u16(pBuf);
-	return len;
+	return len + sizeof(uint16_t);
 }
 
 /**
@@ -558,7 +558,6 @@ static bool __lim_process_sme_sys_ready_ind(tpAniSirGlobal pMac, uint32_t *pMsgB
 		ready_req->pe_roam_synch_cb = pe_roam_synch_callback;
 		pe_register_callbacks_with_wma(pMac, ready_req);
 		pMac->lim.add_bssdescr_callback = ready_req->add_bssdescr_cb;
-		pMac->lim.sme_msg_callback = ready_req->sme_msg_cb;
 	}
 	PELOGW(lim_log(pMac, LOGW, FL("sending WMA_SYS_READY_IND msg to HAL"));)
 	MTRACE(mac_trace_msg_tx(pMac, NO_SESSION, msg.type));
@@ -1294,9 +1293,6 @@ static QDF_STATUS lim_send_hal_start_scan_offload_req(tpAniSirGlobal pMac,
 	pScanOffloadReq->scanType = pScanReq->scanType;
 	pScanOffloadReq->minChannelTime = pScanReq->minChannelTime;
 	pScanOffloadReq->maxChannelTime = pScanReq->maxChannelTime;
-	pScanOffloadReq->scan_num_probes = pScanReq->scan_num_probes;
-	pScanOffloadReq->scan_probe_repeat_time =
-		pScanReq->scan_probe_repeat_time;
 	pScanOffloadReq->restTime = pScanReq->restTime;
 	pScanOffloadReq->min_rest_time = pScanReq->min_rest_time;
 	pScanOffloadReq->idle_time = pScanReq->idle_time;
@@ -1673,13 +1669,8 @@ __lim_process_sme_join_req(tpAniSirGlobal mac_ctx, uint32_t *msg_buf)
 		session->limWmeEnabled = sme_join_req->isWMEenabled;
 		session->limQosEnabled = sme_join_req->isQosEnabled;
 		session->wps_registration = sme_join_req->wps_registration;
-
 		session->enable_bcast_probe_rsp =
 				sme_join_req->enable_bcast_probe_rsp;
-
-		/* Update supplicant configured ignore assoc disallowed */
-		session->ignore_assoc_disallowed =
-				sme_join_req->ignore_assoc_disallowed;
 		/* Store vendor specfic IE for CISCO AP */
 		ie_len = (bss_desc->length + sizeof(bss_desc->length) -
 			 GET_FIELD_OFFSET(tSirBssDescription, ieFields));
@@ -4104,16 +4095,16 @@ static void lim_process_sme_update_config(tpAniSirGlobal mac_ctx,
 {
 	tpPESession pe_session;
 
-	pe_debug("received eWNI_SME_UPDATE_HT_CONFIG message");
+	pr_debug("received eWNI_SME_UPDATE_HT_CONFIG message");
 	if (msg == NULL) {
-		pe_err("Buffer is Pointing to NULL");
+		pr_err("Buffer is Pointing to NULL");
 		return;
 	}
 
 	pe_session = pe_find_session_by_sme_session_id(mac_ctx,
 						       msg->sme_session_id);
 	if (pe_session == NULL) {
-		pe_warn("Session does not exist for given BSSID");
+		pr_warn("Session does not exist for given BSSID");
 		return;
 	}
 
@@ -6297,14 +6288,6 @@ static void lim_process_nss_update_request(tpAniSirGlobal mac_ctx,
 	/* populate nss field in the beacon */
 	session_entry->gLimOperatingMode.present = 1;
 	session_entry->gLimOperatingMode.rxNSS = nss_update_req_ptr->new_nss;
-	session_entry->gLimOperatingMode.chanWidth = session_entry->ch_width;
-
-	if ((nss_update_req_ptr->new_nss == NSS_1x1_MODE) &&
-			(session_entry->ch_width > CH_WIDTH_80MHZ))
-		session_entry->gLimOperatingMode.chanWidth = CH_WIDTH_80MHZ;
-
-	pe_debug("ch width %hu", session_entry->gLimOperatingMode.chanWidth);
-
 	/* Send nss update request from here */
 	if (sch_set_fixed_beacon_fields(mac_ctx, session_entry) !=
 			eSIR_SUCCESS) {

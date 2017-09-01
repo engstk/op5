@@ -674,25 +674,23 @@ rrm_process_beacon_report_req(tpAniSirGlobal pMac,
 
 	pSmeBcnReportReq->channelList.numChannels = num_channels;
 	if (pBeaconReq->measurement_request.Beacon.num_APChannelReport) {
-		uint8_t *ch_lst = pSmeBcnReportReq->channelList.channelNumber;
-		uint8_t len;
-		uint16_t ch_ctr = 0;
+		uint8_t *pChanList =
+			pSmeBcnReportReq->channelList.channelNumber;
 		for (num_APChanReport = 0;
 		     num_APChanReport <
 		     pBeaconReq->measurement_request.Beacon.num_APChannelReport;
 		     num_APChanReport++) {
-			len = pBeaconReq->measurement_request.Beacon.
-			    APChannelReport[num_APChanReport].num_channelList;
-			if (ch_ctr + len >
-			   sizeof(pSmeBcnReportReq->channelList.channelNumber))
-				break;
-
-			qdf_mem_copy(&ch_lst[ch_ctr],
+			qdf_mem_copy(pChanList,
 				     pBeaconReq->measurement_request.Beacon.
 				     APChannelReport[num_APChanReport].
-				     channelList, len);
+				     channelList,
+				     pBeaconReq->measurement_request.Beacon.
+				     APChannelReport[num_APChanReport].
+				     num_channelList);
 
-			ch_ctr += len;
+			pChanList +=
+				pBeaconReq->measurement_request.Beacon.
+				APChannelReport[num_APChanReport].num_channelList;
 		}
 	}
 	/* Send request to SME. */
