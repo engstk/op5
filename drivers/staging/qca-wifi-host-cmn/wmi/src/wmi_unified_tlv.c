@@ -4893,18 +4893,8 @@ QDF_STATUS send_roam_scan_filter_cmd_tlv(wmi_unified_t wmi_handle,
 	uint32_t *bssid_preferred_factor_ptr = NULL;
 
 	len = sizeof(wmi_roam_filter_fixed_param);
-
 	len += WMI_TLV_HDR_SIZE;
-	if (roam_req->num_bssid_black_list)
-		len += roam_req->num_bssid_black_list * sizeof(wmi_mac_addr);
-	len += WMI_TLV_HDR_SIZE;
-	if (roam_req->num_ssid_white_list)
-		len += roam_req->num_ssid_white_list * sizeof(wmi_ssid);
-	len += 2 * WMI_TLV_HDR_SIZE;
-	if (roam_req->num_bssid_preferred_list) {
-		len += roam_req->num_bssid_preferred_list * sizeof(wmi_mac_addr);
-		len += roam_req->num_bssid_preferred_list * sizeof(A_UINT32);
-	}
+	len += roam_req->len;
 
 	buf = wmi_buf_alloc(wmi_handle, len);
 	if (!buf) {
@@ -6565,51 +6555,6 @@ QDF_STATUS send_get_stats_cmd_tlv(wmi_unified_t wmi_handle,
 }
 
 /**
- * send_congestion_cmd_tlv() - send request to fw to get CCA
- * @wmi_handle: wmi handle
- * @vdev_id: vdev id
- *
- * Return: CDF status
- */
-QDF_STATUS send_congestion_cmd_tlv(wmi_unified_t wmi_handle,
-			A_UINT8 vdev_id)
-{
-	wmi_buf_t buf;
-	wmi_request_stats_cmd_fixed_param *cmd;
-	uint8_t len;
-	uint8_t *buf_ptr;
-
-	len = sizeof(*cmd);
-	buf = wmi_buf_alloc(wmi_handle, len);
-	if (!buf) {
-		WMI_LOGE("%s: Failed to allocate wmi buffer", __func__);
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	buf_ptr = wmi_buf_data(buf);
-	cmd = (wmi_request_stats_cmd_fixed_param *)buf_ptr;
-	WMITLV_SET_HDR(&cmd->tlv_header,
-		       WMITLV_TAG_STRUC_wmi_request_stats_cmd_fixed_param,
-		       WMITLV_GET_STRUCT_TLVLEN
-			       (wmi_request_stats_cmd_fixed_param));
-
-	cmd->stats_id = WMI_REQUEST_CONGESTION_STAT;
-	cmd->vdev_id = vdev_id;
-	WMI_LOGD("STATS REQ VDEV_ID:%d stats_id %d -->",
-			cmd->vdev_id, cmd->stats_id);
-
-	if (wmi_unified_cmd_send(wmi_handle, buf, len,
-				 WMI_REQUEST_STATS_CMDID)) {
-		WMI_LOGE("%s: Failed to send WMI_REQUEST_STATS_CMDID",
-			 __func__);
-		wmi_buf_free(buf);
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	return QDF_STATUS_SUCCESS;
-}
-
-/**
  * send_snr_request_cmd_tlv() - send request to fw to get RSSI stats
  * @wmi_handle: wmi handle
  * @rssi_req: get RSSI request
@@ -7682,7 +7627,7 @@ wmi_send_failed:
  */
 QDF_STATUS send_add_wow_wakeup_event_cmd_tlv(wmi_unified_t wmi_handle,
 					uint32_t vdev_id,
-					uint32_t *bitmap,
+					uint32_t bitmap,
 					bool enable)
 {
 	WMI_WOW_ADD_DEL_EVT_CMD_fixed_param *cmd;
@@ -7703,12 +7648,7 @@ QDF_STATUS send_add_wow_wakeup_event_cmd_tlv(wmi_unified_t wmi_handle,
 			       (WMI_WOW_ADD_DEL_EVT_CMD_fixed_param));
 	cmd->vdev_id = vdev_id;
 	cmd->is_add = enable;
-	qdf_mem_copy(&(cmd->event_bitmaps[0]), bitmap, sizeof(uint32_t) *
-		     WMI_WOW_MAX_EVENT_BM_LEN);
-
-	WMI_LOGD("Wakeup pattern 0x%x%x%x%x %s in fw", cmd->event_bitmaps[0],
-		 cmd->event_bitmaps[1], cmd->event_bitmaps[2],
-		 cmd->event_bitmaps[3], enable ? "enabled" : "disabled");
+	cmd->event_bitmap = bitmap;
 
 	ret = wmi_unified_cmd_send(wmi_handle, buf, len,
 				   WMI_WOW_ENABLE_DISABLE_WAKE_EVENT_CMDID);
@@ -7718,9 +7658,8 @@ QDF_STATUS send_add_wow_wakeup_event_cmd_tlv(wmi_unified_t wmi_handle,
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	/* Do not access buf or cmd data after this as WMI tx complete interrupt
-	 * could have freed the buffer in different context
-	 */
+	WMI_LOGD("Wakeup pattern 0x%x %s in fw", bitmap,
+		 enable ? "enabled" : "disabled");
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -10843,7 +10782,7 @@ QDF_STATUS send_roam_invoke_cmd_tlv(wmi_unified_t wmi_handle,
 	WMITLV_TAG_STRUC_wmi_roam_invoke_cmd_fixed_param,
 	WMITLV_GET_STRUCT_TLVLEN(wmi_roam_invoke_cmd_fixed_param));
 	cmd->vdev_id = roaminvoke->vdev_id;
-	cmd->flags |= (1 << WMI_ROAM_INVOKE_FLAG_REPORT_FAILURE);
+	cmd->flags = 0;
 
 	if (roaminvoke->frame_len)
 		cmd->roam_scan_mode = WMI_ROAM_INVOKE_SCAN_MODE_SKIP;
@@ -11286,8 +11225,6 @@ QDF_STATUS send_per_roam_config_cmd_tlv(wmi_unified_t wmi_handle,
 	wmi_per_config->pkt_err_rate_mon_time =
 			(req_buf->per_config.tx_per_mon_time << 16) |
 			(req_buf->per_config.rx_per_mon_time & 0x0000ffff);
-	wmi_per_config->min_candidate_rssi =
-			req_buf->per_config.min_candidate_rssi;
 
 	/* Send per roam config parameters */
 	status = wmi_unified_cmd_send(wmi_handle, buf,
@@ -13006,7 +12943,6 @@ struct wmi_ops tlv_ops =  {
 	.send_process_ll_stats_set_cmd = send_process_ll_stats_set_cmd_tlv,
 	.send_process_ll_stats_get_cmd = send_process_ll_stats_get_cmd_tlv,
 	.send_get_stats_cmd = send_get_stats_cmd_tlv,
-	.send_congestion_cmd = send_congestion_cmd_tlv,
 	.send_snr_request_cmd = send_snr_request_cmd_tlv,
 	.send_snr_cmd = send_snr_cmd_tlv,
 	.send_link_status_req_cmd = send_link_status_req_cmd_tlv,

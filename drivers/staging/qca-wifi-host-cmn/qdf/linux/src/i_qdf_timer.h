@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -39,11 +39,6 @@
 #include <linux/jiffies.h>
 #include <qdf_types.h>
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0)
-#define setup_deferrable_timer(timer, fn, data)                                \
-	__setup_timer((timer), (fn), (data), TIMER_DEFERRABLE)
-#endif
-
 /* timer data type */
 typedef struct timer_list __qdf_timer_t;
 
@@ -69,24 +64,12 @@ static inline QDF_STATUS __qdf_timer_init(qdf_handle_t hdl,
 					  qdf_timer_func_t func, void *arg,
 					  QDF_TIMER_TYPE type)
 {
-	if (type == QDF_TIMER_TYPE_SW) {
-		if (object_is_on_stack(timer))
-			setup_deferrable_timer_on_stack(
-			    timer, (qdf_dummy_timer_func_t)func,
-			    (unsigned long)arg);
-		else
-			setup_deferrable_timer(timer,
-					       (qdf_dummy_timer_func_t)func,
-					       (unsigned long)arg);
-	} else {
-		if (object_is_on_stack(timer))
-			setup_timer_on_stack(timer,
-					     (qdf_dummy_timer_func_t)func,
-					     (unsigned long)arg);
-		else
-			setup_timer(timer, (qdf_dummy_timer_func_t)func,
-				    (unsigned long)arg);
-	}
+	if (QDF_TIMER_TYPE_SW == type)
+		init_timer_deferrable(timer);
+	else
+		init_timer(timer);
+	timer->function = (qdf_dummy_timer_func_t) func;
+	timer->data = (unsigned long)arg;
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -141,14 +124,12 @@ static inline bool __qdf_timer_stop(struct timer_list *timer)
  * __qdf_timer_free() - free a qdf timer
  * @timer: Pointer to timer object
  *
- * Return: None
+ * Return: true if timer was cancelled and deactived,
+ * false if timer was cancelled but already got fired.
  */
 static inline void __qdf_timer_free(struct timer_list *timer)
 {
 	del_timer_sync(timer);
-
-	if (object_is_on_stack(timer))
-		destroy_timer_on_stack(timer);
 }
 
 /**

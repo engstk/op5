@@ -320,9 +320,8 @@ static int __hdd_hostapd_stop(struct net_device *dev)
 	clear_bit(DEVICE_IFACE_OPENED, &adapter->event_flags);
 	/* Stop all tx queues */
 	hdd_notice("Disabling queues");
-	wlan_hdd_netif_queue_control(adapter,
-				     WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER,
-				     WLAN_CONTROL_PATH);
+	wlan_hdd_netif_queue_control(adapter, WLAN_NETIF_TX_DISABLE_N_CARRIER,
+				   WLAN_CONTROL_PATH);
 
 	EXIT();
 	return 0;
@@ -1671,7 +1670,7 @@ QDF_STATUS hdd_hostapd_sap_event_cb(tpSap_Event pSapEvent,
 				&pHostapdAdapter->prev_fwd_tx_packets,
 				&pHostapdAdapter->prev_fwd_rx_packets);
 			spin_unlock_bh(&pHddCtx->bus_bw_lock);
-			hdd_bus_bw_compute_timer_start(pHddCtx);
+			hdd_start_bus_bw_compute_timer(pHostapdAdapter);
 		}
 #endif
 		pHddApCtx->bApActive = true;
@@ -1871,7 +1870,7 @@ QDF_STATUS hdd_hostapd_sap_event_cb(tpSap_Event pSapEvent,
 			pHostapdAdapter->prev_fwd_tx_packets = 0;
 			pHostapdAdapter->prev_fwd_rx_packets = 0;
 			spin_unlock_bh(&pHddCtx->bus_bw_lock);
-			hdd_bus_bw_compute_timer_try_stop(pHddCtx);
+			hdd_stop_bus_bw_compute_timer(pHostapdAdapter);
 		}
 #endif
 		hdd_green_ap_del_sta(pHddCtx);
@@ -2150,8 +2149,8 @@ stopbss:
 		 * the TX WMM queues for all STAID's */
 		hdd_notice("Disabling queues");
 		wlan_hdd_netif_queue_control(pHostapdAdapter,
-					WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER,
-					WLAN_CONTROL_PATH);
+					     WLAN_NETIF_TX_DISABLE_N_CARRIER,
+					     WLAN_CONTROL_PATH);
 
 		/* reclaim all resources allocated to the BSS */
 		qdf_status = hdd_softap_stop_bss(pHostapdAdapter);
@@ -2169,6 +2168,8 @@ stopbss:
 		we_custom_event_generic = we_custom_event;
 		wireless_send_event(dev, we_event, &wrqu,
 				    (char *)we_custom_event_generic);
+		cds_decr_session_set_pcl(pHostapdAdapter->device_mode,
+					 pHostapdAdapter->sessionId);
 
 		/* once the event is set, structure dev/pHostapdAdapter should
 		 * not be touched since they are now subject to being deleted
@@ -6480,7 +6481,7 @@ static void wlan_hdd_add_hostapd_conf_vsie(hdd_adapter_t *pHostapdAdapter,
 		elem_id = ptr[0];
 		elem_len = ptr[1];
 		left -= 2;
-		if (elem_len > left || elem_len < WPS_OUI_TYPE_SIZE) {
+		if (elem_len > left) {
 			hdd_err("****Invalid IEs eid = %d elem_len=%d left=%d*****",
 				elem_id, elem_len, left);
 			return;
@@ -7098,23 +7099,14 @@ static int wlan_hdd_setup_driver_overrides(hdd_adapter_t *ap_adapter)
 		if (sap_cfg->SapHw_mode == eCSR_DOT11_MODE_11n)
 			sap_cfg->SapHw_mode = eCSR_DOT11_MODE_11ac;
 
-		if (sap_cfg->channel >= 36) {
+		if (sap_cfg->channel >= 36)
 			sap_cfg->ch_width_orig =
 					hdd_ctx->config->vhtChannelWidth;
-		} else {
-			/*
-			 * Allow 40 Mhz in 2.4 Ghz only if indicated by
-			 * supplicant after OBSS scan and if 2.4 Ghz channel
-			 * bonding is set in INI
-			 */
-			if (sap_cfg->ch_width_orig >= eHT_CHANNEL_WIDTH_40MHZ &&
-			   hdd_ctx->config->nChannelBondingMode24GHz)
-				sap_cfg->ch_width_orig =
-					eHT_CHANNEL_WIDTH_40MHZ;
-			else
-				sap_cfg->ch_width_orig =
-					eHT_CHANNEL_WIDTH_20MHZ;
-		}
+		else
+			sap_cfg->ch_width_orig =
+				hdd_ctx->config->nChannelBondingMode24GHz ?
+				eHT_CHANNEL_WIDTH_40MHZ :
+				eHT_CHANNEL_WIDTH_20MHZ;
 	}
 	sap_cfg->ch_params.ch_width = sap_cfg->ch_width_orig;
 	cds_set_channel_params(sap_cfg->channel,
@@ -7315,25 +7307,22 @@ int wlan_hdd_cfg80211_start_bss(hdd_adapter_t *pHostapdAdapter,
 	bool MFPRequired = false;
 	uint16_t prev_rsn_length = 0;
 	enum dfs_mode mode;
-	bool disable_fw_tdls_state = false;
 
 	ENTER();
 
-	if (!update_beacon && cds_is_connection_in_progress(NULL, NULL)) {
-		hdd_err("Can't start BSS: connection is in progress");
+	if (!update_beacon && (cds_is_connection_in_progress(NULL, NULL) ||
+		pHddCtx->btCoexModeSet)) {
+		hdd_err("Can't start BSS: connection ot btcoex(%d) is in progress",
+			pHddCtx->btCoexModeSet);
 		return -EINVAL;
 	}
 
-	disable_fw_tdls_state = true;
-	wlan_hdd_check_conc_and_update_tdls_state(pHddCtx,
-						  disable_fw_tdls_state);
-
+	wlan_hdd_tdls_disable_offchan_and_teardown_links(pHddCtx);
 	if (cds_is_hw_mode_change_in_progress()) {
 		status = qdf_wait_for_connection_update();
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
 			hdd_err("qdf wait for event failed!!");
-			ret = -EINVAL;
-			goto ret_status;
+			return -EINVAL;
 		}
 	}
 
@@ -7902,10 +7891,6 @@ error:
 			acs_cfg.ch_list);
 		pHostapdAdapter->sessionCtx.ap.sapConfig.acs_cfg.ch_list = NULL;
 	}
-
-ret_status:
-	if (disable_fw_tdls_state)
-		wlan_hdd_check_conc_and_update_tdls_state(pHddCtx, false);
 	return ret;
 }
 
@@ -7931,7 +7916,6 @@ static int __wlan_hdd_cfg80211_stop_ap(struct wiphy *wiphy,
 	unsigned long rc;
 	hdd_adapter_list_node_t *pAdapterNode = NULL;
 	hdd_adapter_list_node_t *pNext = NULL;
-	tsap_Config_t *pConfig;
 
 	ENTER();
 
@@ -8021,21 +8005,13 @@ static int __wlan_hdd_cfg80211_stop_ap(struct wiphy *wiphy,
 		pHddCtx->is_sap_restart_required = false;
 		qdf_spin_unlock(&pHddCtx->sap_update_info_lock);
 	}
-
-	pConfig = &pAdapter->sessionCtx.ap.sapConfig;
-	pConfig->acs_cfg.acs_mode = false;
+	pAdapter->sessionCtx.ap.sapConfig.acs_cfg.acs_mode = false;
 	wlan_hdd_undo_acs(pAdapter);
-	qdf_mem_zero(&pConfig->acs_cfg, sizeof(struct sap_acs_cfg));
-
-	/* Remove the channel no from sap mandatory list if it is a
-	 * 5GHz channel */
-	if (CDS_IS_CHANNEL_5GHZ(pConfig->channel))
-		cds_remove_sap_mandatory_chan(pConfig->channel);
-
+	qdf_mem_zero(&pAdapter->sessionCtx.ap.sapConfig.acs_cfg,
+						sizeof(struct sap_acs_cfg));
 	/* Stop all tx queues */
 	hdd_notice("Disabling queues");
-	wlan_hdd_netif_queue_control(pAdapter,
-				     WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER,
+	wlan_hdd_netif_queue_control(pAdapter, WLAN_NETIF_TX_DISABLE_N_CARRIER,
 				     WLAN_CONTROL_PATH);
 
 	old = pAdapter->sessionCtx.ap.beacon;
@@ -8111,7 +8087,6 @@ static int __wlan_hdd_cfg80211_stop_ap(struct wiphy *wiphy,
 	}
 #endif
 	pAdapter->sessionId = HDD_SESSION_ID_INVALID;
-	wlan_hdd_check_conc_and_update_tdls_state(pHddCtx, false);
 	EXIT();
 	return ret;
 }
@@ -8220,6 +8195,11 @@ static int __wlan_hdd_cfg80211_start_ap(struct wiphy *wiphy,
 		pAdapter, hdd_device_mode_to_string(pAdapter->device_mode),
 		pAdapter->device_mode, cds_is_sub_20_mhz_enabled());
 
+	if (pHddCtx->btCoexModeSet) {
+		hdd_info("BTCoex Mode operation in progress");
+		return -EBUSY;
+	}
+
 	if (cds_is_connection_in_progress(NULL, NULL)) {
 		hdd_err("Can't start BSS: connection is in progress");
 		return -EBUSY;
@@ -8236,17 +8216,6 @@ static int __wlan_hdd_cfg80211_start_ap(struct wiphy *wiphy,
 	channel_width = wlan_hdd_get_channel_bw(params->chandef.width);
 	channel = ieee80211_frequency_to_channel(
 				params->chandef.chan->center_freq);
-
-	if (cds_is_sap_mandatory_chan_list_enabled()) {
-		if (!cds_get_sap_mandatory_chan_list_len())
-			cds_init_sap_mandatory_2g_chan();
-
-		if (CDS_IS_CHANNEL_5GHZ(channel)) {
-			hdd_debug("channel %hu, sap mandatory chan list enabled",
-					channel);
-			cds_add_sap_mandatory_chan(channel);
-		}
-	}
 
 	if (cds_is_sub_20_mhz_enabled()) {
 		enum channel_state ch_state;
@@ -8383,11 +8352,6 @@ static int __wlan_hdd_cfg80211_start_ap(struct wiphy *wiphy,
 				params->ssid, params->ssid_len,
 				params->hidden_ssid, true, false);
 
-		if (status != 0) {
-			hdd_err("Error Start bss Failed");
-			goto err_start_bss;
-		}
-
 		if (pHddCtx->config->sap_max_inactivity_override) {
 			sta_inactivity_timer = qdf_mem_malloc(
 					sizeof(*sta_inactivity_timer));
@@ -8410,13 +8374,6 @@ static int __wlan_hdd_cfg80211_start_ap(struct wiphy *wiphy,
 		}
 	}
 
-	goto success;
-
-err_start_bss:
-	if (pAdapter->sessionCtx.ap.beacon)
-		qdf_mem_free(pAdapter->sessionCtx.ap.beacon);
-	pAdapter->sessionCtx.ap.beacon = NULL;
-success:
 	EXIT();
 	return status;
 }

@@ -1310,6 +1310,9 @@ __lim_process_sm_power_save_update(tpAniSirGlobal pMac, uint8_t *pRxPacketInfo,
 			FL
 				("There were warnings while unpacking a SMPower Save update (0x%08x, %d bytes):"),
 			nStatus, frameLen);
+		PELOG2(sir_dump_buf
+			       (pMac, SIR_DBG_MODULE_ID, LOG2, pBody, frameLen);
+		       )
 	}
 
 	lim_log(pMac, LOGW,
@@ -1395,6 +1398,8 @@ __lim_process_radio_measure_request(tpAniSirGlobal pMac, uint8_t *pRxPacketInfo,
 		lim_log(pMac, LOGW,
 			FL("There were warnings while unpacking a Radio Measure request (0x%08x, %d bytes):"),
 			nStatus, frameLen);
+		PELOG2(sir_dump_buf
+		       (pMac, SIR_DBG_MODULE_ID, LOG2, pBody, frameLen);)
 	}
 	/* Call rrm function to handle the request. */
 
@@ -1439,6 +1444,9 @@ __lim_process_link_measurement_req(tpAniSirGlobal pMac, uint8_t *pRxPacketInfo,
 			FL
 				("There were warnings while unpacking a Link Measure request (0x%08x, %d bytes):"),
 			nStatus, frameLen);
+		PELOG2(sir_dump_buf
+			       (pMac, SIR_DBG_MODULE_ID, LOG2, pBody, frameLen);
+		       )
 	}
 	/* Call rrm function to handle the request. */
 
@@ -1492,6 +1500,9 @@ __lim_process_neighbor_report(tpAniSirGlobal pMac, uint8_t *pRxPacketInfo,
 			FL
 				("There were warnings while unpacking a Neighbor report response (0x%08x, %d bytes):"),
 			nStatus, frameLen);
+		PELOG2(sir_dump_buf
+			       (pMac, SIR_DBG_MODULE_ID, LOG2, pBody, frameLen);
+		       )
 	}
 	/* Call rrm function to handle the request. */
 	rrm_process_neighbor_report_response(pMac, pFrm, psessionEntry);

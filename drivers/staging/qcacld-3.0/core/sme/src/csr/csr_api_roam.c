@@ -64,8 +64,8 @@
 
 #define CSR_NUM_IBSS_START_CHANNELS_50      4
 #define CSR_NUM_IBSS_START_CHANNELS_24      3
-/* 75 seconds, for WPA, WPA2, CCKM */
-#define CSR_WAIT_FOR_KEY_TIMEOUT_PERIOD     (75 * QDF_MC_TIMER_TO_SEC_UNIT)
+/* 5 seconds, for WPA, WPA2, CCKM */
+#define CSR_WAIT_FOR_KEY_TIMEOUT_PERIOD     (15 * QDF_MC_TIMER_TO_SEC_UNIT)
 /* 120 seconds, for WPS */
 #define CSR_WAIT_FOR_WPS_KEY_TIMEOUT_PERIOD (120 * QDF_MC_TIMER_TO_SEC_UNIT)
 
@@ -2284,10 +2284,6 @@ QDF_STATUS csr_change_default_config_param(tpAniSirGlobal pMac,
 			cfg_set_int(pMac, WNI_CFG_PASSIVE_MINIMUM_CHANNEL_TIME,
 				    pParam->nPassiveMinChnTime);
 		}
-		pMac->roam.configParam.scan_probe_repeat_time =
-			pParam->scan_probe_repeat_time;
-		pMac->roam.configParam.scan_num_probes =
-			pParam->scan_num_probes;
 #ifdef WLAN_AP_STA_CONCURRENCY
 		if (pParam->nActiveMaxChnTimeConc) {
 			pMac->roam.configParam.nActiveMaxChnTimeConc =
@@ -2504,8 +2500,6 @@ QDF_STATUS csr_change_default_config_param(tpAniSirGlobal pMac,
 			pParam->send_smps_action;
 		pMac->roam.configParam.txLdpcEnable = pParam->enableTxLdpc;
 		pMac->roam.configParam.rxLdpcEnable = pParam->enableRxLDPC;
-		pMac->roam.configParam.disable_high_ht_mcs_2x2 =
-					pParam->disable_high_ht_mcs_2x2;
 		pMac->roam.configParam.ignore_peer_erp_info =
 			pParam->ignore_peer_erp_info;
 		pMac->roam.configParam.max_amsdu_num =
@@ -2577,8 +2571,6 @@ QDF_STATUS csr_change_default_config_param(tpAniSirGlobal pMac,
 			pParam->per_roam_config.tx_per_mon_time;
 		pMac->roam.configParam.per_roam_config.rx_per_mon_time =
 			pParam->per_roam_config.rx_per_mon_time;
-		pMac->roam.configParam.per_roam_config.min_candidate_rssi =
-			pParam->per_roam_config.min_candidate_rssi;
 
 		/* update p2p offload status */
 		pMac->pnoOffload = pParam->pnoOffload;
@@ -2652,9 +2644,6 @@ QDF_STATUS csr_change_default_config_param(tpAniSirGlobal pMac,
 			pParam->qcn_ie_support;
 		pMac->roam.configParam.fils_max_chan_guard_time =
 			pParam->fils_max_chan_guard_time;
-		pMac->roam.configParam.is_bssid_hint_priority =
-			pParam->is_bssid_hint_priority;
-
 
 	}
 	return status;
@@ -2696,8 +2685,6 @@ QDF_STATUS csr_get_config_param(tpAniSirGlobal pMac, tCsrConfigParam *pParam)
 	pParam->nActiveMinChnTime = cfg_params->nActiveMinChnTime;
 	pParam->nPassiveMaxChnTime = cfg_params->nPassiveMaxChnTime;
 	pParam->nPassiveMinChnTime = cfg_params->nPassiveMinChnTime;
-	pParam->scan_probe_repeat_time = cfg_params->scan_probe_repeat_time;
-	pParam->scan_num_probes = cfg_params->scan_num_probes;
 #ifdef WLAN_AP_STA_CONCURRENCY
 	pParam->nActiveMaxChnTimeConc = cfg_params->nActiveMaxChnTimeConc;
 	pParam->nActiveMinChnTimeConc = cfg_params->nActiveMinChnTimeConc;
@@ -2774,7 +2761,6 @@ QDF_STATUS csr_get_config_param(tpAniSirGlobal pMac, tCsrConfigParam *pParam)
 #endif
 	pParam->enableTxLdpc = cfg_params->txLdpcEnable;
 	pParam->enableRxLDPC = cfg_params->rxLdpcEnable;
-	pParam->disable_high_ht_mcs_2x2 = cfg_params->disable_high_ht_mcs_2x2;
 	pParam->max_amsdu_num = cfg_params->max_amsdu_num;
 	pParam->nSelect5GHzMargin = cfg_params->nSelect5GHzMargin;
 	pParam->isCoalesingInIBSSAllowed = cfg_params->isCoalesingInIBSSAllowed;
@@ -2820,8 +2806,6 @@ QDF_STATUS csr_get_config_param(tpAniSirGlobal pMac, tCsrConfigParam *pParam)
 			cfg_params->per_roam_config.tx_per_mon_time;
 	pParam->per_roam_config.rx_per_mon_time =
 			cfg_params->per_roam_config.rx_per_mon_time;
-	pParam->per_roam_config.min_candidate_rssi =
-			cfg_params->per_roam_config.min_candidate_rssi;
 
 	pParam->conc_custom_rule1 = cfg_params->conc_custom_rule1;
 	pParam->conc_custom_rule2 = cfg_params->conc_custom_rule2;
@@ -2902,8 +2886,6 @@ QDF_STATUS csr_get_config_param(tpAniSirGlobal pMac, tCsrConfigParam *pParam)
 		pMac->roam.configParam.qcn_ie_support;
 	pParam->fils_max_chan_guard_time =
 		pMac->roam.configParam.fils_max_chan_guard_time;
-	pParam->is_bssid_hint_priority =
-		pMac->roam.configParam.is_bssid_hint_priority;
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -7741,37 +7723,6 @@ QDF_STATUS csr_dequeue_roam_command(tpAniSirGlobal pMac, eCsrRoamReason reason)
 	return QDF_STATUS_SUCCESS;
 }
 
-/**
- * csr_roam_print_candidate_aps() - print all candidate AP in sorted
- * score.
- * @pMac: global mac context
- * @hScanList: Handle for scan list
- *
- * Return : void
- */
-static void csr_roam_print_candidate_aps(tpAniSirGlobal pMac,
-		tScanResultHandle hScanList)
-{
-	tListElem *pEntry;
-	tCsrScanResult *pBssDesc = NULL;
-	tScanResultList *bss_list = NULL;
-
-	bss_list = (tScanResultList *)hScanList;
-	pEntry = csr_ll_peek_head(&bss_list->List, LL_ACCESS_NOLOCK);
-	while (pEntry) {
-		pBssDesc = GET_BASE_ADDR(pEntry,
-				tCsrScanResult, Link);
-		sms_log(pMac, LOG1, FL("BSSID "MAC_ADDRESS_STR" score is %d"),
-			MAC_ADDR_ARRAY(pBssDesc->Result.BssDescriptor.bssId),
-			pBssDesc->bss_score);
-
-		pEntry = csr_ll_next(&bss_list->List, pEntry,
-				LL_ACCESS_NOLOCK);
-	}
-	return;
-
-}
-
 QDF_STATUS csr_roam_connect(tpAniSirGlobal pMac, uint32_t sessionId,
 		tCsrRoamProfile *pProfile,
 		uint32_t *pRoamId)
@@ -7782,7 +7733,7 @@ QDF_STATUS csr_roam_connect(tpAniSirGlobal pMac, uint32_t sessionId,
 	uint32_t roamId = 0;
 	bool fCallCallback = false;
 	tCsrRoamSession *pSession = CSR_GET_SESSION(pMac, sessionId);
-	tSirBssDescription *first_ap_profile;
+	tSirBssDescription first_ap_profile;
 
 	if (NULL == pSession) {
 		sms_log(pMac, LOGE,
@@ -7795,13 +7746,6 @@ QDF_STATUS csr_roam_connect(tpAniSirGlobal pMac, uint32_t sessionId,
 		sms_log(pMac, LOGP, FL("No profile specified"));
 		return QDF_STATUS_E_FAILURE;
 	}
-
-	first_ap_profile = qdf_mem_malloc(sizeof(*first_ap_profile));
-	if (NULL == first_ap_profile) {
-		sme_err("malloc fails for first_ap_profile");
-		return QDF_STATUS_E_NOMEM;
-	}
-
 	/* Initialize the count before proceeding with the Join requests */
 	pSession->join_bssid_count = 0;
 	sms_log(pMac, LOG1,
@@ -7891,22 +7835,20 @@ QDF_STATUS csr_roam_connect(tpAniSirGlobal pMac, uint32_t sessionId,
 	status = csr_scan_get_result(pMac, pScanFilter, &hBSSList);
 	sms_log(pMac, LOG1,
 		FL("******* csr_scan_get_result Status ****** %d"), status);
-	csr_roam_print_candidate_aps(pMac, hBSSList);
 	if (QDF_IS_STATUS_SUCCESS(status)) {
 		/* check if set hw mode needs to be done */
 		if ((pScanFilter->csrPersona == QDF_STA_MODE) ||
 			 (pScanFilter->csrPersona == QDF_P2P_CLIENT_MODE)) {
 			csr_get_bssdescr_from_scan_handle(hBSSList,
-					first_ap_profile);
+					&first_ap_profile);
 			status = cds_handle_conc_multiport(sessionId,
-						first_ap_profile->channelId);
+						first_ap_profile.channelId);
 			if ((QDF_IS_STATUS_SUCCESS(status)) &&
 				(!csr_wait_for_connection_update(pMac, true))) {
 					sms_log(pMac, LOG1,
 						FL("conn update error"));
 					csr_scan_result_purge(pMac, hBSSList);
 					fCallCallback = true;
-					status = QDF_STATUS_E_TIMEOUT;
 					goto error;
 			} else if (status == QDF_STATUS_E_FAILURE) {
 				sms_log(pMac, LOG1, FL("conn update error"));
@@ -7971,8 +7913,6 @@ end:
 		csr_roam_call_callback(pMac, sessionId, NULL, roamId,
 				eCSR_ROAM_FAILED, eCSR_ROAM_RESULT_FAILURE);
 	}
-	qdf_mem_free(first_ap_profile);
-
 	return status;
 }
 
@@ -13356,9 +13296,6 @@ QDF_STATUS csr_roam_set_psk_pmk(tpAniSirGlobal pMac, uint32_t sessionId,
 	}
 	qdf_mem_copy(pSession->psk_pmk, pPSK_PMK, sizeof(pSession->psk_pmk));
 	pSession->pmk_len = pmk_len;
-	csr_roam_offload_scan(pMac, sessionId,
-			      ROAM_SCAN_OFFLOAD_UPDATE_CFG,
-			      REASON_ROAM_PSK_PMK_CHANGED);
 	return QDF_STATUS_SUCCESS;
 }
 #endif /* WLAN_FEATURE_ROAM_OFFLOAD */
@@ -13986,7 +13923,8 @@ QDF_STATUS csr_send_join_req_msg(tpAniSirGlobal pMac, uint32_t sessionId,
 	tSirMacRateSet ExRateSet;
 	tCsrRoamSession *pSession = CSR_GET_SESSION(pMac, sessionId);
 	uint32_t dwTmp, ucDot11Mode = 0;
-	uint8_t *wpaRsnIE = NULL;
+	/* RSN MAX is bigger than WPA MAX */
+	uint8_t wpaRsnIE[DOT11F_IE_RSN_MAX_LEN];
 	uint8_t txBFCsnValue = 0;
 	tSirSmeJoinReq *csr_join_req;
 	tSirMacCapabilityInfo *pAP_capabilityInfo;
@@ -14054,14 +13992,6 @@ QDF_STATUS csr_send_join_req_msg(tpAniSirGlobal pMac, uint32_t sessionId,
 			status = QDF_STATUS_SUCCESS;
 		if (!QDF_IS_STATUS_SUCCESS(status))
 			break;
-
-		wpaRsnIE = qdf_mem_malloc(DOT11F_IE_RSN_MAX_LEN);
-		if (NULL == wpaRsnIE) {
-			status = QDF_STATUS_E_NOMEM;
-		}
-		if (!QDF_IS_STATUS_SUCCESS(status))
-			break;
-
 		csr_join_req->messageType = messageType;
 		csr_join_req->length = msgLen;
 		csr_join_req->sessionId = (uint8_t) sessionId;
@@ -14505,9 +14435,7 @@ QDF_STATUS csr_send_join_req_msg(tpAniSirGlobal pMac, uint32_t sessionId,
 				FL("Failed to get CSN beamformee capability"));
 
 		csr_join_req->vht_config.su_beam_formee = value;
-
-		/* Set BF CSN value only if SU Bformee is enabled */
-		if (csr_join_req->vht_config.su_beam_formee) {
+		if (value) {
 			txBFCsnValue = (uint8_t)value1;
 			if (IS_BSS_VHT_CAPABLE(pIes->VHTCaps) &&
 			    pIes->VHTCaps.csnofBeamformerAntSup)
@@ -14524,42 +14452,11 @@ QDF_STATUS csr_send_join_req_msg(tpAniSirGlobal pMac, uint32_t sessionId,
 		csr_join_req->vht_config.csnof_beamformer_antSup = txBFCsnValue;
 
 		if (wlan_cfg_get_int(pMac,
-		   WNI_CFG_VHT_SU_BEAMFORMER_CAP, &value)
-		   != eSIR_SUCCESS)
-			QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
-				FL("Failed to get SU beamformer capability"));
-
-		/*
-		 * Set SU Bformer only if SU Bformer is enabled in INI
-		 * and AP is SU Bformee capable
-		 */
-		if (value && !((IS_BSS_VHT_CAPABLE(pIes->VHTCaps) &&
-		   pIes->VHTCaps.suBeamformeeCap) ||
-		   (IS_BSS_VHT_CAPABLE(
-		   pIes->vendor_vht_ie.VHTCaps)
-		   && pIes->vendor_vht_ie.VHTCaps.
-		   suBeamformeeCap)))
-			value = 0;
-
-		csr_join_req->vht_config.su_beam_former = value;
-
-		/* Set num soundingdim value to 0 if SU Bformer is disabled */
-		if (!csr_join_req->vht_config.su_beam_former)
-			csr_join_req->vht_config.num_soundingdim = 0;
-
-		if (wlan_cfg_get_int(pMac,
-		   WNI_CFG_VHT_MU_BEAMFORMEE_CAP, &value)
-		   != eSIR_SUCCESS)
+				WNI_CFG_VHT_MU_BEAMFORMEE_CAP, &value)
+				!= eSIR_SUCCESS)
 			QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
 				FL("Failed to get CSN beamformee capability"));
-		/*
-		 * Set MU Bformee only if SU Bformee is enabled and
-		 * MU Bformee is enabled in INI
-		 */
-		if (value && csr_join_req->vht_config.su_beam_formee)
-			csr_join_req->vht_config.mu_beam_formee = 1;
-		else
-			csr_join_req->vht_config.mu_beam_formee = 0;
+		csr_join_req->vht_config.mu_beam_formee = (uint8_t) value;
 
 		csr_join_req->enableVhtpAid =
 			(uint8_t) pMac->roam.configParam.enableVhtpAid;
@@ -14688,8 +14585,6 @@ QDF_STATUS csr_send_join_req_msg(tpAniSirGlobal pMac, uint32_t sessionId,
 			csr_join_req->enable_bcast_probe_rsp =
 				pMac->roam.configParam.enable_bcast_probe_rsp;
 
-		csr_join_req->ignore_assoc_disallowed =
-					pSession->ignore_assoc_disallowed;
 		status = cds_send_mb_message_to_mac(csr_join_req);
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
 			/*
@@ -14743,9 +14638,6 @@ QDF_STATUS csr_send_join_req_msg(tpAniSirGlobal pMac, uint32_t sessionId,
 	if (!QDF_IS_STATUS_SUCCESS(status) && (NULL != csr_join_req))
 		qdf_mem_free(csr_join_req);
 
-	if (wpaRsnIE)
-		qdf_mem_free(wpaRsnIE);
-
 	return status;
 }
 
@@ -14789,9 +14681,8 @@ QDF_STATUS csr_send_mb_disassoc_req_msg(tpAniSirGlobal pMac, uint32_t sessionId,
 	 * handoff. Here we should not send the disassoc over the air
 	 * to the AP
 	 */
-	if ((CSR_IS_ROAM_SUBSTATE_DISASSOC_HO(pMac, sessionId)
-			&& csr_roam_is11r_assoc(pMac, sessionId)) ||
-						pMsg->process_ho_fail) {
+	if (CSR_IS_ROAM_SUBSTATE_DISASSOC_HO(pMac, sessionId)
+	    && csr_roam_is11r_assoc(pMac, sessionId)) {
 		/* Set DoNotSendOverTheAir flag to 1 only for handoff case */
 		pMsg->doNotSendOverTheAir = CSR_DONT_SEND_DISASSOC_OVER_THE_AIR;
 	}
@@ -15053,7 +14944,6 @@ QDF_STATUS csr_send_assoc_cnf_msg(tpAniSirGlobal pMac, tpSirSmeAssocInd pAssocIn
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	tSirSmeAssocCnf *pMsg;
-	cds_msg_t msg;
 
 	sms_log(pMac, LOG1,
 		FL("Posting eWNI_SME_ASSOC_CNF to LIM.HalStatus :%d"),
@@ -15081,12 +14971,8 @@ QDF_STATUS csr_send_assoc_cnf_msg(tpAniSirGlobal pMac, tpSirSmeAssocInd pAssocIn
 			     QDF_MAC_ADDR_SIZE);
 		/* alternateChannelId */
 		pMsg->alternateChannelId = 11;
-		msg.type = pMsg->messageType;
-		msg.bodyval = 0;
-		msg.bodyptr = pMsg;
 		/* pMsg is freed by cds_send_mb_message_to_mac in anycase*/
-		status = cds_mq_post_message_by_priority(CDS_MQ_ID_PE,
-					&msg, HIGH_PRIORITY);
+		status = cds_send_mb_message_to_mac(pMsg);
 	} while (0);
 	return status;
 }
@@ -16799,11 +16685,7 @@ QDF_STATUS csr_get_snr(tpAniSirGlobal pMac,
 		return QDF_STATUS_E_NOMEM;
 	}
 
-	status = csr_roam_get_session_id_from_bssid(pMac, &bssId, &sessionId);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sme_err("Failed to get SessionId");
-		return QDF_STATUS_E_FAILURE;
-	}
+	csr_roam_get_session_id_from_bssid(pMac, &bssId, &sessionId);
 
 	pMsg->msgType = eWNI_SME_GET_SNR_REQ;
 	pMsg->msgLen = (uint16_t) sizeof(tAniGetSnrReq);
@@ -17625,18 +17507,6 @@ csr_create_roam_scan_offload_request(tpAniSirGlobal mac_ctx,
 						curr_ch_lst_info, req_buf);
 	}
 #endif
-
-	if (req_buf->ConnectedNetwork.ChannelCount == 0) {
-		/* Maintain the Valid Channels List */
-		status = csr_fetch_valid_ch_lst(mac_ctx, req_buf);
-		if (!QDF_IS_STATUS_SUCCESS(status)) {
-			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
-					"Fetch channel list fail");
-			qdf_mem_free(req_buf);
-			return NULL;
-		}
-	}
-
 	for (i = 0, j = 0; i < req_buf->ConnectedNetwork.ChannelCount; i++) {
 		if (j < sizeof(ch_cache_str)) {
 			j += snprintf(ch_cache_str + j,
@@ -17650,6 +17520,15 @@ csr_create_roam_scan_offload_request(tpAniSirGlobal mac_ctx,
 		  FL("ChnlCacheType:%d, No of Chnls:%d,Channels: %s"),
 		  req_buf->ChannelCacheType,
 		  req_buf->ConnectedNetwork.ChannelCount, ch_cache_str);
+
+	/* Maintain the Valid Channels List */
+	status = csr_fetch_valid_ch_lst(mac_ctx, req_buf);
+	if (!QDF_IS_STATUS_SUCCESS(status)) {
+		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
+			FL("Fetch channel list fail"));
+		qdf_mem_free(req_buf);
+		return NULL;
+	}
 
 	req_buf->MDID.mdiePresent =
 		mac_ctx->roam.roamSession[session_id].
@@ -18046,18 +17925,15 @@ csr_create_per_roam_request(tpAniSirGlobal mac_ctx, uint8_t session_id)
 		mac_ctx->roam.configParam.per_roam_config.tx_rate_thresh_percnt;
 	req_buf->per_config.rx_rate_thresh_percnt =
 		mac_ctx->roam.configParam.per_roam_config.rx_rate_thresh_percnt;
-	req_buf->per_config.min_candidate_rssi =
-		mac_ctx->roam.configParam.per_roam_config.min_candidate_rssi;
 
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		  FL("PER based roaming configuaration enable: %d vdev: %d high_rate_thresh: %d low_rate_thresh: %d rate_thresh_percnt: %d per_rest_time: %d monitor_time: %d min cand rssi: %d"),
+		  FL("PER based roaming configuaration enable=%d vdev=%d high_rate_thresh=%d low_rate_thresh=%d rate_thresh_percnt=%d per_rest_time=%d monitor_time=%d"),
 			  req_buf->per_config.enable, session_id,
 			  req_buf->per_config.tx_high_rate_thresh,
 			  req_buf->per_config.tx_low_rate_thresh,
 			  req_buf->per_config.tx_rate_thresh_percnt,
 			  req_buf->per_config.per_rest_time,
-			  req_buf->per_config.tx_per_mon_time,
-			  req_buf->per_config.min_candidate_rssi);
+			  req_buf->per_config.tx_per_mon_time);
 	return req_buf;
 }
 
@@ -18809,7 +18685,7 @@ QDF_STATUS csr_roam_update_config(tpAniSirGlobal mac_ctx, uint8_t session_id,
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	tCsrRoamSession *session = CSR_GET_SESSION(mac_ctx, session_id);
 
-	sms_log(mac_ctx, LOG1, FL("update HT config requested"));
+	pr_debug("update HT config requested");
 	if (NULL == session) {
 		sme_err("Session does not exist for session id %d", session_id);
 		return QDF_STATUS_E_FAILURE;
@@ -19335,7 +19211,7 @@ void csr_process_ho_fail_ind(tpAniSirGlobal pMac, void *pMsgBuf)
 	csr_roam_roaming_offload_timer_action(pMac, 0, sessionId,
 			ROAMING_OFFLOAD_TIMER_STOP);
 	csr_roam_call_callback(pMac, sessionId, NULL, 0,
-			eCSR_ROAM_NAPI_OFF, eCSR_ROAM_RESULT_FAILURE);
+			eCSR_ROAM_NAPI_OFF, eSIR_SME_SUCCESS);
 	csr_roam_synch_clean_up(pMac, sessionId);
 	csr_roaming_report_diag_event(pMac, NULL,
 			eCSR_REASON_ROAM_HO_FAIL);
@@ -19343,11 +19219,6 @@ void csr_process_ho_fail_ind(tpAniSirGlobal pMac, void *pMsgBuf)
 		  "LFR3:Issue Disconnect on session %d", sessionId);
 	csr_roam_disconnect(pMac, sessionId,
 			eCSR_DISCONNECT_REASON_ROAM_HO_FAIL);
-	if (pMac->roam.configParam.enable_fatal_event)
-		cds_flush_logs(WLAN_LOG_TYPE_FATAL,
-				WLAN_LOG_INDICATOR_HOST_DRIVER,
-				WLAN_LOG_REASON_ROAM_HO_FAILURE,
-				true, false);
 }
 #endif /* WLAN_FEATURE_ROAM_OFFLOAD */
 
@@ -19710,6 +19581,13 @@ void csr_process_set_hw_mode(tpAniSirGlobal mac, tSmeCmd *command)
 	tSirMsgQ msg;
 	struct sir_set_hw_mode_resp *param;
 	enum cds_hw_mode_change cds_hw_mode;
+	hdd_context_t *hdd_ctx;
+
+	hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
+	if (!hdd_ctx) {
+		cds_err("HDD context is NULL");
+		goto fail;
+	}
 
 	/* Setting HW mode is for the entire system.
 	 * So, no need to check session
@@ -19745,9 +19623,11 @@ void csr_process_set_hw_mode(tpAniSirGlobal mac, tSmeCmd *command)
 
 	if ((SIR_UPDATE_REASON_OPPORTUNISTIC ==
 	     command->u.set_hw_mode_cmd.reason) &&
-	    (cds_is_connection_in_progress(NULL, NULL))) {
+	    (hdd_ctx->btCoexModeSet ||
+		(cds_is_connection_in_progress(NULL, NULL)))) {
 		sms_log(mac, LOGE,
-		FL("Set HW mode refused: conn is in progress"));
+		FL("Set HW mode refused: conn or btcoex(%d) is in progress"),
+			hdd_ctx->btCoexModeSet);
 		cds_restart_opportunistic_timer(false);
 		goto fail;
 	}
@@ -20101,8 +19981,7 @@ static QDF_STATUS csr_process_roam_sync_callback(tpAniSirGlobal mac_ctx,
 				       eCSR_ROAM_RESULT_INVOKE_FAILED);
 
 		/* Userspace roam request failed, disconnect with current AP */
-		sms_log(mac_ctx, LOG1,
-		FL("LFR3: roam invoke from user-space fail, dis cur AP"));
+		sms_log(mac_ctx, LOGE, FL("LFR3: roam invoke from user-space fail, dis cur AP"));
 		csr_roam_disconnect(mac_ctx, session_id,
 				    eCSR_DISCONNECT_REASON_DEAUTH);
 		return status;
@@ -20396,7 +20275,7 @@ QDF_STATUS csr_roam_synch_callback(tpAniSirGlobal mac_ctx,
 
 	status = sme_acquire_global_lock(&mac_ctx->sme);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGE, FL("LFR3: Locking failed, bailing out"));
+		sme_err("LFR3: Locking failed, bailing out");
 		return status;
 	}
 

@@ -80,13 +80,6 @@ typedef struct hdd_scan_info {
 	char *end;
 } hdd_scan_info_t, *hdd_scan_info_tp;
 
-static const
-struct nla_policy scan_policy[QCA_WLAN_VENDOR_ATTR_SCAN_MAX + 1] = {
-	[QCA_WLAN_VENDOR_ATTR_SCAN_FLAGS] = {.type = NLA_U32},
-	[QCA_WLAN_VENDOR_ATTR_SCAN_TX_NO_CCK_RATE] = {.type = NLA_FLAG},
-	[QCA_WLAN_VENDOR_ATTR_SCAN_COOKIE] = {.type = NLA_U64},
-};
-
 /**
  * hdd_translate_abg_rate_to_mbps_rate() - translate abg rate to Mbps rate
  * @pFcRate: Rate pointer
@@ -1208,15 +1201,18 @@ static QDF_STATUS hdd_cfg80211_scan_done_callback(tHalHandle halHandle,
 	uint32_t size = 0;
 
 	ret = wlan_hdd_validate_context(hddctx);
-	if (ret) {
-		hdd_err("Invalid hdd_ctx; Drop results for scanId %d", scanId);
+	if (0 != ret)
 		return QDF_STATUS_E_INVAL;
-	}
 
 	hdd_notice("called with hal = %p, pContext = %p, ID = %d, status = %d",
 		   halHandle, pContext, (int)scanId, (int)status);
 
 	pScanInfo->mScanPendingCounter = 0;
+
+	if (pScanInfo->mScanPending != true) {
+		QDF_ASSERT(pScanInfo->mScanPending);
+		goto allow_suspend;
+	}
 
 	if (QDF_STATUS_SUCCESS !=
 		wlan_hdd_scan_request_dequeue(hddctx, scanId, &req, &source,
@@ -1246,7 +1242,7 @@ static QDF_STATUS hdd_cfg80211_scan_done_callback(tHalHandle halHandle,
 			 */
 			if (time_elapsed >
 			    MIN_TIME_REQUIRED_FOR_NEXT_BUG_REPORT) {
-				cds_flush_logs(WLAN_LOG_TYPE_FATAL,
+				cds_flush_logs(WLAN_LOG_TYPE_NON_FATAL,
 						WLAN_LOG_INDICATOR_HOST_DRIVER,
 						WLAN_LOG_REASON_NO_SCAN_RESULTS,
 						true, false);
@@ -1612,16 +1608,6 @@ static int __wlan_hdd_cfg80211_scan(struct wiphy *wiphy,
 		hdd_device_mode_to_string(pAdapter->device_mode),
 		pAdapter->device_mode);
 
-	/*
-	 * IBSS vdev does not need to scan to establish
-	 * IBSS connection. If IBSS vdev need to support scan,
-	 * Firmware need to make the change to add self peer
-	 * per mac for IBSS vdev.
-	 */
-	if (QDF_IBSS_MODE == pAdapter->device_mode) {
-		hdd_err("Scan not supported for IBSS");
-		return -EINVAL;
-	}
 
 	cfg_param = pHddCtx->config;
 	pScanInfo = &pAdapter->scan_info;
@@ -1695,6 +1681,11 @@ static int __wlan_hdd_cfg80211_scan(struct wiphy *wiphy,
 		return status;
 	}
 #endif
+
+	if (pHddCtx->btCoexModeSet) {
+		cds_info("BTCoex Mode operation in progress");
+		return -EBUSY;
+	}
 
 	/* Check if scan is allowed at this point of time */
 	if (cds_is_connection_in_progress(&curr_session_id, &curr_reason)) {
@@ -1975,10 +1966,8 @@ static int __wlan_hdd_cfg80211_scan(struct wiphy *wiphy,
 	       scan_req.minChnTime, scan_req.maxChnTime,
 	       scan_req.p2pSearch, scan_req.skipDfsChnlInP2pSearch);
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(3, 7, 0))
-	if (request->flags & NL80211_SCAN_FLAG_FLUSH) {
-		hdd_debug("Kernel scan flush flag enabled");
+	if (request->flags & NL80211_SCAN_FLAG_FLUSH)
 		sme_scan_flush_result(WLAN_HDD_GET_HAL_CTX(pAdapter));
-	}
 #endif
 	wlan_hdd_update_scan_rand_attrs((void *)&scan_req, (void *)request,
 					WLAN_HDD_HOST_SCAN);
@@ -2265,7 +2254,7 @@ static int __wlan_hdd_cfg80211_vendor_scan(struct wiphy *wiphy,
 		return ret;
 
 	if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_SCAN_MAX, data,
-		      data_len, scan_policy)) {
+		data_len, NULL)) {
 		hdd_err("Invalid ATTR");
 		return -EINVAL;
 	}
@@ -2318,13 +2307,8 @@ static int __wlan_hdd_cfg80211_vendor_scan(struct wiphy *wiphy,
 	count = 0;
 	if (tb[QCA_WLAN_VENDOR_ATTR_SCAN_FREQUENCIES]) {
 		nla_for_each_nested(attr,
-				    tb[QCA_WLAN_VENDOR_ATTR_SCAN_FREQUENCIES],
-				    tmp) {
-			if (nla_len(attr) != sizeof(uint32_t)) {
-				hdd_err("len is not correct for frequency %d",
-					count);
-				goto error;
-			}
+				tb[QCA_WLAN_VENDOR_ATTR_SCAN_FREQUENCIES],
+				tmp) {
 			chan = __ieee80211_get_channel(wiphy,
 							nla_get_u32(attr));
 			if (!chan)
@@ -2428,12 +2412,9 @@ static int __wlan_hdd_cfg80211_vendor_scan(struct wiphy *wiphy,
 	request->wiphy = wiphy;
 	request->scan_start = jiffies;
 
-	ret = __wlan_hdd_cfg80211_scan(wiphy, request, VENDOR_SCAN);
-	if (0 != ret) {
-		hdd_err("Scan Failed. Ret = %d", ret);
-		qdf_mem_free(request);
-		return ret;
-	}
+	if (0 != __wlan_hdd_cfg80211_scan(wiphy, request, VENDOR_SCAN))
+		goto error;
+
 	ret = wlan_hdd_send_scan_start_event(wiphy, wdev, (uintptr_t)request);
 
 	return ret;
@@ -2552,7 +2533,7 @@ static int __wlan_hdd_vendor_abort_scan(
 
 	ret = -EINVAL;
 	if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_SCAN_MAX, data,
-		      data_len, scan_policy)) {
+	    data_len, NULL)) {
 		hdd_err("Invalid ATTR");
 		return ret;
 	}
@@ -2858,6 +2839,7 @@ static int __wlan_hdd_cfg80211_sched_scan_start(struct wiphy *wiphy,
 	 * that the wlan wakelock which was held in the wlan_hdd_cfg80211_scan
 	 * function.
 	 */
+	sme_scan_flush_result(hHal);
 	if (true == pScanInfo->mScanPending) {
 		ret = wlan_hdd_scan_abort(pAdapter);
 		if (ret < 0) {

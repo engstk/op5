@@ -2419,15 +2419,6 @@ ol_txrx_peer_attach(ol_txrx_vdev_handle vdev, uint8_t *peer_mac_addr)
 		if (cmp_wait_mac && !ol_txrx_peer_find_mac_addr_cmp(
 					&temp_peer->mac_addr,
 					&vdev->last_peer_mac_addr)) {
-			TXRX_PRINT(TXRX_PRINT_LEVEL_INFO1,
-				"vdev_id %d (%02x:%02x:%02x:%02x:%02x:%02x) old peer exsist.\n",
-				vdev->vdev_id,
-				vdev->last_peer_mac_addr.raw[0],
-				vdev->last_peer_mac_addr.raw[1],
-				vdev->last_peer_mac_addr.raw[2],
-				vdev->last_peer_mac_addr.raw[3],
-				vdev->last_peer_mac_addr.raw[4],
-				vdev->last_peer_mac_addr.raw[5]);
 			if (qdf_atomic_read(&temp_peer->delete_in_progress)) {
 				vdev->wait_on_peer_id = temp_peer->local_id;
 				qdf_event_reset(&vdev->wait_delete_comp);
@@ -2435,8 +2426,6 @@ ol_txrx_peer_attach(ol_txrx_vdev_handle vdev, uint8_t *peer_mac_addr)
 				break;
 			} else {
 				qdf_spin_unlock_bh(&pdev->peer_ref_mutex);
-				TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
-					"peer not found");
 				return NULL;
 			}
 		}
@@ -2517,8 +2506,8 @@ ol_txrx_peer_attach(ol_txrx_vdev_handle vdev, uint8_t *peer_mac_addr)
 	OL_TXRX_PEER_INC_REF_CNT(peer);
 
 	peer->valid = 1;
-	qdf_timer_init(pdev->osdev, &peer->peer_unmap_timer,
-		       peer_unmap_timer_handler, peer, QDF_TIMER_TYPE_SW);
+	qdf_mc_timer_init(&peer->peer_unmap_timer, QDF_TIMER_TYPE_SW,
+			  peer_unmap_timer_handler, peer);
 
 	ol_txrx_peer_find_hash_add(pdev, peer);
 
@@ -3180,8 +3169,7 @@ int ol_txrx_peer_unref_delete(ol_txrx_peer_handle peer,
 			vdev->wait_on_peer_id = OL_TXRX_INVALID_LOCAL_PEER_ID;
 		}
 
-		qdf_timer_sync_cancel(&peer->peer_unmap_timer);
-		qdf_timer_free(&peer->peer_unmap_timer);
+		qdf_mc_timer_destroy(&peer->peer_unmap_timer);
 
 		/* check whether the parent vdev has no peers left */
 		if (TAILQ_EMPTY(&vdev->peer_list)) {
@@ -3341,12 +3329,11 @@ void peer_unmap_timer_handler(void *data)
 		 peer->mac_addr.raw[0], peer->mac_addr.raw[1],
 		 peer->mac_addr.raw[2], peer->mac_addr.raw[3],
 		 peer->mac_addr.raw[4], peer->mac_addr.raw[5]);
-	if (!cds_is_driver_recovering()) {
-		wma_peer_debug_dump();
+	wma_peer_debug_dump();
+	if (cds_is_self_recovery_enabled())
+		cds_trigger_recovery(false);
+	else
 		QDF_BUG(0);
-	} else {
-		WMA_LOGE("%s: Recovery is in progress, ignore!", __func__);
-	}
 }
 
 
@@ -3408,8 +3395,8 @@ void ol_txrx_peer_detach(ol_txrx_peer_handle peer)
 		qdf_mem_copy(&peer->vdev->last_peer_mac_addr,
 			&peer->mac_addr,
 			sizeof(union ol_txrx_align_mac_addr_t));
-		qdf_timer_start(&peer->peer_unmap_timer,
-				OL_TXRX_PEER_UNMAP_TIMEOUT);
+		qdf_mc_timer_start(&peer->peer_unmap_timer,
+				   OL_TXRX_PEER_UNMAP_TIMEOUT);
 		TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
 			   "%s: started peer_unmap_timer for peer %p",
 			   __func__, peer);
@@ -4774,31 +4761,17 @@ free_buf:
 /* print for every 16th packet */
 #define OL_TXRX_PRINT_RATE_LIMIT_THRESH 0x0f
 
-/** helper function to drop packets
- *  Note: caller must hold the cached buq lock before invoking
- *  this function. Also, it assumes that the pointers passed in
- *  are valid (non-NULL)
- */
-static inline void ol_txrx_drop_frames(
-					struct ol_txrx_cached_bufq_t *bufqi,
-					qdf_nbuf_t rx_buf_list)
-{
-	uint32_t dropped = ol_txrx_drop_nbuf_list(rx_buf_list);
-	bufqi->dropped += dropped;
-	bufqi->qdepth_no_thresh += dropped;
-
-	if (bufqi->qdepth_no_thresh > bufqi->high_water_mark)
-		bufqi->high_water_mark = bufqi->qdepth_no_thresh;
-}
-
 static QDF_STATUS ol_txrx_enqueue_rx_frames(
-					struct ol_txrx_peer_t *peer,
 					struct ol_txrx_cached_bufq_t *bufqi,
 					qdf_nbuf_t rx_buf_list)
 {
 	struct ol_rx_cached_buf *cache_buf;
 	qdf_nbuf_t buf, next_buf;
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+	int dropped = 0;
 	static uint32_t count;
+	bool thresh_crossed = false;
+
 
 	if ((count++ & OL_TXRX_PRINT_RATE_LIMIT_THRESH) == 0)
 		TXRX_PRINT(TXRX_PRINT_LEVEL_INFO1,
@@ -4807,15 +4780,24 @@ static QDF_STATUS ol_txrx_enqueue_rx_frames(
 
 	qdf_spin_lock_bh(&bufqi->bufq_lock);
 	if (bufqi->curr >= bufqi->thresh) {
-		ol_txrx_drop_frames(bufqi, rx_buf_list);
-		qdf_spin_unlock_bh(&bufqi->bufq_lock);
-		return QDF_STATUS_E_FAULT;
+		status = QDF_STATUS_E_FAULT;
+		dropped = ol_txrx_drop_nbuf_list(rx_buf_list);
+		bufqi->dropped += dropped;
+		bufqi->qdepth_no_thresh += dropped;
+
+		if (bufqi->qdepth_no_thresh > bufqi->high_water_mark)
+			bufqi->high_water_mark = bufqi->qdepth_no_thresh;
+
+		thresh_crossed = true;
 	}
+
 	qdf_spin_unlock_bh(&bufqi->bufq_lock);
+
+	if (thresh_crossed)
+		goto end;
 
 	buf = rx_buf_list;
 	while (buf) {
-		QDF_NBUF_CB_RX_PEER_CACHED_FRM(buf) = 1;
 		next_buf = qdf_nbuf_queue_next(buf);
 		cache_buf = qdf_mem_malloc(sizeof(*cache_buf));
 		if (!cache_buf) {
@@ -4826,25 +4808,16 @@ static QDF_STATUS ol_txrx_enqueue_rx_frames(
 			/* Add NULL terminator */
 			qdf_nbuf_set_next(buf, NULL);
 			cache_buf->buf = buf;
-			if (peer && peer->valid) {
-				qdf_spin_lock_bh(&bufqi->bufq_lock);
-				list_add_tail(&cache_buf->list,
+			qdf_spin_lock_bh(&bufqi->bufq_lock);
+			list_add_tail(&cache_buf->list,
 				      &bufqi->cached_bufq);
-				bufqi->curr++;
-				qdf_spin_unlock_bh(&bufqi->bufq_lock);
-			} else {
-				qdf_mem_free(cache_buf);
-				rx_buf_list = buf;
-				qdf_nbuf_set_next(rx_buf_list, next_buf);
-				qdf_spin_lock_bh(&bufqi->bufq_lock);
-				ol_txrx_drop_frames(bufqi, rx_buf_list);
-				qdf_spin_unlock_bh(&bufqi->bufq_lock);
-				return QDF_STATUS_E_FAULT;
-			}
+			bufqi->curr++;
+			qdf_spin_unlock_bh(&bufqi->bufq_lock);
 		}
 		buf = next_buf;
 	}
-	return QDF_STATUS_SUCCESS;
+end:
+	return status;
 }
 /**
  * ol_rx_data_process() - process rx frame
@@ -4881,12 +4854,10 @@ void ol_rx_data_process(struct ol_txrx_peer_t *peer,
 	 * which will be flushed to HDD once that station is registered.
 	 */
 	if (!data_rx) {
-		if (ol_txrx_enqueue_rx_frames(peer, &peer->bufq_info,
-					      rx_buf_list)
+		if (ol_txrx_enqueue_rx_frames(&peer->bufq_info, rx_buf_list)
 				!= QDF_STATUS_SUCCESS)
-			QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_INFO_HIGH,
-				  "%s: failed to enqueue rx frm to cached_bufq",
-				  __func__);
+			TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
+			"failed to enqueue rx frm to cached_bufq");
 	} else {
 #ifdef QCA_CONFIG_SMP
 		/*

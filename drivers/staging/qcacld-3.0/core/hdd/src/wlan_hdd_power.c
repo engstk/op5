@@ -534,11 +534,6 @@ void hdd_conf_ns_offload(hdd_adapter_t *adapter, bool fenable)
 		return;
 	}
 
-	if (QDF_IBSS_MODE == adapter->device_mode) {
-		hdd_debug("NS Offload is not supported in IBSS mode");
-		return;
-	}
-
 	if (fenable)
 		hdd_enable_ns_offload(adapter);
 	else
@@ -1264,7 +1259,7 @@ hdd_suspend_wlan(void (*callback)(void *callbackContext, bool suspended),
 
 		/* stop all TX queues before suspend */
 		hdd_notice("Disabling queues");
-		wlan_hdd_netif_queue_control(pAdapter, WLAN_STOP_ALL_NETIF_QUEUE,
+		wlan_hdd_netif_queue_control(pAdapter, WLAN_NETIF_TX_DISABLE,
 					   WLAN_CONTROL_PATH);
 
 		if (pAdapter->device_mode == QDF_STA_MODE)
@@ -1496,6 +1491,7 @@ QDF_STATUS hdd_wlan_shutdown(void)
 	wlan_deregister_txrx_packetdump();
 
 	hdd_cleanup_scan_queue(pHddCtx);
+	hdd_ipa_uc_ssr_deinit();
 	hdd_reset_all_adapters(pHddCtx);
 
 	/* Flush cached rx frame queue */
@@ -1523,7 +1519,6 @@ QDF_STATUS hdd_wlan_shutdown(void)
 		hdd_err("Failed to close CDS Scheduler");
 		QDF_ASSERT(false);
 	}
-	hdd_ipa_uc_ssr_deinit();
 
 	qdf_mc_timer_stop(&pHddCtx->tdls_source_timer);
 
@@ -1632,8 +1627,6 @@ QDF_STATUS hdd_wlan_re_init(void)
 	pHddCtx->last_scan_reject_reason = 0;
 	pHddCtx->last_scan_reject_timestamp = 0;
 
-	hdd_set_roaming_in_progress(false);
-	complete(&pAdapter->roaming_comp_var);
 	pHddCtx->btCoexModeSet = false;
 
 	/* Allow the phone to go to sleep */
@@ -1646,9 +1639,6 @@ QDF_STATUS hdd_wlan_re_init(void)
 	}
 
 	hdd_lpass_notify_start(pHddCtx);
-	/* set chip power save failure detected callback */
-	sme_set_chip_pwr_save_fail_cb(pHddCtx->hHal,
-				      hdd_chip_pwr_save_fail_detected_cb);
 
 	hdd_err("WLAN host driver reinitiation completed!");
 	goto success;
@@ -2034,11 +2024,23 @@ next_adapter:
 			return -EAGAIN;
 		}
 
-		hdd_abort_mac_scan(pHddCtx, pAdapter->sessionId,
-				   INVALID_SCAN_ID, eCSR_SCAN_ABORT_DEFAULT);
+		if (pScanInfo->mScanPending) {
+			INIT_COMPLETION(pScanInfo->abortscan_event_var);
+			hdd_abort_mac_scan(pHddCtx, pAdapter->sessionId,
+					   INVALID_SCAN_ID,
+					   eCSR_SCAN_ABORT_DEFAULT);
 
-		/* for suspend case, don't wait for scan cancel completion */
-
+			status =
+				wait_for_completion_timeout(&pScanInfo->
+				    abortscan_event_var,
+				    msecs_to_jiffies(WLAN_WAIT_TIME_ABORTSCAN));
+			if (!status) {
+				hdd_err("Timeout occurred while waiting for abort scan");
+				wlan_hdd_inc_suspend_stats(pHddCtx,
+							   SUSPEND_FAIL_SCAN);
+				return -ETIME;
+			}
+		}
 		status = hdd_get_next_adapter(pHddCtx, pAdapterNode, &pNext);
 		pAdapterNode = pNext;
 	}

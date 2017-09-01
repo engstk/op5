@@ -4422,6 +4422,7 @@ QDF_STATUS sme_qos_process_assoc_complete_ev(tpAniSirGlobal pMac, uint8_t sessio
 					  "%s: %d: On session %d AC %d is in wrong state %d",
 					  __func__, __LINE__, sessionId, ac,
 					  pACInfo->curr_state);
+				QDF_ASSERT(0);
 				break;
 			}
 		}
@@ -4461,6 +4462,7 @@ QDF_STATUS sme_qos_process_reassoc_req_ev(tpAniSirGlobal pMac, uint8_t sessionId
 		    (pSession->ac_info[1].curr_state != SME_QOS_HANDOFF) ||
 		    (pSession->ac_info[2].curr_state != SME_QOS_HANDOFF) ||
 		    (pSession->ac_info[3].curr_state != SME_QOS_HANDOFF)) {
+			QDF_ASSERT(0);
 			return QDF_STATUS_E_FAILURE;
 		}
 		sme_qos_process_ft_reassoc_req_ev(sessionId);
@@ -4549,6 +4551,7 @@ QDF_STATUS sme_qos_process_reassoc_req_ev(tpAniSirGlobal pMac, uint8_t sessionId
 				  "%s: %d: On session %d AC %d is in wrong state %d",
 				  __func__, __LINE__,
 				  sessionId, ac, pACInfo->curr_state);
+			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -4769,6 +4772,7 @@ QDF_STATUS sme_qos_process_reassoc_success_ev(tpAniSirGlobal mac_ctx,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  FL("session %d AC %d is in wrong state %d"),
 				  sessionid, ac, ac_info->curr_state);
+			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -4836,6 +4840,7 @@ QDF_STATUS sme_qos_process_reassoc_failure_ev(tpAniSirGlobal pMac,
 				  "%s: %d: On session %d AC %d is in wrong state %d",
 				  __func__, __LINE__,
 				  sessionId, ac, pACInfo->curr_state);
+			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -4890,6 +4895,7 @@ QDF_STATUS sme_qos_process_handoff_assoc_req_ev(tpAniSirGlobal pMac,
 				  "%s: %d: On session %d AC %d is in wrong state %d",
 				  __func__, __LINE__,
 				  sessionId, ac, pACInfo->curr_state);
+			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -4962,6 +4968,7 @@ QDF_STATUS sme_qos_process_handoff_success_ev(tpAniSirGlobal pMac,
 				  "%s: %d: On session %d AC %d is in wrong state %d",
 				  __func__, __LINE__,
 				  sessionId, ac, pACInfo->curr_state);
+			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -5021,6 +5028,7 @@ QDF_STATUS sme_qos_process_handoff_failure_ev(tpAniSirGlobal pMac,
 				  "%s: %d: On session %d AC %d is in wrong state %d",
 				  __func__, __LINE__,
 				  sessionId, ac, pACInfo->curr_state);
+			QDF_ASSERT(0);
 			break;
 		}
 	}
@@ -5196,6 +5204,7 @@ QDF_STATUS sme_qos_process_preauth_success_ind(tpAniSirGlobal mac_ctx,
 			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				  FL("Session %d AC %d is in wrong state %d"),
 				  sessionid, ac, ac_info->curr_state);
+			QDF_ASSERT(0);
 			break;
 		}
 	}

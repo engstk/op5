@@ -87,7 +87,9 @@ static struct pkt_filter_cfg
 
 	{ .filter_action = 1,
 	  .filter_id = 0,
-	  .num_params = 3,
+//#ifdef VENDOR_EDIT
+	  .num_params = 2,
+//#endif /* VENDOR_EDIT */
 	  .params_data = {
 		 { .protocol_layer = 1,
 		   .compare_flag = 5,
@@ -95,12 +97,16 @@ static struct pkt_filter_cfg
 		   .data_length = 1,
 		   .compare_data = {1, 0, 0, 0, 0, 0, 0, 0},
 		   .data_mask = {0, 0, 0, 0, 0, 0, 0, 0} },
+//#ifdef VENDOR_EDIT
+/*
 		 { .protocol_layer = 2,
 		   .compare_flag = 3,
 		   .data_offset = 6,
 		   .data_length = 2,
 		   .compare_data = {8, 0, 0, 0, 0, 0, 0, 0},
 		   .data_mask = {0, 0, 0, 0, 0, 0, 0, 0} },
+*/
+//#endif /* VENDOR_EDIT */
 		 { .protocol_layer = 3,
 		   .compare_flag = 4,
 		   .data_offset = 16,

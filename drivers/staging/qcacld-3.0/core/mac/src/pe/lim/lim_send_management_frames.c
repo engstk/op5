@@ -563,7 +563,7 @@ lim_send_probe_rsp_mgmt_frame(tpAniSirGlobal mac_ctx,
 	uint8_t noa_ie[SIR_MAX_NOA_ATTR_LEN + SIR_P2P_IE_HEADER_LEN];
 	uint8_t sme_sessionid = 0;
 	bool is_vht_enabled = false;
-	tDot11fIEExtCap extracted_ext_cap = {0};
+	tDot11fIEExtCap extracted_ext_cap;
 	bool extracted_ext_cap_flag = false;
 
 	/* We don't answer requests in this case*/
@@ -1262,16 +1262,8 @@ lim_send_assoc_rsp_mgmt_frame(tpAniSirGlobal mac_ctx,
 					&frm.VHTOperation);
 			is_vht = true;
 		} else {
-			/*
-			 * 2G-AS platform: SAP associates with HT (11n)clients
-			 * as 2x1 in 2G and 2X2 in 5G
-			 * Non-2G-AS platform: SAP associates with HT (11n)
-			 * clients as 2X2 in 2G and 5G
-			 * 5G-AS: Don’t care
-			 */
-			if (frm.HTCaps.present && mac_ctx->hw_dbs_capable &&
-				mac_ctx->lteCoexAntShare &&
-				IS_24G_CH(pe_session->currentOperChannel))
+			/* Advertise 1x1 if either is HT-STA */
+			if (frm.HTCaps.present && mac_ctx->hw_dbs_capable)
 				frm.HTCaps.supportedMCSSet[1] = 0;
 		}
 		if (pe_session->vhtCapability &&

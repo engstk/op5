@@ -71,12 +71,12 @@ tSirRetStatus sme_post_pe_message(tpAniSirGlobal mac_ctx, tpSirMsgQ pMsg);
 
 /**
  * sme_ps_enable_auto_ps_timer(): Enable power-save auto timer with timeout
- * @hal_ctx:	HAL context
- * @session_id:	adapter session Id
- * @timeout:	timeout period in ms
+ * @hal_ctx:       HAL context
+ * @session_id:    adapter session Id
+ * @timeout:       timeout period in ms
  * @force_trigger: forcing power-save timer to trigger
  *
- * Returns:	0 on success, non-zero on failure
+ * Returns: QDF_STATUS
  */
 QDF_STATUS sme_ps_enable_auto_ps_timer(tHalHandle hal_ctx,
 		uint32_t sessionId, uint32_t timeout, bool force_trigger);

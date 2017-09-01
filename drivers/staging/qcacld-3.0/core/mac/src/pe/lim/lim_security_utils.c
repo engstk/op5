@@ -596,7 +596,7 @@ lim_encrypt_auth_frame(tpAniSirGlobal pMac, uint8_t keyId, uint8_t *pKey,
  * @return None
  */
 
-void lim_compute_crc32(uint8_t *pDest, uint8_t *pSrc, uint16_t len)
+void lim_compute_crc32(uint8_t *pDest, uint8_t *pSrc, uint8_t len)
 {
 	uint32_t crc;
 	int i;
@@ -679,7 +679,7 @@ lim_rc4(uint8_t *pDest, uint8_t *pSrc, uint8_t *seed, uint32_t keyLength,
 	{
 		uint8_t i = ctx.i;
 		uint8_t j = ctx.j;
-		uint16_t len = frameLen;
+		uint8_t len = (uint8_t) frameLen;
 
 		while (len-- > 0) {
 			uint8_t temp1, temp2;
@@ -754,7 +754,7 @@ lim_decrypt_auth_frame(tpAniSirGlobal pMac, uint8_t *pKey, uint8_t *pEncrBody,
 	/* Compute CRC-32 and place them in last 4 bytes of encrypted body */
 	lim_compute_crc32(icv,
 			  (uint8_t *) pPlainBody,
-			  (frameLen - SIR_MAC_WEP_ICV_LENGTH));
+			  (uint8_t) (frameLen - SIR_MAC_WEP_ICV_LENGTH));
 
 	/* Compare RX_ICV with computed ICV */
 	for (i = 0; i < SIR_MAC_WEP_ICV_LENGTH; i++) {

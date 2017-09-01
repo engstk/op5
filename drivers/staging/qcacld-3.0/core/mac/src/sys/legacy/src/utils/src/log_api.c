@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -192,4 +192,9 @@ void log_debug(tpAniSirGlobal pMac, uint8_t modId, uint32_t debugLevel,
 
 	vsnprintf(logBuffer, LOG_SIZE - 1, pStr, marker);
 	QDF_TRACE(qdf_module_id, qdf_debug_level, "%s", logBuffer);
+
+	/* The caller must check loglevel */
+	QDF_ASSERT((debugLevel <=
+		    pMac->utils.gLogDbgLevel[LOG_INDEX_FOR_MODULE(modId)])
+		   && (LOGP != debugLevel));
 } /*** end log_debug() ***/

@@ -530,8 +530,7 @@ static QDF_STATUS lim_mgmt_tdls_tx_complete(tpAniSirGlobal mac_ctx,
 static tSirRetStatus lim_send_tdls_dis_req_frame(tpAniSirGlobal pMac,
 						 struct qdf_mac_addr peer_mac,
 						 uint8_t dialog,
-						 tpPESession psessionEntry,
-						 enum sir_wifi_traffic_ac ac)
+						 tpPESession psessionEntry)
 {
 	tDot11fTDLSDisReq tdlsDisReq;
 	uint32_t status = 0;
@@ -644,10 +643,10 @@ static tSirRetStatus lim_send_tdls_dis_req_frame(tpAniSirGlobal pMac,
 	/* fill out the buffer descriptor */
 
 	header_offset = lim_prepare_tdls_frame_header(pMac, pFrame,
-			      LINK_IDEN_ADDR_OFFSET(tdlsDisReq), TDLS_LINK_AP,
-			      TDLS_INITIATOR,
-			      (ac == WIFI_AC_VI) ? TID_AC_VI : TID_AC_BK,
-			      psessionEntry);
+						      LINK_IDEN_ADDR_OFFSET
+							      (tdlsDisReq), TDLS_LINK_AP,
+						      TDLS_INITIATOR, TID_AC_VI,
+						      psessionEntry);
 
 	status = dot11f_pack_tdls_dis_req(pMac, &tdlsDisReq, pFrame
 					  + header_offset, nPayload, &nPayload);
@@ -1155,8 +1154,7 @@ tSirRetStatus lim_send_tdls_link_setup_req_frame(tpAniSirGlobal pMac,
 						 uint8_t dialog,
 						 tpPESession psessionEntry,
 						 uint8_t *addIe,
-						 uint16_t addIeLen,
-						 enum sir_wifi_traffic_ac ac)
+						 uint16_t addIeLen)
 {
 	tDot11fTDLSSetupReq tdlsSetupReq;
 	uint16_t caps = 0;
@@ -1361,10 +1359,10 @@ tSirRetStatus lim_send_tdls_link_setup_req_frame(tpAniSirGlobal pMac,
 	/* fill out the buffer descriptor */
 
 	header_offset = lim_prepare_tdls_frame_header(pMac, pFrame,
-			LINK_IDEN_ADDR_OFFSET(tdlsSetupReq),
-			TDLS_LINK_AP, TDLS_INITIATOR,
-			(ac == WIFI_AC_VI) ? TID_AC_VI : TID_AC_BK,
-			psessionEntry);
+						      LINK_IDEN_ADDR_OFFSET
+							      (tdlsSetupReq), TDLS_LINK_AP,
+						      TDLS_INITIATOR, TID_AC_VI,
+						      psessionEntry);
 
 	lim_log(pMac, LOGW,
 		FL(
@@ -1436,8 +1434,7 @@ tSirRetStatus lim_send_tdls_teardown_frame(tpAniSirGlobal pMac,
 					   uint16_t reason,
 					   uint8_t responder,
 					   tpPESession psessionEntry,
-					   uint8_t *addIe, uint16_t addIeLen,
-					   enum sir_wifi_traffic_ac ac)
+					   uint8_t *addIe, uint16_t addIeLen)
 {
 	tDot11fTDLSTeardown teardown;
 	uint32_t status = 0;
@@ -1555,12 +1552,16 @@ tSirRetStatus lim_send_tdls_teardown_frame(tpAniSirGlobal pMac,
 	/* fill out the buffer descriptor */
 	lim_log(pMac, LOGE, FL("Reason of TDLS Teardown: %d"), reason);
 	header_offset = lim_prepare_tdls_frame_header(pMac, pFrame,
-			LINK_IDEN_ADDR_OFFSET(teardown),
-			(reason == eSIR_MAC_TDLS_TEARDOWN_PEER_UNREACHABLE) ?
-			TDLS_LINK_AP : TDLS_LINK_DIRECT,
-			(responder == true) ? TDLS_RESPONDER : TDLS_INITIATOR,
-			(ac == WIFI_AC_VI) ? TID_AC_VI : TID_AC_BK,
-			psessionEntry);
+						      LINK_IDEN_ADDR_OFFSET
+							      (teardown),
+						      (reason ==
+						       eSIR_MAC_TDLS_TEARDOWN_PEER_UNREACHABLE)
+						      ? TDLS_LINK_AP :
+						      TDLS_LINK_DIRECT,
+						      (responder ==
+						       true) ? TDLS_RESPONDER :
+						      TDLS_INITIATOR, TID_AC_VI,
+						      psessionEntry);
 
 	status = dot11f_pack_tdls_teardown(pMac, &teardown, pFrame
 					   + header_offset, nPayload, &nPayload);
@@ -1644,8 +1645,7 @@ static tSirRetStatus lim_send_tdls_setup_rsp_frame(tpAniSirGlobal pMac,
 						   tpPESession psessionEntry,
 						   etdlsLinkSetupStatus setupStatus,
 						   uint8_t *addIe,
-						   uint16_t addIeLen,
-						   enum sir_wifi_traffic_ac ac)
+						   uint16_t addIeLen)
 {
 	tDot11fTDLSSetupRsp tdlsSetupRsp;
 	uint32_t status = 0;
@@ -1849,10 +1849,10 @@ static tSirRetStatus lim_send_tdls_setup_rsp_frame(tpAniSirGlobal pMac,
 	/* fill out the buffer descriptor */
 
 	header_offset = lim_prepare_tdls_frame_header(pMac, pFrame,
-			LINK_IDEN_ADDR_OFFSET(tdlsSetupRsp), TDLS_LINK_AP,
-			TDLS_RESPONDER,
-			(ac == WIFI_AC_VI) ? TID_AC_VI : TID_AC_BK,
-			psessionEntry);
+						      LINK_IDEN_ADDR_OFFSET
+							      (tdlsSetupRsp), TDLS_LINK_AP,
+						      TDLS_RESPONDER, TID_AC_VI,
+						      psessionEntry);
 
 	lim_log(pMac, LOG1,
 		FL(
@@ -1921,9 +1921,7 @@ tSirRetStatus lim_send_tdls_link_setup_cnf_frame(tpAniSirGlobal pMac,
 						 uint8_t dialog,
 						 uint32_t peerCapability,
 						 tpPESession psessionEntry,
-						 uint8_t *addIe,
-						 uint16_t addIeLen,
-						 enum sir_wifi_traffic_ac ac)
+						 uint8_t *addIe, uint16_t addIeLen)
 {
 	tDot11fTDLSSetupCnf tdlsSetupCnf;
 	uint32_t status = 0;
@@ -2055,11 +2053,10 @@ tSirRetStatus lim_send_tdls_link_setup_cnf_frame(tpAniSirGlobal pMac,
 	/* fill out the buffer descriptor */
 
 	header_offset = lim_prepare_tdls_frame_header(pMac, pFrame,
-				LINK_IDEN_ADDR_OFFSET(tdlsSetupCnf),
-				TDLS_LINK_AP,
-				TDLS_INITIATOR,
-				(ac == WIFI_AC_VI) ? TID_AC_VI : TID_AC_BK,
-				psessionEntry);
+						      LINK_IDEN_ADDR_OFFSET
+							      (tdlsSetupCnf), TDLS_LINK_AP,
+						      TDLS_INITIATOR, TID_AC_VI,
+						      psessionEntry);
 
 	status = dot11f_pack_tdls_setup_cnf(pMac, &tdlsSetupCnf, pFrame
 					    + header_offset, nPayload, &nPayload);
@@ -2929,8 +2926,7 @@ tSirRetStatus lim_process_sme_tdls_mgmt_send_req(tpAniSirGlobal mac_ctx,
 		lim_log(mac_ctx, LOG1, FL("Transmit Discovery Request Frame"));
 		/* format TDLS discovery request frame and transmit it */
 		lim_send_tdls_dis_req_frame(mac_ctx, send_req->peer_mac,
-					    send_req->dialog, session_entry,
-					    send_req->ac);
+					    send_req->dialog, session_entry);
 		result_code = eSIR_SME_SUCCESS;
 		break;
 	case SIR_MAC_TDLS_DIS_RSP:
@@ -2946,8 +2942,7 @@ tSirRetStatus lim_process_sme_tdls_mgmt_send_req(tpAniSirGlobal mac_ctx,
 		lim_send_tdls_link_setup_req_frame(mac_ctx,
 			send_req->peer_mac, send_req->dialog, session_entry,
 			&send_req->addIe[0],
-			(send_req->length - sizeof(tSirTdlsSendMgmtReq)),
-			send_req->ac);
+			(send_req->length - sizeof(tSirTdlsSendMgmtReq)));
 		result_code = eSIR_SME_SUCCESS;
 		break;
 	case SIR_MAC_TDLS_SETUP_RSP:
@@ -2955,8 +2950,7 @@ tSirRetStatus lim_process_sme_tdls_mgmt_send_req(tpAniSirGlobal mac_ctx,
 		lim_send_tdls_setup_rsp_frame(mac_ctx,
 			send_req->peer_mac, send_req->dialog, session_entry,
 			send_req->statusCode, &send_req->addIe[0],
-			(send_req->length - sizeof(tSirTdlsSendMgmtReq)),
-			send_req->ac);
+			(send_req->length - sizeof(tSirTdlsSendMgmtReq)));
 		result_code = eSIR_SME_SUCCESS;
 		break;
 	case SIR_MAC_TDLS_SETUP_CNF:
@@ -2965,8 +2959,7 @@ tSirRetStatus lim_process_sme_tdls_mgmt_send_req(tpAniSirGlobal mac_ctx,
 			send_req->peer_mac, send_req->dialog,
 			send_req->peerCapability, session_entry,
 			&send_req->addIe[0],
-			(send_req->length - sizeof(tSirTdlsSendMgmtReq)),
-			send_req->ac);
+			(send_req->length - sizeof(tSirTdlsSendMgmtReq)));
 		result_code = eSIR_SME_SUCCESS;
 		break;
 	case SIR_MAC_TDLS_TEARDOWN:
@@ -2975,8 +2968,7 @@ tSirRetStatus lim_process_sme_tdls_mgmt_send_req(tpAniSirGlobal mac_ctx,
 			send_req->peer_mac, send_req->statusCode,
 			send_req->responder, session_entry,
 			&send_req->addIe[0],
-			(send_req->length - sizeof(tSirTdlsSendMgmtReq)),
-			send_req->ac);
+			(send_req->length - sizeof(tSirTdlsSendMgmtReq)));
 		result_code = eSIR_SME_SUCCESS;
 		break;
 	case SIR_MAC_TDLS_PEER_TRAFFIC_IND:
@@ -3436,10 +3428,8 @@ tSirRetStatus lim_delete_tdls_peers(tpAniSirGlobal mac_ctx,
 	}
 
 	lim_check_aid_and_delete_peer(mac_ctx, session_entry);
-
 	if (lim_is_roam_synch_in_progress(session_entry))
 		return eSIR_SUCCESS;
-
 	lim_send_sme_tdls_delete_all_peer_ind(mac_ctx, session_entry);
 
 	return eSIR_SUCCESS;

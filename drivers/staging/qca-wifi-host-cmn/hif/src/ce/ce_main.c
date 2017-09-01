@@ -891,7 +891,18 @@ struct CE_handle *ce_init(struct hif_softc *scn,
 				 */
 				HIF_ERROR("%s: dest ring has no mem",
 					  __func__);
-				goto error_no_dma_mem;
+				if (malloc_src_ring) {
+					qdf_mem_free(CE_state->src_ring);
+					CE_state->src_ring = NULL;
+					malloc_src_ring = false;
+				}
+				if (malloc_CE_state) {
+					/* allocated CE_state locally */
+					scn->ce_id_to_state[CE_id] = NULL;
+					qdf_mem_free(CE_state);
+					malloc_CE_state = false;
+				}
+				return NULL;
 			}
 
 			dest_ring = CE_state->dest_ring =
@@ -1673,7 +1684,6 @@ static void hif_post_recv_buffers_failure(struct HIF_CE_pipe_info *pipe_info,
 	 */
 	if (bufs_needed_tmp == CE_state->dest_ring->nentries - 1)
 		qdf_sched_work(scn->qdf_dev, &CE_state->oom_allocation_work);
-
 }
 
 
@@ -1768,10 +1778,9 @@ static int hif_post_recv_buffers_for_pipe(struct HIF_CE_pipe_info *pipe_info)
 
 /*
  * Try to post all desired receive buffers for all pipes.
- * Returns 0 for non fastpath rx copy engine as
- * oom_allocation_work will be scheduled to recover any
- * failures, non-zero if unable to completely replenish
- * receive buffers for fastpath rx Copy engine.
+ * Returns 0 if all desired buffers are posted,
+ * non-zero if were were unable to completely
+ * replenish receive buffers.
  */
 static int hif_post_recv_buffers(struct hif_softc *scn)
 {
@@ -1790,9 +1799,7 @@ static int hif_post_recv_buffers(struct hif_softc *scn)
 			continue;
 		}
 
-		if (hif_post_recv_buffers_for_pipe(pipe_info) &&
-			ce_state->htt_rx_data &&
-			scn->fastpath_mode_on) {
+		if (hif_post_recv_buffers_for_pipe(pipe_info)) {
 			rv = 1;
 			goto done;
 		}
@@ -1982,7 +1989,7 @@ void hif_ce_stop(struct hif_softc *scn)
 	 * before cleaning up any memory, ensure irq &
 	 * bottom half contexts will not be re-entered
 	 */
-	hif_disable_isr(&scn->osc);
+	hif_nointrs(scn);
 	hif_destroy_oom_work(scn);
 	scn->hif_init_done = false;
 

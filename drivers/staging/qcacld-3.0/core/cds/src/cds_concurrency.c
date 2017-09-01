@@ -2168,43 +2168,6 @@ static void cds_update_conc_list(uint32_t conn_index,
 }
 
 /**
- * cds_mode_specific_vdev_id() - provides the
- * vdev id of specific mode
- * @mode: type of connection
- *
- * This function provides the vdev id of specific mode
- *
- * Note: This gives the first vdev id of the mode type in a
- * sta+sta or sap+sap or p2p + p2p case
- *
- * Return: vdev id of specific type or CDS_INVALID_VDEV_ID if no vdev
- *         found for the given mode
- */
-uint32_t cds_mode_specific_vdev_id(enum cds_con_mode mode)
-{
-	uint32_t conn_index;
-	uint32_t vdev_id = CDS_INVALID_VDEV_ID;
-	cds_context_type *cds_ctx;
-
-	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
-	if (!cds_ctx) {
-		cds_err("Invalid CDS Context");
-		return vdev_id;
-	}
-	qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
-	for (conn_index = 0; conn_index < MAX_NUMBER_OF_CONC_CONNECTIONS;
-		 conn_index++) {
-		if ((conc_connection_list[conn_index].mode == mode) &&
-			conc_connection_list[conn_index].in_use) {
-			vdev_id = conc_connection_list[conn_index].vdev_id;
-			break;
-		}
-	}
-	qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
-	return vdev_id;
-}
-
-/**
  * cds_mode_specific_connection_count() - provides the
  * count of connections of specific mode
  * @mode: type of connection
@@ -2238,31 +2201,6 @@ uint32_t cds_mode_specific_connection_count(enum cds_con_mode mode,
 	}
 	qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
 	return count;
-}
-
-QDF_STATUS cds_check_conn_with_mode_and_vdev_id(enum cds_con_mode mode,
-						uint32_t vdev_id)
-{
-	QDF_STATUS qdf_status = QDF_STATUS_E_FAILURE;
-	uint32_t conn_index = 0;
-	cds_context_type *cds_ctx;
-
-	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
-	if (!cds_ctx) {
-		cds_err("Invalid CDS Context");
-		return qdf_status;
-	}
-	qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
-	while (CONC_CONNECTION_LIST_VALID_INDEX(conn_index)) {
-		if ((conc_connection_list[conn_index].mode == mode) &&
-		    (conc_connection_list[conn_index].vdev_id == vdev_id)) {
-			qdf_status = QDF_STATUS_SUCCESS;
-			break;
-		}
-		conn_index++;
-	}
-	qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
-	return qdf_status;
 }
 
 /**
@@ -3770,13 +3708,7 @@ static void cds_set_pcl_for_existing_combo(enum cds_con_mode mode)
 {
 	struct cds_conc_connection_info info;
 	enum tQDF_ADAPTER_MODE pcl_mode;
-	cds_context_type *cds_ctx;
 
-	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
-	if (!cds_ctx) {
-		cds_err("Invalid CDS Context");
-		return;
-	}
 	switch (mode) {
 	case CDS_STA_MODE:
 		pcl_mode = QDF_STA_MODE;
@@ -3797,19 +3729,16 @@ static void cds_set_pcl_for_existing_combo(enum cds_con_mode mode)
 		cds_err("Invalid mode to set PCL");
 		return;
 	};
-	qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
+
 	if (cds_mode_specific_connection_count(mode, NULL) > 0) {
 		/* Check, store and temp delete the mode's parameter */
 		cds_store_and_del_conn_info(mode, &info);
-		qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
 		/* Set the PCL to the FW since connection got updated */
 		cds_pdev_set_pcl(pcl_mode);
 		cds_info("Set PCL to FW for mode:%d", mode);
 		/* Restore the connection info */
-		qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
 		cds_restore_deleted_conn_info(&info);
 	}
-	qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
 }
 
 /**
@@ -4027,19 +3956,16 @@ QDF_STATUS cds_get_pcl_for_existing_conn(enum cds_con_mode mode,
 	}
 
 	cds_info("get pcl for existing conn:%d", mode);
-	qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
+
 	if (cds_mode_specific_connection_count(mode, NULL) > 0) {
 		/* Check, store and temp delete the mode's parameter */
 		cds_store_and_del_conn_info(mode, &info);
-		qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
 		/* Get the PCL */
 		status = cds_get_pcl(mode, pcl_ch, len, pcl_weight, weight_len);
 		cds_info("Get PCL to FW for mode:%d", mode);
 		/* Restore the connection info */
-		qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
 		cds_restore_deleted_conn_info(&info);
 	}
-	qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
 	return status;
 }
 
@@ -4065,12 +3991,7 @@ void cds_decr_session_set_pcl(enum tQDF_ADAPTER_MODE mode,
 		return;
 	}
 
-	qdf_status = cds_decr_active_session(mode, session_id);
-	if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
-		cds_err("Invalid active session");
-		return;
-	}
-
+	cds_decr_active_session(mode, session_id);
 	/*
 	 * After the removal of this connection, we need to check if
 	 * a STA connection still exists. The reason for this is that
@@ -4111,35 +4032,25 @@ void cds_decr_session_set_pcl(enum tQDF_ADAPTER_MODE mode,
  * mode. In the case of STA/P2P CLI/IBSS upon disconnection it is decremented
  * In the case of SAP/P2P GO upon bss stop it is decremented
  *
- * Return: QDF_STATUS
+ * Return: None
  */
-QDF_STATUS cds_decr_active_session(enum tQDF_ADAPTER_MODE mode,
+void cds_decr_active_session(enum tQDF_ADAPTER_MODE mode,
 				  uint8_t session_id)
 {
 	hdd_context_t *hdd_ctx;
 	cds_context_type *cds_ctx;
 	hdd_adapter_t *sap_adapter;
-	QDF_STATUS qdf_status;
 
 	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
 	if (!cds_ctx) {
 		cds_err("Invalid CDS Context");
-		return QDF_STATUS_E_INVAL;
+		return;
 	}
 
 	hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
 	if (!hdd_ctx) {
 		cds_err("HDD context is NULL");
-		return QDF_STATUS_E_EMPTY;
-	}
-
-	qdf_status = cds_check_conn_with_mode_and_vdev_id(
-				cds_convert_device_mode_to_qdf_type(mode),
-				session_id);
-	if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
-		cds_err("No connection with mode:%d vdev_id:%d",
-			cds_convert_device_mode_to_qdf_type(mode), session_id);
-		return qdf_status;
+		return;
 	}
 
 	switch (mode) {
@@ -4190,8 +4101,6 @@ QDF_STATUS cds_decr_active_session(enum tQDF_ADAPTER_MODE mode,
 	cds_set_tdls_ct_mode(hdd_ctx);
 
 	cds_dump_current_concurrency();
-
-	return qdf_status;
 }
 
 /**
@@ -7456,14 +7365,11 @@ static void cds_check_sta_ap_concurrent_ch_intf(void *data)
 	if (hal_handle == NULL)
 		return;
 
-	qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
 	intf_ch = wlansap_check_cc_intf(hdd_ap_ctx->sapContext);
 	cds_info("intf_ch:%d", intf_ch);
 
-	if (intf_ch == 0) {
-		qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
+	if (intf_ch == 0)
 		return;
-	}
 
 	cds_info("SAP restarts due to MCC->SCC switch, orig chan: %d, new chan: %d",
 		hdd_ap_ctx->sapConfig.channel, intf_ch);
@@ -7488,7 +7394,7 @@ static void cds_check_sta_ap_concurrent_ch_intf(void *data)
 	} else {
 		cds_restart_sap(ap_adapter);
 	}
-	qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
+
 }
 
 /**
@@ -9092,169 +8998,6 @@ QDF_STATUS cds_reset_sap_mandatory_channels(void)
 }
 
 /**
- * cds_enable_disable_sap_mandatory_chan_list() - enable/disable SAP mandatory
- * channel list
- * @val: Enable or Disable sap mandatory chan list
- *
- * enable/disable the SAP mandatory channel list
- *
- * Return: None
- */
-void cds_enable_disable_sap_mandatory_chan_list(bool val)
-{
-	cds_context_type *cds_ctx;
-
-	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
-	if (!cds_ctx) {
-		cds_err("Invalid CDS Context");
-		return;
-	}
-
-	cds_debug("enable_sap_mandatory_chan_list %d", val);
-	cds_ctx->enable_sap_mandatory_chan_list = val;
-}
-
-/**
- * cds_add_sap_mandatory_chan() - Add chan to SAP mandatory chan
- * list
- * @chan: Channel to be added
- *
- * Add chan to SAP mandatory channel list
- *
- * Return: None
- */
-void cds_add_sap_mandatory_chan(uint8_t chan)
-{
-	cds_context_type *cds_ctx;
-	int i;
-
-	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
-	if (!cds_ctx) {
-		cds_err("Invalid CDS Context");
-		return;
-	}
-	for (i = 0; i < cds_ctx->sap_mandatory_channels_len; i++) {
-		if (chan == cds_ctx->sap_mandatory_channels[i])
-			return;
-	}
-
-	cds_debug("chan %hu", chan);
-	cds_ctx->sap_mandatory_channels[cds_ctx->sap_mandatory_channels_len++]
-		= chan;
-}
-
-/**
- * cds_is_sap_mandatory_chan_list_enabled() - Return the SAP mandatory chan
- * list enabled status
- *
- * Get the SAP mandatory chan list enabled status
- *
- * Return: Enable or Disable
- */
-bool cds_is_sap_mandatory_chan_list_enabled(void)
-{
-	cds_context_type *cds_ctx;
-	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
-
-	if (!cds_ctx) {
-		cds_err("Invalid CDS Context");
-		return false;
-	}
-
-	return cds_ctx->enable_sap_mandatory_chan_list;
-}
-
-/**
- * cds_get_sap_mandatory_chan_list_len() - Return the SAP mandatory chan list
- * len
- *
- * Get the SAP mandatory chan list len
- *
- * Return: Channel list length
- */
-uint32_t cds_get_sap_mandatory_chan_list_len(void)
-{
-	cds_context_type *cds_ctx;
-	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
-
-	if (!cds_ctx) {
-		cds_err("Invalid CDS Context");
-		return false;
-	}
-
-	return cds_ctx->sap_mandatory_channels_len;
-}
-
-/**
- * cds_init_sap_mandatory_2g_chan() - Init 2.4G SAP mandatory chan list
- *
- * Initialize the 2.4G SAP mandatory channels
- *
- * Return: Success or Failure
- */
-void cds_init_sap_mandatory_2g_chan(void)
-{
-	cds_context_type *cds_ctx;
-	uint8_t chan_list[QDF_MAX_NUM_CHAN] = {0};
-	uint32_t len = 0;
-	int i;
-	QDF_STATUS status;
-
-	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
-	if (!cds_ctx) {
-		cds_err("Invalid CDS Context");
-		return;
-	}
-
-	status = cds_get_valid_chans(chan_list, &len);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		cds_err("Error in getting valid channels");
-		return;
-	}
-	for (i = 0; i < len; i++) {
-		if (CDS_IS_CHANNEL_24GHZ(chan_list[i])) {
-			cds_err("Add chan %hu to mandatory list", chan_list[i]);
-			cds_ctx->sap_mandatory_channels[
-			cds_ctx->sap_mandatory_channels_len++] = chan_list[i];
-		}
-	}
-	return;
-}
-
-/**
- * cds_remove_sap_mandatory_chan() - Remove chan from SAP mandatory chan list
- *
- * Remove chan from SAP mandatory chan list
- *
- * Return: Success or Failure
- */
-void cds_remove_sap_mandatory_chan(uint8_t chan)
-{
-	cds_context_type *cds_ctx;
-	uint8_t chan_list[QDF_MAX_NUM_CHAN] = {0};
-	uint32_t num_chan = 0;
-	int i;
-
-	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
-	if (!cds_ctx) {
-		cds_err("Invalid CDS Context");
-		return;
-	}
-
-	for (i = 0; i < cds_ctx->sap_mandatory_channels_len; i++) {
-		if (chan == cds_ctx->sap_mandatory_channels[i])
-			continue;
-		chan_list[num_chan++] = cds_ctx->sap_mandatory_channels[i];
-	}
-
-	qdf_mem_zero(cds_ctx->sap_mandatory_channels,
-			cds_ctx->sap_mandatory_channels_len);
-	qdf_mem_copy(cds_ctx->sap_mandatory_channels, chan_list, num_chan);
-	cds_ctx->sap_mandatory_channels_len = num_chan;
-
-	return;
-}
-/**
  * cds_is_sap_mandatory_channel_set() - Checks if SAP mandatory channel is set
  *
  * Checks if any mandatory channel is set for SAP operation
@@ -9432,7 +9175,7 @@ QDF_STATUS cds_get_valid_chan_weights(struct sir_pcl_chan_weights *weight)
 
 	qdf_mem_set(weight->weighed_valid_list, QDF_MAX_NUM_CHAN,
 		    WEIGHT_OF_DISALLOWED_CHANNELS);
-	qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
+
 	if (cds_mode_specific_connection_count(CDS_STA_MODE, NULL) > 0) {
 		/*
 		 * Store the STA mode's parameter and temporarily delete it
@@ -9445,7 +9188,6 @@ QDF_STATUS cds_get_valid_chan_weights(struct sir_pcl_chan_weights *weight)
 		 * There is a small window between releasing the above lock
 		 * and acquiring the same in cds_allow_concurrency, below!
 		 */
-		qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
 		for (i = 0; i < weight->saved_num_chan; i++) {
 			if (cds_allow_concurrency(CDS_STA_MODE,
 						  weight->saved_chan_list[i],
@@ -9454,11 +9196,10 @@ QDF_STATUS cds_get_valid_chan_weights(struct sir_pcl_chan_weights *weight)
 					WEIGHT_OF_NON_PCL_CHANNELS;
 			}
 		}
-		qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
+
 		/* Restore the connection info */
 		cds_restore_deleted_conn_info(&info);
 	}
-	qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
 
 	for (i = 0; i < weight->saved_num_chan; i++) {
 		for (j = 0; j < weight->pcl_len; j++) {
@@ -9638,39 +9379,6 @@ send_status:
 }
 
 /**
- * cds_get_chan_by_session_id() - Get channel for a given session ID
- * @session_id: Session ID
- * @chan: Pointer to the channel
- *
- * Gets the channel for a given session ID
- *
- * Return: QDF_STATUS
- */
-QDF_STATUS cds_get_chan_by_session_id(uint8_t session_id, uint8_t *chan)
-{
-	cds_context_type *cds_ctx;
-	uint32_t i;
-
-	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
-	if (!cds_ctx) {
-		cds_err("Invalid CDS Context");
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
-	for (i = 0; i < MAX_NUMBER_OF_CONC_CONNECTIONS; i++) {
-		if ((conc_connection_list[i].vdev_id == session_id) &&
-		    (conc_connection_list[i].in_use)) {
-			*chan = conc_connection_list[i].chan;
-			qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
-			return QDF_STATUS_SUCCESS;
-		}
-	}
-	qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
-	return QDF_STATUS_E_FAILURE;
-}
-
-/**
  * cds_get_mac_id_by_session_id() - Get MAC ID for a given session ID
  * @session_id: Session ID
  * @mac_id: Pointer to the MAC ID
@@ -9718,18 +9426,11 @@ QDF_STATUS cds_get_mcc_session_id_on_mac(uint8_t mac_id, uint8_t session_id,
 {
 	cds_context_type *cds_ctx;
 	uint32_t i;
-	QDF_STATUS status;
-	uint8_t chan;
+	uint8_t chan = conc_connection_list[session_id].chan;
 
 	cds_ctx = cds_get_context(QDF_MODULE_ID_QDF);
 	if (!cds_ctx) {
 		cds_err("Invalid CDS Context");
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	status = cds_get_chan_by_session_id(session_id, &chan);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		hdd_err("Failed to get channel for session id:%d", session_id);
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -9785,12 +9486,9 @@ uint8_t cds_get_mcc_operating_channel(uint8_t session_id)
 		return INVALID_CHANNEL_ID;
 	}
 
-	status = cds_get_chan_by_session_id(mcc_session_id, &chan);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		hdd_err("Failed to get channel for MCC session ID:%d",
-			 mcc_session_id);
-		return INVALID_CHANNEL_ID;
-	}
+	qdf_mutex_acquire(&cds_ctx->qdf_conc_list_lock);
+	chan = conc_connection_list[mcc_session_id].chan;
+	qdf_mutex_release(&cds_ctx->qdf_conc_list_lock);
 
 	return chan;
 }

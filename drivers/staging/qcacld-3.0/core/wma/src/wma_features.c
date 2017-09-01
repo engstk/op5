@@ -77,6 +77,30 @@
 #define ARRAY_LENGTH(a)         (sizeof(a) / sizeof((a)[0]))
 #endif
 
+#define WMA_WOW_STA_WAKE_UP_EVENTS ((1 << WOW_CSA_IE_EVENT) |\
+				(1 << WOW_CLIENT_KICKOUT_EVENT) |\
+				(1 << WOW_PATTERN_MATCH_EVENT) |\
+				(1 << WOW_MAGIC_PKT_RECVD_EVENT) |\
+				(1 << WOW_DEAUTH_RECVD_EVENT) |\
+				(1 << WOW_DISASSOC_RECVD_EVENT) |\
+				(1 << WOW_BMISS_EVENT) |\
+				(1 << WOW_GTK_ERR_EVENT) |\
+				(1 << WOW_BETTER_AP_EVENT) |\
+				(1 << WOW_HTT_EVENT) |\
+				(1 << WOW_RA_MATCH_EVENT) |\
+				(1 << WOW_NLO_DETECTED_EVENT) |\
+				(1 << WOW_EXTSCAN_EVENT)) |\
+				(1 << WOW_OEM_RESPONSE_EVENT)|\
+				(1 << WOW_TDLS_CONN_TRACKER_EVENT)\
+
+#define WMA_WOW_SAP_WAKE_UP_EVENTS ((1 << WOW_PROBE_REQ_WPS_IE_EVENT) |\
+				(1 << WOW_PATTERN_MATCH_EVENT) |\
+				(1 << WOW_AUTH_REQ_EVENT) |\
+				(1 << WOW_ASSOC_REQ_EVENT) |\
+				(1 << WOW_DEAUTH_RECVD_EVENT) |\
+				(1 << WOW_DISASSOC_RECVD_EVENT) |\
+				(1 << WOW_HTT_EVENT))\
+
 /**
  * WMA_SET_VDEV_IE_SOURCE_HOST - Flag to identify the source of VDEV SET IE
  * command. The value is 0x0 for the VDEV SET IE WMI commands from mobile
@@ -1118,9 +1142,7 @@ QDF_STATUS wma_add_beacon_filter(WMA_HANDLE handle,
 	u_int8_t *buf;
 	A_UINT32 *ie_map;
 	int ret;
-	struct wma_txrx_node *iface;
 	tp_wma_handle wma = (tp_wma_handle) handle;
-
 	wmi_add_bcn_filter_cmd_fixed_param *cmd;
 	int len = sizeof(wmi_add_bcn_filter_cmd_fixed_param);
 
@@ -1132,11 +1154,6 @@ QDF_STATUS wma_add_beacon_filter(WMA_HANDLE handle,
 			__func__);
 		return QDF_STATUS_E_INVAL;
 	}
-
-	iface = &wma->interfaces[filter_params->vdev_id];
-	qdf_mem_copy(&iface->beacon_filter, filter_params,
-			sizeof(struct beacon_filter_param));
-	iface->beacon_filter_enabled = true;
 
 	wmi_buf = wmi_buf_alloc(wma->wmi_handle, len);
 	if (!wmi_buf) {
@@ -2226,6 +2243,7 @@ void wma_register_dfs_event_handler(tp_wma_handle wma_handle)
 	return;
 }
 
+
 /**
  * wma_unified_dfs_phyerr_filter_offload_enable() - enable dfs phyerr filter
  * @wma_handle: wma handle
@@ -2417,8 +2435,6 @@ static const u8 *wma_wow_wake_reason_str(A_INT32 wake_reason)
 		return "NAN_EVENT_WAKE_HOST";
 	case WOW_REASON_DEBUG_TEST:
 		return "DEBUG_TEST";
-	case WOW_REASON_CHIP_POWER_FAILURE_DETECT:
-		return "CHIP_POWER_FAILURE_DETECT";
 	default:
 		return "unknown";
 	}
@@ -2575,10 +2591,6 @@ static void wma_inc_wow_stats(struct sir_vdev_wow_stats *stats, uint8_t *data,
 		break;
 	case WOW_REASON_OEM_RESPONSE_EVENT:
 		stats->oem_response++;
-		break;
-
-	case WOW_REASON_CHIP_POWER_FAILURE_DETECT:
-		stats->pwr_save_fail_detected++;
 		break;
 
 	default:
@@ -3234,6 +3246,7 @@ exit_handler:
 	wma_beacon_miss_handler(wma, wake_info->vdev_id, 0);
 }
 
+/*#ifndef VENDOR_EDIT
 static const char *wma_vdev_type_str(uint32_t vdev_type)
 {
 	switch (vdev_type) {
@@ -3255,6 +3268,7 @@ static const char *wma_vdev_type_str(uint32_t vdev_type)
 		return "unknown";
 	}
 }
+#endif*/
 
 /**
  * wma_wow_wakeup_host_event() - wakeup host event handler
@@ -3292,11 +3306,13 @@ int wma_wow_wakeup_host_event(void *handle, uint8_t *event,
 	if ((wake_info->wake_reason != WOW_REASON_UNSPECIFIED) ||
 	    (wake_info->wake_reason == WOW_REASON_UNSPECIFIED &&
 	     !wmi_get_runtime_pm_inprogress(wma->wmi_handle))) {
+/*#ifndef VENDOR_EDIT
 		WMA_LOGA("WOW wakeup host event received; reason: %s(%d), vdev_id: %d, vdev_type: %s",
 			 wma_wow_wake_reason_str(wake_info->wake_reason),
 			 wake_info->wake_reason,
 			 wake_info->vdev_id,
 			 wma_vdev ? wma_vdev_type_str(wma_vdev->type) : "null");
+#endif*/
 		qdf_wow_wakeup_host_event(wake_info->wake_reason);
 		qdf_wma_wow_wakeup_stats_event();
 	}
@@ -3531,10 +3547,6 @@ int wma_wow_wakeup_host_event(void *handle, uint8_t *event,
 			WMA_LOGD("No wow_packet_buffer present");
 		break;
 #endif
-	case WOW_REASON_CHIP_POWER_FAILURE_DETECT:
-		/* Just update stats and exit */
-		WMA_LOGD("Host woken up because of chip power save failure");
-		break;
 	default:
 		break;
 	}
@@ -3608,7 +3620,7 @@ static inline void wma_set_wow_bus_suspend(tp_wma_handle wma, int val)
  */
 QDF_STATUS wma_add_wow_wakeup_event(tp_wma_handle wma,
 					uint32_t vdev_id,
-					uint32_t *bitmap,
+					uint32_t bitmap,
 					bool enable)
 {
 	int ret;
@@ -3973,7 +3985,6 @@ void wma_register_wow_default_patterns(WMA_HANDLE handle, uint8_t vdev_id)
 	return;
 }
 
-
 /**
  * wma_register_wow_wakeup_events() - register vdev specific wake events with fw
  * @handle: Pointer to wma handle
@@ -3994,7 +4005,7 @@ void wma_register_wow_wakeup_events(WMA_HANDLE handle,
 				uint8_t vdev_subtype)
 {
 	tp_wma_handle wma = handle;
-	uint32_t event_bitmap[WMI_WOW_MAX_EVENT_BM_LEN] = {0};
+	uint32_t event_bitmap;
 
 	WMA_LOGI("vdev_type %d vdev_subtype %d vdev_id %d", vdev_type,
 			vdev_subtype, vdev_id);
@@ -4003,28 +4014,20 @@ void wma_register_wow_wakeup_events(WMA_HANDLE handle,
 		((WMI_VDEV_TYPE_AP == vdev_type) &&
 		 (WMI_UNIFIED_VDEV_SUBTYPE_P2P_DEVICE == vdev_subtype))) {
 		/* Configure STA/P2P CLI mode specific default wake up events */
-		wma_set_sta_wow_bitmask(event_bitmap,
-					WMI_WOW_MAX_EVENT_BM_LEN);
-
-		if ((wma->interfaces[vdev_id].in_bmps == true ||
-		     wma->in_imps == true) &&
-		     wma->auto_power_save_enabled)
-			wma_set_wow_event_bitmap(
-					 WOW_CHIP_POWER_FAILURE_DETECT_EVENT,
-					 WMI_WOW_MAX_EVENT_BM_LEN,
-					 event_bitmap);
-
+		event_bitmap = WMA_WOW_STA_WAKE_UP_EVENTS;
+		WMA_LOGI("STA specific default wake up event 0x%x vdev id %d",
+			event_bitmap, vdev_id);
 	} else if (WMI_VDEV_TYPE_IBSS == vdev_type) {
 		/* Configure IBSS mode specific default wake up events */
-		wma_set_sta_wow_bitmask(event_bitmap,
-					WMI_WOW_MAX_EVENT_BM_LEN);
-		wma_set_wow_event_bitmap(WOW_BEACON_EVENT,
-					 WMI_WOW_MAX_EVENT_BM_LEN,
-					 event_bitmap);
+		event_bitmap = (WMA_WOW_STA_WAKE_UP_EVENTS |
+				(1 << WOW_BEACON_EVENT));
+		WMA_LOGI("IBSS specific default wake up event 0x%x vdev id %d",
+			event_bitmap, vdev_id);
 	} else if (WMI_VDEV_TYPE_AP == vdev_type) {
 		/* Configure SAP/GO mode specific default wake up events */
-		wma_set_sap_wow_bitmask(event_bitmap,
-					WMI_WOW_MAX_EVENT_BM_LEN);
+		event_bitmap = WMA_WOW_SAP_WAKE_UP_EVENTS;
+		WMA_LOGI("SAP specific default wake up event 0x%x vdev id %d",
+			event_bitmap, vdev_id);
 	} else if (WMI_VDEV_TYPE_NDI == vdev_type) {
 		/*
 		 * Configure NAN data path specific default wake up events.
@@ -4053,18 +4056,14 @@ void wma_register_wow_wakeup_events(WMA_HANDLE handle,
  */
 void wma_enable_disable_wakeup_event(WMA_HANDLE handle,
 				uint32_t vdev_id,
-				uint32_t *bitmap,
+				uint32_t bitmap,
 				bool enable)
 {
 	tp_wma_handle wma = handle;
-	uint32_t event_bitmap[WMI_WOW_MAX_EVENT_BM_LEN] = {0};
 
-	qdf_mem_copy(event_bitmap, bitmap, sizeof(uint32_t) *
-		     WMI_WOW_MAX_EVENT_BM_LEN);
-
-	WMA_LOGI("vdev_id %d wake up event 0x%x%x%x%x enable %d",
-		vdev_id, bitmap[0], bitmap[1], bitmap[2], bitmap[3], enable);
-	wma_add_wow_wakeup_event(wma, vdev_id, event_bitmap, enable);
+	WMA_LOGI("vdev_id %d wake up event 0x%x enable %d",
+		vdev_id, bitmap, enable);
+	wma_add_wow_wakeup_event(wma, vdev_id, bitmap, enable);
 }
 
 /**
@@ -4120,7 +4119,11 @@ QDF_STATUS wma_enable_wow_in_fw(WMA_HANDLE handle, uint32_t wow_flags)
 			 wmi_get_pending_cmds(wma->wmi_handle));
 		wmi_set_target_suspend(wma->wmi_handle, false);
 		if (!cds_is_driver_recovering()) {
-			cds_trigger_recovery(false);
+			if (pMac->sme.enableSelfRecovery) {
+				cds_trigger_recovery(false);
+			} else {
+				QDF_BUG(0);
+			}
 		} else {
 			WMA_LOGE("%s: LOGP is in progress, ignore!", __func__);
 		}
@@ -4143,7 +4146,7 @@ QDF_STATUS wma_enable_wow_in_fw(WMA_HANDLE handle, uint32_t wow_flags)
 			 wmi_pending_cmds);
 		htc_dump_counter_info(wma->htc_handle);
 		if (!cds_is_driver_recovering())
-			cds_trigger_recovery(false);
+			QDF_BUG(0);
 		else
 			WMA_LOGE("%s: SSR in progress, ignore no credit issue",
 				 __func__);
@@ -4695,10 +4698,6 @@ static bool wma_is_wow_applicable(tp_wma_handle wma)
 	return false;
 }
 
-/* Define for conciseness */
-#define BM_LEN WMI_WOW_MAX_EVENT_BM_LEN
-#define EV_NLO WOW_NLO_SCAN_COMPLETE_EVENT
-#define EV_PWR WOW_CHIP_POWER_FAILURE_DETECT_EVENT
 /**
  * wma_configure_dynamic_wake_events(): configure dyanmic wake events
  * @wma: wma handle
@@ -4709,68 +4708,31 @@ static bool wma_is_wow_applicable(tp_wma_handle wma)
  */
 static void wma_configure_dynamic_wake_events(tp_wma_handle wma)
 {
-
 	int vdev_id;
-	uint32_t enable_mask[BM_LEN] = {0};
-	uint32_t disable_mask[BM_LEN] = {0};
-	bool enable_configured = false;
-	bool disable_configured = false;
-	ol_txrx_vdev_handle vdev;
+	int enable_mask;
+	int disable_mask;
 
 	for (vdev_id = 0; vdev_id < wma->max_bssid; vdev_id++) {
-
-		qdf_mem_set(enable_mask,  sizeof(uint32_t) * BM_LEN, 0);
-		qdf_mem_set(disable_mask, sizeof(uint32_t) * BM_LEN, 0);
-		vdev = wma_find_vdev_by_id(wma, vdev_id);
-		if (NULL == vdev) {
-			WMA_LOGP("%s: Couldn't find vdev for vdev_id: %d",
-				 __func__, vdev_id);
-			continue;
-		}
+		enable_mask = 0;
+		disable_mask = 0;
 
 		if (wma_is_pnoscan_in_progress(wma, vdev_id)) {
-			if (wma_is_pnoscan_match_found(wma, vdev_id)) {
-				wma_set_wow_event_bitmap(EV_NLO,
-							 BM_LEN,
-							 enable_mask);
-				enable_configured = true;
-			} else
-				wma_set_wow_event_bitmap(EV_NLO,
-							 BM_LEN,
-							 disable_mask);
-				disable_configured = true;
+			if (wma_is_pnoscan_match_found(wma, vdev_id))
+				enable_mask |=
+					(1 << WOW_NLO_SCAN_COMPLETE_EVENT);
+			else
+				disable_mask |=
+					(1 << WOW_NLO_SCAN_COMPLETE_EVENT);
 		}
-		if ((wma->interfaces[vdev_id].in_bmps == true ||
-		     wma->in_imps == true) &&
-		     (wma->interfaces[vdev_id].type == WMI_VDEV_TYPE_STA ||
-		     (wma->interfaces[vdev_id].type == WMI_VDEV_TYPE_AP &&
-		     (wma->interfaces[vdev_id].sub_type ==
-		      WMI_UNIFIED_VDEV_SUBTYPE_P2P_DEVICE ||
-		      wma->interfaces[vdev_id].sub_type ==
-		      WMI_UNIFIED_VDEV_SUBTYPE_P2P_CLIENT))) &&
-		     wma->auto_power_save_enabled) {
-			wma_set_wow_event_bitmap(EV_PWR,
-						 BM_LEN,
-						 enable_mask);
-			enable_configured = true;
-		}
-		if (enable_configured) {
+
+		if (enable_mask != 0)
 			wma_enable_disable_wakeup_event(wma, vdev_id,
 					enable_mask, true);
-		}
-
-		if (disable_configured) {
+		if (disable_mask != 0)
 			wma_enable_disable_wakeup_event(wma, vdev_id,
 					disable_mask, false);
-		}
-
-		enable_configured = false;
-		disable_configured = false;
 	}
 }
-#undef BM_LEN
-#undef EV_NLO
-#undef EV_PWR
 
 #ifdef FEATURE_WLAN_LPHB
 /**
@@ -4882,8 +4844,12 @@ static QDF_STATUS wma_send_host_wakeup_ind_to_fw(tp_wma_handle wma)
 			 wmi_get_pending_cmds(wma->wmi_handle),
 			 wmi_get_host_credits(wma->wmi_handle));
 		if (!cds_is_driver_recovering()) {
-			wmi_tag_crash_inject(wma->wmi_handle, true);
-			cds_trigger_recovery(false);
+			if (pMac->sme.enableSelfRecovery) {
+				wmi_tag_crash_inject(wma->wmi_handle, true);
+				cds_trigger_recovery(false);
+			} else {
+				QDF_BUG(0);
+			}
 		} else {
 			WMA_LOGE("%s: SSR in progress, ignore resume timeout",
 				 __func__);
@@ -5316,12 +5282,6 @@ QDF_STATUS wma_process_mcbc_set_filter_req(tp_wma_handle wma_handle,
 
 	if (mcbc_param->ulMulticastAddrCnt <= 0) {
 		WMA_LOGW("Number of multicast addresses is 0");
-		return QDF_STATUS_E_FAILURE;
-	} else if (mcbc_param->ulMulticastAddrCnt >
-		   CFG_TGT_MAX_MULTICAST_FILTER_ENTRIES) {
-		WMA_LOGW("Number of multicast addresses %u is more than max %u",
-			 mcbc_param->ulMulticastAddrCnt,
-			 CFG_TGT_MAX_MULTICAST_FILTER_ENTRIES);
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -6733,6 +6693,11 @@ static int __wma_bus_suspend(enum qdf_suspend_type type, uint32_t wow_flags)
 		return -EFAULT;
 	}
 
+	if (wma_check_scan_in_progress(handle)) {
+		WMA_LOGE("%s: Scan in progress. Aborting suspend", __func__);
+		return -EBUSY;
+	}
+
 	wma_peer_debug_log(DEBUG_INVALID_VDEV_ID, DEBUG_BUS_SUSPEND,
 			   DEBUG_INVALID_PEER_ID, NULL, NULL,
 			   type, wow_flags);
@@ -6872,8 +6837,10 @@ static inline void wma_suspend_target_timeout(bool is_self_recovery_enabled)
 	else if (cds_is_driver_recovering())
 		WMA_LOGE("%s: Module recovering; Ignoring suspend timeout",
 			 __func__);
-	else
+	else if (is_self_recovery_enabled)
 		cds_trigger_recovery(false);
+	else
+		QDF_BUG(0);
 }
 
 /**
@@ -7043,7 +7010,11 @@ QDF_STATUS wma_resume_target(WMA_HANDLE handle)
 			wmi_get_pending_cmds(wma->wmi_handle),
 			wmi_get_host_credits(wma->wmi_handle));
 		if (!cds_is_driver_recovering()) {
-			cds_trigger_recovery(false);
+			if (pMac->sme.enableSelfRecovery) {
+				cds_trigger_recovery(false);
+			} else {
+				QDF_BUG(0);
+			}
 		} else {
 			WMA_LOGE("%s: SSR in progress, ignore resume timeout",
 				__func__);
@@ -7342,24 +7313,6 @@ int wma_update_tdls_peer_state(WMA_HANDLE handle,
 					 chanId);
 	}
 
-	/* Make sure that peer exists before sending peer state cmd*/
-	pdev = cds_get_context(QDF_MODULE_ID_TXRX);
-	if (!pdev) {
-		WMA_LOGE("%s: Failed to find pdev", __func__);
-		ret = -EIO;
-		goto end_tdls_peer_state;
-	}
-
-	peer = ol_txrx_find_peer_by_addr(pdev,
-			peerStateParams->peerMacAddr,
-			&peer_id);
-	if (!peer) {
-		WMA_LOGE("%s: peer not exists %pM",
-				__func__, peerStateParams->peerMacAddr);
-		ret = -EIO;
-		goto end_tdls_peer_state;
-	}
-
 	if (wmi_unified_update_tdls_peer_state_cmd(wma_handle->wmi_handle,
 				 (struct tdls_peer_state_params *)peerStateParams,
 				 ch_mhz)) {
@@ -7371,6 +7324,22 @@ int wma_update_tdls_peer_state(WMA_HANDLE handle,
 
 	/* in case of teardown, remove peer from fw */
 	if (WMA_TDLS_PEER_STATE_TEARDOWN == peerStateParams->peerState) {
+		pdev = cds_get_context(QDF_MODULE_ID_TXRX);
+		if (!pdev) {
+			WMA_LOGE("%s: Failed to find pdev", __func__);
+			ret = -EIO;
+			goto end_tdls_peer_state;
+		}
+
+		peer = ol_txrx_find_peer_by_addr(pdev,
+						 peerStateParams->peerMacAddr,
+						 &peer_id);
+		if (!peer) {
+			WMA_LOGE("%s: Failed to get peer handle using peer mac %pM",
+				__func__, peerStateParams->peerMacAddr);
+			ret = -EIO;
+			goto end_tdls_peer_state;
+		}
 		peer_mac_addr = ol_txrx_peer_get_peer_mac_addr(peer);
 		restore_last_peer = is_vdev_restore_last_peer(peer);
 
@@ -7392,6 +7361,7 @@ end_tdls_peer_state:
 	return ret;
 }
 #endif /* FEATURE_WLAN_TDLS */
+
 
 /**
  * wma_dfs_attach() - Attach DFS methods to the umac state.
@@ -7562,38 +7532,38 @@ void wma_dfs_configure(struct ieee80211com *ic)
  * @band_center_freq1: center frequency 1
  * @band_center_freq2: center frequency 2
  *       (valid only for 11ac vht 80plus80 mode)
- * @req: vdev start request
+ * @ req: vdev start request
  *
  * Set the Channel parameters in to DFS module
  * Also,configure the DFS radar filters for
  * matching the DFS phyerrors.
  *
- * Return: None
+ * Return: dfs_ieee80211_channel / NULL for error
  */
-void wma_dfs_configure_channel(struct ieee80211com *dfs_ic,
-				uint32_t band_center_freq1,
-				uint32_t band_center_freq2,
-				struct wma_vdev_start_req *req)
+struct dfs_ieee80211_channel *wma_dfs_configure_channel(
+						struct ieee80211com *dfs_ic,
+						uint32_t band_center_freq1,
+						uint32_t band_center_freq2,
+						struct wma_vdev_start_req
+						*req)
 {
 	uint8_t ext_channel;
 
 	if (dfs_ic == NULL) {
 		WMA_LOGE("%s: DFS ic is Invalid", __func__);
-		return;
+		return NULL;
 	}
 
-	qdf_spin_lock_bh(&dfs_ic->chan_lock);
 	if (!dfs_ic->ic_curchan) {
 		dfs_ic->ic_curchan = (struct dfs_ieee80211_channel *)os_malloc(
 					NULL,
 					sizeof(struct dfs_ieee80211_channel),
 					GFP_ATOMIC);
 		if (dfs_ic->ic_curchan == NULL) {
-			qdf_spin_unlock_bh(&dfs_ic->chan_lock);
 			WMA_LOGE(
 			    "%s: allocation of dfs_ic->ic_curchan failed %zu",
 			    __func__, sizeof(struct dfs_ieee80211_channel));
-			return;
+			return NULL;
 		}
 	}
 
@@ -7655,7 +7625,7 @@ void wma_dfs_configure_channel(struct ieee80211com *dfs_ic,
 					IEEE80211_CHAN_VHT160;
 		break;
 	default:
-		WMA_LOGD(
+		WMA_LOGE(
 		    "%s: Recieved a wrong channel width %d",
 		    __func__, req->chan_width);
 		break;
@@ -7669,14 +7639,13 @@ void wma_dfs_configure_channel(struct ieee80211com *dfs_ic,
 	}
 
 	dfs_ic->dfs_pri_multiplier = req->dfs_pri_multiplier;
-	qdf_spin_unlock_bh(&dfs_ic->chan_lock);
 
 	/*
 	 * Configuring the DFS with current channel and the radar filters
 	 */
 	wma_dfs_configure(dfs_ic);
-	WMA_LOGD("%s: DFS- CHANNEL CONFIGURED", __func__);
-	return;
+	WMA_LOGI("%s: DFS- CHANNEL CONFIGURED", __func__);
+	return dfs_ic->ic_curchan;
 }
 
 

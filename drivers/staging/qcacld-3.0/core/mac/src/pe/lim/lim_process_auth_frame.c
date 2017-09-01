@@ -1082,11 +1082,11 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 {
 	uint8_t *body_ptr, key_id, cfg_privacy_opt_imp;
 	uint8_t defaultkey[SIR_MAC_KEY_LENGTH];
-	uint8_t *plainbody = NULL;
+	uint8_t plainbody[256];
 	uint8_t decrypt_result;
 	uint16_t frame_len, curr_seq_num = 0;
 	uint32_t val, key_length = 8;
-	tSirMacAuthFrameBody *rx_auth_frm_body, *rx_auth_frame, *auth_frame;
+	tSirMacAuthFrameBody *rx_auth_frm_body, rx_auth_frame, auth_frame;
 	tpSirMacMgmtHdr mac_hdr;
 	struct tLimPreAuthNode *auth_node;
 
@@ -1131,23 +1131,6 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 		cfg_set_int(mac_ctx, WNI_CFG_AUTHENTICATE_FAILURE_TIMEOUT,
 				pe_session->defaultAuthFailureTimeout);
 	}
-
-	rx_auth_frame = qdf_mem_malloc(sizeof(tSirMacAuthFrameBody));
-	if (!rx_auth_frame) {
-		pe_err("failed to allocate memory");
-		return;
-	}
-	auth_frame = qdf_mem_malloc(sizeof(tSirMacAuthFrameBody));
-	if (!auth_frame) {
-		pe_err("failed to allocate memory");
-		goto free;
-	}
-	plainbody = qdf_mem_malloc(LIM_ENCR_AUTH_BODY_LEN);
-	if (!plainbody) {
-		pe_err("failed to allocate memory for plainbody");
-		goto free;
-	}
-	qdf_mem_zero(plainbody, LIM_ENCR_AUTH_BODY_LEN);
 	/*
 	 * Determine if WEP bit is set in the FC or received MAC header
 	 * Note: WEP bit is set in FC of MAC header.
@@ -1165,7 +1148,7 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 			lim_send_deauth_mgmt_frame(mac_ctx,
 					eSIR_MAC_MIC_FAILURE_REASON,
 					mac_hdr->sa, pe_session, false);
-			goto free;
+			return;
 		}
 		/* Extract key ID from IV (most 2 bits of 4th byte of IV) */
 		key_id = (*(body_ptr + 3)) >> 6;
@@ -1179,19 +1162,19 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 		 * Out-of-sequence-Authentication-Frame status code.
 		 */
 		if (LIM_IS_STA_ROLE(pe_session)) {
-			auth_frame->authAlgoNumber = eSIR_SHARED_KEY;
-			auth_frame->authTransactionSeqNumber =
+			auth_frame.authAlgoNumber = eSIR_SHARED_KEY;
+			auth_frame.authTransactionSeqNumber =
 				SIR_MAC_AUTH_FRAME_4;
-			auth_frame->authStatusCode =
+			auth_frame.authStatusCode =
 				eSIR_MAC_CHALLENGE_FAILURE_STATUS;
 			/* Log error */
 			lim_log(mac_ctx, LOGE,
 				FL("rx Auth frm with wep bit set role=%d %pM"),
 				GET_LIM_SYSTEM_ROLE(pe_session), mac_hdr->sa);
-			lim_send_auth_mgmt_frame(mac_ctx, auth_frame,
+			lim_send_auth_mgmt_frame(mac_ctx, &auth_frame,
 				mac_hdr->sa, LIM_NO_WEP_IN_FC,
 				pe_session);
-			goto free;
+			return;
 		}
 
 		if (frame_len < LIM_ENCR_AUTH_BODY_LEN) {
@@ -1200,7 +1183,7 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 				FL("Not enough size [%d] to decry rx Auth frm"),
 				frame_len);
 			lim_print_mac_addr(mac_ctx, mac_hdr->sa, LOGE);
-			goto free;
+			return;
 		}
 		if (LIM_IS_AP_ROLE(pe_session)) {
 			val = pe_session->privacy;
@@ -1229,15 +1212,15 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 			 * another strange thing in the spec. Status code
 			 * should have been 'unsupported algorithm' status code.
 			 */
-			auth_frame->authAlgoNumber = eSIR_SHARED_KEY;
-			auth_frame->authTransactionSeqNumber =
+			auth_frame.authAlgoNumber = eSIR_SHARED_KEY;
+			auth_frame.authTransactionSeqNumber =
 				SIR_MAC_AUTH_FRAME_4;
-			auth_frame->authStatusCode =
+			auth_frame.authStatusCode =
 				eSIR_MAC_CHALLENGE_FAILURE_STATUS;
-			lim_send_auth_mgmt_frame(mac_ctx, auth_frame,
+			lim_send_auth_mgmt_frame(mac_ctx, &auth_frame,
 				mac_hdr->sa, LIM_NO_WEP_IN_FC,
 				pe_session);
-			goto free;
+			return;
 		}
 
 		/*
@@ -1257,15 +1240,15 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 			 * bit set. Send Auth frame4 with
 			 * 'out of sequence' status code.
 			 */
-			auth_frame->authAlgoNumber = eSIR_SHARED_KEY;
-			auth_frame->authTransactionSeqNumber =
+			auth_frame.authAlgoNumber = eSIR_SHARED_KEY;
+			auth_frame.authTransactionSeqNumber =
 				SIR_MAC_AUTH_FRAME_4;
-			auth_frame->authStatusCode =
+			auth_frame.authStatusCode =
 				eSIR_MAC_AUTH_FRAME_OUT_OF_SEQ_STATUS;
-			lim_send_auth_mgmt_frame(mac_ctx, auth_frame,
+			lim_send_auth_mgmt_frame(mac_ctx, &auth_frame,
 				mac_hdr->sa, LIM_NO_WEP_IN_FC,
 				pe_session);
-			goto free;
+			return;
 		}
 		/* Change the auth-response timeout */
 		lim_deactivate_and_change_per_sta_id_timer(mac_ctx,
@@ -1286,16 +1269,16 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 			 * Reject by sending Authenticaton frame with
 			 * out of sequence Auth frame status code.
 			 */
-			auth_frame->authAlgoNumber = eSIR_SHARED_KEY;
-			auth_frame->authTransactionSeqNumber =
+			auth_frame.authAlgoNumber = eSIR_SHARED_KEY;
+			auth_frame.authTransactionSeqNumber =
 				SIR_MAC_AUTH_FRAME_4;
-			auth_frame->authStatusCode =
+			auth_frame.authStatusCode =
 				eSIR_MAC_AUTH_FRAME_OUT_OF_SEQ_STATUS;
 
-			lim_send_auth_mgmt_frame(mac_ctx, auth_frame,
+			lim_send_auth_mgmt_frame(mac_ctx, &auth_frame,
 				mac_hdr->sa, LIM_NO_WEP_IN_FC,
 				pe_session);
-			goto free;
+			return;
 		}
 
 		val = SIR_MAC_KEY_LENGTH;
@@ -1316,15 +1299,15 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 			 * Send Authentication frame
 			 * with challenge failure status code
 			 */
-			auth_frame->authAlgoNumber = eSIR_SHARED_KEY;
-			auth_frame->authTransactionSeqNumber =
+			auth_frame.authAlgoNumber = eSIR_SHARED_KEY;
+			auth_frame.authTransactionSeqNumber =
 				SIR_MAC_AUTH_FRAME_4;
-			auth_frame->authStatusCode =
+			auth_frame.authStatusCode =
 				eSIR_MAC_CHALLENGE_FAILURE_STATUS;
-			lim_send_auth_mgmt_frame(mac_ctx, auth_frame,
+			lim_send_auth_mgmt_frame(mac_ctx, &auth_frame,
 				mac_hdr->sa, LIM_NO_WEP_IN_FC,
 				pe_session);
-			goto free;
+			return;
 		}
 
 		key_length = val;
@@ -1339,35 +1322,35 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 				MAC_ADDR_ARRAY(mac_hdr->sa));
 			/* ICV failure */
 			lim_delete_pre_auth_node(mac_ctx, mac_hdr->sa);
-			auth_frame->authAlgoNumber = eSIR_SHARED_KEY;
-			auth_frame->authTransactionSeqNumber =
+			auth_frame.authAlgoNumber = eSIR_SHARED_KEY;
+			auth_frame.authTransactionSeqNumber =
 				SIR_MAC_AUTH_FRAME_4;
-			auth_frame->authStatusCode =
+			auth_frame.authStatusCode =
 				eSIR_MAC_CHALLENGE_FAILURE_STATUS;
 
-			lim_send_auth_mgmt_frame(mac_ctx, auth_frame,
+			lim_send_auth_mgmt_frame(mac_ctx, &auth_frame,
 				mac_hdr->sa, LIM_NO_WEP_IN_FC,
 				pe_session);
-			goto free;
+			return;
 		}
 		if ((sir_convert_auth_frame2_struct(mac_ctx, plainbody,
-				frame_len - 8, rx_auth_frame) != eSIR_SUCCESS)
-				|| (!is_auth_valid(mac_ctx, rx_auth_frame,
+				frame_len - 8, &rx_auth_frame) != eSIR_SUCCESS)
+				|| (!is_auth_valid(mac_ctx, &rx_auth_frame,
 							pe_session))) {
 			lim_log(mac_ctx, LOGE,
 				FL("failed to convert Auth Frame to structure or Auth is not valid "));
-			goto free;
+			return;
 		}
 	} else if ((sir_convert_auth_frame2_struct(mac_ctx, body_ptr,
-				frame_len, rx_auth_frame) != eSIR_SUCCESS)
-				|| (!is_auth_valid(mac_ctx, rx_auth_frame,
+				frame_len, &rx_auth_frame) != eSIR_SUCCESS)
+				|| (!is_auth_valid(mac_ctx, &rx_auth_frame,
 						pe_session))) {
 			lim_log(mac_ctx, LOGE,
 				FL("failed to convert Auth Frame to structure or Auth is not valid "));
-			goto free;
+			return;
 	}
 
-	rx_auth_frm_body = rx_auth_frame;
+	rx_auth_frm_body = &rx_auth_frame;
 
 	lim_log(mac_ctx, LOGW,
 		FL("Received Auth frame with type=%d seqnum=%d, status=%d (%d)"),
@@ -1402,16 +1385,16 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 	case SIR_MAC_AUTH_FRAME_1:
 		lim_process_auth_frame_type1(mac_ctx,
 			mac_hdr, rx_auth_frm_body, rx_pkt_info,
-			curr_seq_num, auth_frame, pe_session);
+			curr_seq_num, &auth_frame, pe_session);
 		break;
 	case SIR_MAC_AUTH_FRAME_2:
 		lim_process_auth_frame_type2(mac_ctx,
-			mac_hdr, rx_auth_frm_body, auth_frame, plainbody,
+			mac_hdr, rx_auth_frm_body, &auth_frame, plainbody,
 			body_ptr, frame_len, pe_session);
 		break;
 	case SIR_MAC_AUTH_FRAME_3:
 		lim_process_auth_frame_type3(mac_ctx,
-			mac_hdr, rx_auth_frm_body, auth_frame, pe_session);
+			mac_hdr, rx_auth_frm_body, &auth_frame, pe_session);
 		break;
 	case SIR_MAC_AUTH_FRAME_4:
 		lim_process_auth_frame_type4(mac_ctx,
@@ -1425,13 +1408,6 @@ lim_process_auth_frame(tpAniSirGlobal mac_ctx, uint8_t *rx_pkt_info,
 			mac_hdr->sa);
 		break;
 	}
-free:
-	if (auth_frame)
-		qdf_mem_free(auth_frame);
-	if (rx_auth_frame)
-		qdf_mem_free(rx_auth_frame);
-	if (plainbody)
-		qdf_mem_free(plainbody);
 }
 
 /*----------------------------------------------------------------------

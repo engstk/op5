@@ -233,16 +233,15 @@ struct qdf_tso_num_seg_elem_t *ol_tso_num_seg_alloc(
 void ol_tso_num_seg_free(struct ol_txrx_pdev_t *pdev,
 	 struct qdf_tso_num_seg_elem_t *tso_num_seg);
 void ol_free_remaining_tso_segs(ol_txrx_vdev_handle vdev,
-				struct ol_txrx_msdu_info_t *msdu_info,
-				bool is_tso_seg_mapping_done);
+				struct ol_txrx_msdu_info_t *msdu_info);
 
 #else
 #define ol_tso_alloc_segment(pdev) /*no-op*/
 #define ol_tso_free_segment(pdev, tso_seg) /*no-op*/
 #define ol_tso_num_seg_alloc(pdev) /*no-op*/
 #define ol_tso_num_seg_free(pdev, tso_num_seg) /*no-op*/
-/*no-op*/
-#define ol_free_remaining_tso_segs(vdev, msdu_info, is_tso_seg_mapping_done)
+#define ol_free_remaining_tso_segs(vdev, msdu_info) /*no-op*/
+
 #endif
 
 /**
