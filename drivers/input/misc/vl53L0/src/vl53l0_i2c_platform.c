@@ -22,14 +22,14 @@
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/delay.h>
-#include "stmvl53l0-i2c.h"
-#include "stmvl53l0-cci.h"
+#include "../stmvl53l0-i2c.h"
+#include "../stmvl53l0-cci.h"
 
-#include "vl53l0_platform.h"
-#include "vl53l0_i2c_platform.h"
-#include "vl53l0_def.h"
+#include "../inc/vl53l0_platform.h"
+#include "../inc/vl53l0_i2c_platform.h"
+#include "../inc/vl53l0_def.h"
 
-#include "vl53l0_platform_log.h"
+#include "../inc/vl53l0_platform_log.h"
 
 #ifdef VL53L0_LOG_ENABLE
 #define trace_print(level, ...) \
