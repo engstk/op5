@@ -302,6 +302,18 @@
 		#size-cells = <2>;
 		ranges;
 
+		wlan_msa_guard: wlan_msa_guard@85600000 {
+			compatible = "removed-dma-pool";
+			no-map;
+			reg = <0x0 0x85600000 0x0 0x100000>;
+		};
+
+		wlan_msa_mem: wlan_msa_mem@85700000 {
+			compatible = "removed-dma-pool";
+			no-map;
+			reg = <0x0 0x85700000 0x0 0x100000>;
+		};
+
 		removed_regions: removed_regions@85800000 {
 			compatible = "removed-dma-pool";
 			no-map;
@@ -466,6 +478,7 @@
 		interrupts = <GIC_SPI 326 IRQ_TYPE_NONE>;
 		qcom,ee = <0>;
 		qcom,channel = <0>;
+		qcom,reserved-chan = <511>;
 		#address-cells = <2>;
 		#size-cells = <0>;
 		interrupt-controller;
@@ -640,6 +653,16 @@
 		clocks = <&clock_gcc GCC_BLSP1_UART2_APPS_CLK>,
 			 <&clock_gcc GCC_BLSP1_AHB_CLK>;
 		clock-names = "core", "iface";
+	};
+
+	qcom,qbt1000 {
+		compatible = "qcom,qbt1000";
+		clock-names = "core", "iface";
+		clocks = <&clock_gcc GCC_BLSP1_QUP3_SPI_APPS_CLK>,
+			<&clock_gcc GCC_BLSP1_AHB_CLK>;
+		clock-frequency = <15000000>;
+		qcom,ipc-gpio = <&tlmm 72 0>;
+		qcom,finger-detect-gpio = <&pm660_gpios 11 0>;
 	};
 
 	qcom,sensor-information {
@@ -847,8 +870,8 @@
 	qcom,msm-core@780000 {
 		compatible = "qcom,apss-core-ea";
 		reg = <0x780000 0x1000>;
-		qcom,low-hyst-temp = <10>;
-		qcom,high-hyst-temp = <5>;
+		qcom,low-hyst-temp = <100>;
+		qcom,high-hyst-temp = <100>;
 
 		ea0: ea0 {
 			sensor = <&sensor_information1>;
@@ -1214,9 +1237,17 @@
 		compatible = "qcom,clk-cpu-osm";
 		reg = <0x179c0000 0x4000>, <0x17916000 0x1000>,
 		      <0x17816000 0x1000>, <0x179d1000 0x1000>,
-		      <0x00784130 0x8>;
+		      <0x00784130 0x8>, <0x17914800 0x800>;
 		reg-names = "osm", "pwrcl_pll", "perfcl_pll",
-			    "apcs_common", "perfcl_efuse";
+			    "apcs_common", "perfcl_efuse",
+			    "pwrcl_acd";
+
+		qcom,acdtd-val = <0x0000a111 0x0000a111>;
+		qcom,acdcr-val = <0x002c5ffd 0x002c5ffd>;
+		qcom,acdsscr-val = <0x00000901 0x00000901>;
+		qcom,acdextint0-val = <0x2cf9ae8 0x2cf9ae8>;
+		qcom,acdextint1-val = <0x2cf9afe 0x2cf9afe>;
+		qcom,acdautoxfer-val = <0x00000015 0x00000015>;
 
 		vdd-pwrcl-supply = <&apc0_pwrcl_vreg>;
 		vdd-perfcl-supply = <&apc1_perfcl_vreg>;
@@ -1485,9 +1516,9 @@
 		};
 	};
 
-	qcom,rmtfs_sharedmem@0 {
+	qcom,rmtfs_sharedmem@85e00000 {
 		compatible = "qcom,sharedmem-uio";
-		reg = <0x0 0x200000>;
+		reg = <0x85e00000 0x200000>;
 		reg-names = "rmtfs";
 		qcom,client-id = <0x00000001>;
 	};
@@ -1879,6 +1910,8 @@
 		reg-names = "membase", "smmu_iova_base", "smmu_iova_ipa";
 		iommus = <&anoc2_smmu 0x1a00>,
 			 <&anoc2_smmu 0x1a01>;
+		clocks = <&clock_rpmcc RPM_RF_CLK1_PIN>;
+		clock-names = "cxo_ref_clk_pin";
 		interrupts = <0 413 0>,   /* CE0 */
 			     <0 414 0>,   /* CE1 */
 			     <0 415 0>,   /* CE2 */
@@ -1891,6 +1924,14 @@
 			     <0 423 0>,   /* CE9 */
 			     <0 424 0>,   /* CE10 */
 			     <0 425 0>;   /* CE11 */
+		vdd-0.8-cx-mx-supply = <&pm660_l5>;
+		vdd-1.8-xo-supply = <&pm660_l9_pin_ctrl>;
+		vdd-1.3-rfa-supply = <&pm660_l6_pin_ctrl>;
+		vdd-3.3-ch0-supply = <&pm660_l19_pin_ctrl>;
+		qcom,vdd-0.8-cx-mx-config = <525000 950000>;
+		qcom,vdd-1.8-xo-config = <1750000 1900000>;
+		qcom,vdd-1.3-rfa-config = <1200000 1370000>;
+		qcom,vdd-3.3-ch0-config = <3200000 3400000>;
 		qcom,wlan-msa-memory = <0x100000>;
 		qcom,smmu-s1-bypass;
 	};
@@ -2276,6 +2317,7 @@
 		lanes-per-direction = <1>;
 		spm-level = <5>;
 
+		non-removable;
 		qcom,msm-bus,name = "ufs1";
 		qcom,msm-bus,num-cases = <12>;
 		qcom,msm-bus,num-paths = <2>;
@@ -2509,6 +2551,7 @@
 #include "msm-arm-smmu-impl-defs-660.dtsi"
 #include "sdm660-common.dtsi"
 #include "sdm660-blsp.dtsi"
+#include "msm-rdbg.dtsi"
 #include "sdm660-camera.dtsi"
 #include "sdm660-vidc.dtsi"
 #include "msm-audio.dtsi"

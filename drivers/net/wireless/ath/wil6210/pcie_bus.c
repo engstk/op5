@@ -26,6 +26,10 @@ static bool use_msi = true;
 module_param(use_msi, bool, 0444);
 MODULE_PARM_DESC(use_msi, " Use MSI interrupt, default - true");
 
+static bool ftm_mode;
+module_param(ftm_mode, bool, 0444);
+MODULE_PARM_DESC(ftm_mode, " Set factory test mode, default - false");
+
 #ifdef CONFIG_PM
 #ifdef CONFIG_PM_SLEEP
 static int wil6210_pm_notify(struct notifier_block *notify_block,
@@ -36,13 +40,15 @@ static int wil6210_pm_notify(struct notifier_block *notify_block,
 static
 void wil_set_capabilities(struct wil6210_priv *wil)
 {
+	const char *wil_fw_name;
 	u32 jtag_id = wil_r(wil, RGF_USER_JTAG_DEV_ID);
 	u8 chip_revision = (wil_r(wil, RGF_USER_REVISION_ID) &
 			    RGF_USER_REVISION_ID_MASK);
 
 	bitmap_zero(wil->hw_capabilities, hw_capability_last);
 	bitmap_zero(wil->fw_capabilities, WMI_FW_CAPABILITY_MAX);
-	wil->wil_fw_name = WIL_FW_NAME_DEFAULT;
+	wil->wil_fw_name = ftm_mode ? WIL_FW_NAME_FTM_DEFAULT :
+			   WIL_FW_NAME_DEFAULT;
 	wil->chip_revision = chip_revision;
 
 	switch (jtag_id) {
@@ -51,9 +57,11 @@ void wil_set_capabilities(struct wil6210_priv *wil)
 		case REVISION_ID_SPARROW_D0:
 			wil->hw_name = "Sparrow D0";
 			wil->hw_version = HW_VER_SPARROW_D0;
-			if (wil_fw_verify_file_exists(wil,
-						      WIL_FW_NAME_SPARROW_PLUS))
-				wil->wil_fw_name = WIL_FW_NAME_SPARROW_PLUS;
+			wil_fw_name = ftm_mode ? WIL_FW_NAME_FTM_SPARROW_PLUS :
+				      WIL_FW_NAME_SPARROW_PLUS;
+
+			if (wil_fw_verify_file_exists(wil, wil_fw_name))
+				wil->wil_fw_name = wil_fw_name;
 			break;
 		case REVISION_ID_SPARROW_B0:
 			wil->hw_name = "Sparrow B0";
@@ -103,8 +111,6 @@ static int wil_if_pcie_enable(struct wil6210_priv *wil)
 				 wil->fw_capabilities);
 
 	wil_dbg_misc(wil, "if_pcie_enable, wmi_only %d\n", wmi_only);
-
-	pdev->msi_enabled = 0;
 
 	pci_set_master(pdev);
 
@@ -241,7 +247,7 @@ static int wil_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	rc = pci_enable_device(pdev);
-	if (rc) {
+	if (rc && pdev->msi_enabled == 0) {
 		wil_err(wil,
 			"pci_enable_device failed, retry with MSI only\n");
 		/* Work around for platforms that can't allocate IRQ:
@@ -256,6 +262,7 @@ static int wil_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_plat;
 	}
 	/* rollback to err_disable_pdev */
+	pci_set_power_state(pdev, PCI_D0);
 
 	rc = pci_request_region(pdev, 0, WIL_NAME);
 	if (rc) {
@@ -275,6 +282,15 @@ static int wil_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	wil_set_capabilities(wil);
 	wil6210_clear_irq(wil);
+
+	wil->keep_radio_on_during_sleep =
+		wil->platform_ops.keep_radio_on_during_sleep &&
+		wil->platform_ops.keep_radio_on_during_sleep(
+			wil->platform_handle) &&
+		test_bit(WMI_FW_CAPABILITY_D3_SUSPEND, wil->fw_capabilities);
+
+	wil_info(wil, "keep_radio_on_during_sleep (%d)\n",
+		 wil->keep_radio_on_during_sleep);
 
 	/* FW should raise IRQ when ready */
 	rc = wil_if_pcie_enable(wil);
@@ -375,15 +391,16 @@ static int wil6210_suspend(struct device *dev, bool is_runtime)
 		goto out;
 
 	rc = wil_suspend(wil, is_runtime);
-	if (rc)
-		goto out;
+	if (!rc) {
+		wil->suspend_stats.successful_suspends++;
 
-	/* TODO: how do I bring card in low power state? */
-
-	/* disable bus mastering */
-	pci_clear_master(pdev);
-	/* PCI will call pci_save_state(pdev) and pci_prepare_to_sleep(pdev) */
-
+		/* If platform device supports keep_radio_on_during_sleep
+		 * it will control PCIe master
+		 */
+		if (!wil->keep_radio_on_during_sleep)
+			/* disable bus mastering */
+			pci_clear_master(pdev);
+	}
 out:
 	return rc;
 }
@@ -396,12 +413,21 @@ static int wil6210_resume(struct device *dev, bool is_runtime)
 
 	wil_dbg_pm(wil, "resume: %s\n", is_runtime ? "runtime" : "system");
 
-	/* allow master */
-	pci_set_master(pdev);
-
+	/* If platform device supports keep_radio_on_during_sleep it will
+	 * control PCIe master
+	 */
+	if (!wil->keep_radio_on_during_sleep)
+		/* allow master */
+		pci_set_master(pdev);
 	rc = wil_resume(wil, is_runtime);
-	if (rc)
-		pci_clear_master(pdev);
+	if (rc) {
+		wil_err(wil, "device failed to resume (%d)\n", rc);
+		wil->suspend_stats.failed_resumes++;
+		if (!wil->keep_radio_on_during_sleep)
+			pci_clear_master(pdev);
+	} else {
+		wil->suspend_stats.successful_resumes++;
+	}
 
 	return rc;
 }

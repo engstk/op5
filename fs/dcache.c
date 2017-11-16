@@ -1128,11 +1128,12 @@ void shrink_dcache_sb(struct super_block *sb)
 		LIST_HEAD(dispose);
 
 		freed = list_lru_walk(&sb->s_dentry_lru,
-			dentry_lru_isolate_shrink, &dispose, UINT_MAX);
+			dentry_lru_isolate_shrink, &dispose, 1024);
 
 		this_cpu_sub(nr_dentry_unused, freed);
 		shrink_dentry_list(&dispose);
-	} while (freed > 0);
+		cond_resched();
+	} while (list_lru_count(&sb->s_dentry_lru) > 0);
 }
 EXPORT_SYMBOL(shrink_dcache_sb);
 
@@ -1361,7 +1362,7 @@ static enum d_walk_ret select_collect(void *_data, struct dentry *dentry)
 		goto out;
 
 	if (dentry->d_flags & DCACHE_SHRINK_LIST) {
-		data->found++;
+		goto out;
 	} else {
 		if (dentry->d_flags & DCACHE_LRU_LIST)
 			d_lru_del(dentry);

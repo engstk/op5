@@ -272,6 +272,9 @@ static void __fw_free_buf(struct kref *ref)
 		 (unsigned int)buf->size);
 
 	list_del(&buf->list);
+#ifdef CONFIG_FW_LOADER_USER_HELPER
+	list_del(&buf->pending_list);
+#endif
 	spin_unlock(&fwc->lock);
 
 #ifdef CONFIG_FW_LOADER_USER_HELPER
@@ -292,6 +295,7 @@ static void fw_free_buf(struct firmware_buf *buf)
 {
 	struct firmware_cache *fwc = buf->fwc;
 	if (!fwc) {
+		kfree_const(buf->fw_id);
 		kfree(buf);
 		return;
 	}

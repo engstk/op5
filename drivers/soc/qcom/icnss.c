@@ -13,6 +13,7 @@
 #define pr_fmt(fmt) "icnss: " fmt
 
 #include <asm/dma-iommu.h>
+#include <linux/of_address.h>
 #include <linux/clk.h>
 #include <linux/iommu.h>
 #include <linux/export.h>
@@ -202,6 +203,7 @@ enum icnss_driver_state {
 	ICNSS_MSA0_ASSIGNED,
 	ICNSS_WLFW_EXISTS,
 	ICNSS_WDOG_BITE,
+	ICNSS_SHUTDOWN_DONE,
 };
 
 struct ce_irq_list {
@@ -291,6 +293,7 @@ struct icnss_stats {
 	uint32_t vbatt_req;
 	uint32_t vbatt_resp;
 	uint32_t vbatt_req_err;
+	u32 rejuvenate_ind;
 	uint32_t rejuvenate_ack_req;
 	uint32_t rejuvenate_ack_resp;
 	uint32_t rejuvenate_ack_err;
@@ -368,6 +371,11 @@ static struct icnss_priv {
 	bool is_wlan_mac_set;
 	struct icnss_wlan_mac_addr wlan_mac_addr;
 	bool bypass_s1_smmu;
+	struct mutex dev_lock;
+	u8 cause_for_rejuvenation;
+	u8 requesting_sub_system;
+	u16 line_number;
+	char function_name[QMI_WLFW_FUNCTION_NAME_LEN_V01 + 1];
 } *penv;
 
 #ifdef CONFIG_ICNSS_DEBUG
@@ -1636,6 +1644,60 @@ out:
 	return ret;
 }
 
+static int icnss_decode_rejuvenate_ind(void *msg, unsigned int msg_len)
+{
+	struct msg_desc ind_desc;
+	struct wlfw_rejuvenate_ind_msg_v01 ind_msg;
+	int ret = 0;
+
+	if (!penv || !penv->wlfw_clnt) {
+		ret = -ENODEV;
+		goto out;
+	}
+
+	memset(&ind_msg, 0, sizeof(ind_msg));
+
+	ind_desc.msg_id = QMI_WLFW_REJUVENATE_IND_V01;
+	ind_desc.max_msg_len = WLFW_REJUVENATE_IND_MSG_V01_MAX_MSG_LEN;
+	ind_desc.ei_array = wlfw_rejuvenate_ind_msg_v01_ei;
+
+	ret = qmi_kernel_decode(&ind_desc, &ind_msg, msg, msg_len);
+	if (ret < 0) {
+		icnss_pr_err("Failed to decode rejuvenate ind message: ret %d, msg_len %u\n",
+			     ret, msg_len);
+		goto out;
+	}
+
+	if (ind_msg.cause_for_rejuvenation_valid)
+		penv->cause_for_rejuvenation = ind_msg.cause_for_rejuvenation;
+	else
+		penv->cause_for_rejuvenation = 0;
+	if (ind_msg.requesting_sub_system_valid)
+		penv->requesting_sub_system = ind_msg.requesting_sub_system;
+	else
+		penv->requesting_sub_system = 0;
+	if (ind_msg.line_number_valid)
+		penv->line_number = ind_msg.line_number;
+	else
+		penv->line_number = 0;
+	if (ind_msg.function_name_valid)
+		memcpy(penv->function_name, ind_msg.function_name,
+		       QMI_WLFW_FUNCTION_NAME_LEN_V01 + 1);
+	else
+		memset(penv->function_name, 0,
+		       QMI_WLFW_FUNCTION_NAME_LEN_V01 + 1);
+
+	icnss_pr_info("Cause for rejuvenation: 0x%x, requesting sub-system: 0x%x, line number: %u, function name: %s\n",
+		      penv->cause_for_rejuvenation,
+		      penv->requesting_sub_system,
+		      penv->line_number,
+		      penv->function_name);
+
+	penv->stats.rejuvenate_ind++;
+out:
+	return ret;
+}
+
 static int wlfw_rejuvenate_ack_send_sync_msg(struct icnss_priv *priv)
 {
 	int ret;
@@ -1829,6 +1891,7 @@ static void icnss_qmi_wlfw_clnt_ind(struct qmi_handle *handle,
 			     msg_id, penv->state);
 
 		icnss_ignore_qmi_timeout(true);
+		icnss_decode_rejuvenate_ind(msg, msg_len);
 		event_data = kzalloc(sizeof(*event_data), GFP_KERNEL);
 		if (event_data == NULL)
 			return;
@@ -1990,9 +2053,13 @@ static int icnss_call_driver_shutdown(struct icnss_priv *priv)
 	if (!priv->ops || !priv->ops->shutdown)
 		goto out;
 
+	if (test_bit(ICNSS_SHUTDOWN_DONE, &penv->state))
+		goto out;
+
 	icnss_pr_dbg("Calling driver shutdown state: 0x%lx\n", priv->state);
 
 	priv->ops->shutdown(&priv->pdev->dev);
+	set_bit(ICNSS_SHUTDOWN_DONE, &penv->state);
 
 out:
 	return 0;
@@ -2030,6 +2097,7 @@ static int icnss_pd_restart_complete(struct icnss_priv *priv)
 	}
 
 out:
+	clear_bit(ICNSS_SHUTDOWN_DONE, &penv->state);
 	return 0;
 
 call_probe:
@@ -3668,6 +3736,9 @@ static int icnss_stats_show_state(struct seq_file *s, struct icnss_priv *priv)
 		case ICNSS_WDOG_BITE:
 			seq_puts(s, "MODEM WDOG BITE");
 			continue;
+		case ICNSS_SHUTDOWN_DONE:
+			seq_puts(s, "SHUTDOWN DONE");
+			continue;
 		}
 
 		seq_printf(s, "UNKNOWN-%d", i);
@@ -3693,6 +3764,26 @@ static int icnss_stats_show_capability(struct seq_file *s,
 			   priv->fw_version_info.fw_build_timestamp);
 		seq_printf(s, "Firmware Build ID: %s\n",
 			   priv->fw_build_id);
+	}
+
+	return 0;
+}
+
+static int icnss_stats_show_rejuvenate_info(struct seq_file *s,
+					    struct icnss_priv *priv)
+{
+	if (priv->stats.rejuvenate_ind)  {
+		seq_puts(s, "\n<---------------- Rejuvenate Info ----------------->\n");
+		seq_printf(s, "Number of Rejuvenations: %u\n",
+			   priv->stats.rejuvenate_ind);
+		seq_printf(s, "Cause for Rejuvenation: 0x%x\n",
+			   priv->cause_for_rejuvenation);
+		seq_printf(s, "Requesting Sub-System: 0x%x\n",
+			   priv->requesting_sub_system);
+		seq_printf(s, "Line Number: %u\n",
+			   priv->line_number);
+		seq_printf(s, "Function Name: %s\n",
+			   priv->function_name);
 	}
 
 	return 0;
@@ -3763,6 +3854,7 @@ static int icnss_stats_show(struct seq_file *s, void *data)
 	ICNSS_STATS_DUMP(s, priv, vbatt_req);
 	ICNSS_STATS_DUMP(s, priv, vbatt_resp);
 	ICNSS_STATS_DUMP(s, priv, vbatt_req_err);
+	ICNSS_STATS_DUMP(s, priv, rejuvenate_ind);
 	ICNSS_STATS_DUMP(s, priv, rejuvenate_ack_req);
 	ICNSS_STATS_DUMP(s, priv, rejuvenate_ack_resp);
 	ICNSS_STATS_DUMP(s, priv, rejuvenate_ack_err);
@@ -3783,6 +3875,8 @@ static int icnss_stats_show(struct seq_file *s, void *data)
 	icnss_stats_show_irqs(s, priv);
 
 	icnss_stats_show_capability(s, priv);
+
+	icnss_stats_show_rejuvenate_info(s, priv);
 
 	icnss_stats_show_events(s, priv);
 
@@ -3911,9 +4005,11 @@ static int icnss_regread_show(struct seq_file *s, void *data)
 	seq_hex_dump(s, "", DUMP_PREFIX_OFFSET, 32, 4, priv->diag_reg_read_buf,
 		     priv->diag_reg_read_len, false);
 
+	mutex_lock(&priv->dev_lock);
 	priv->diag_reg_read_len = 0;
 	kfree(priv->diag_reg_read_buf);
 	priv->diag_reg_read_buf = NULL;
+	mutex_unlock(&priv->dev_lock);
 
 	return 0;
 }
@@ -3986,10 +4082,12 @@ static ssize_t icnss_regread_write(struct file *fp, const char __user *user_buf,
 		return ret;
 	}
 
+	mutex_lock(&priv->dev_lock);
 	priv->diag_reg_read_addr = reg_offset;
 	priv->diag_reg_read_mem_type = mem_type;
 	priv->diag_reg_read_len = data_len;
 	priv->diag_reg_read_buf = reg_buf;
+	mutex_unlock(&priv->dev_lock);
 
 	return count;
 }
@@ -4091,6 +4189,9 @@ static int icnss_probe(struct platform_device *pdev)
 	int i;
 	struct device *dev = &pdev->dev;
 	struct icnss_priv *priv;
+	const __be32 *addrp;
+	u64 prop_size = 0;
+	struct device_node *np;
 
 	if (penv) {
 		icnss_pr_err("Driver is already initialized\n");
@@ -4162,24 +4263,53 @@ static int icnss_probe(struct platform_device *pdev)
 		}
 	}
 
-	ret = of_property_read_u32(dev->of_node, "qcom,wlan-msa-memory",
-				   &priv->msa_mem_size);
+	np = of_parse_phandle(dev->of_node,
+			      "qcom,wlan-msa-fixed-region", 0);
+	if (np) {
+		addrp = of_get_address(np, 0, &prop_size, NULL);
+		if (!addrp) {
+			icnss_pr_err("Failed to get assigned-addresses or property\n");
+			ret = -EINVAL;
+			goto out;
+		}
 
-	if (ret || priv->msa_mem_size == 0) {
-		icnss_pr_err("Fail to get MSA Memory Size: %u, ret: %d\n",
-			     priv->msa_mem_size, ret);
-		goto out;
+		priv->msa_pa = of_translate_address(np, addrp);
+		if (priv->msa_pa == OF_BAD_ADDR) {
+			icnss_pr_err("Failed to translate MSA PA from device-tree\n");
+			ret = -EINVAL;
+			goto out;
+		}
+
+		priv->msa_va = memremap(priv->msa_pa,
+					(unsigned long)prop_size, MEMREMAP_WT);
+		if (!priv->msa_va) {
+			icnss_pr_err("MSA PA ioremap failed: phy addr: %pa\n",
+				     &priv->msa_pa);
+			ret = -EINVAL;
+			goto out;
+		}
+		priv->msa_mem_size = prop_size;
+	} else {
+		ret = of_property_read_u32(dev->of_node, "qcom,wlan-msa-memory",
+					   &priv->msa_mem_size);
+		if (ret || priv->msa_mem_size == 0) {
+			icnss_pr_err("Fail to get MSA Memory Size: %u ret: %d\n",
+				     priv->msa_mem_size, ret);
+			goto out;
+		}
+
+		priv->msa_va = dmam_alloc_coherent(&pdev->dev,
+				priv->msa_mem_size, &priv->msa_pa, GFP_KERNEL);
+
+		if (!priv->msa_va) {
+			icnss_pr_err("DMA alloc failed for MSA\n");
+			ret = -ENOMEM;
+			goto out;
+		}
 	}
 
-	priv->msa_va = dmam_alloc_coherent(&pdev->dev, priv->msa_mem_size,
-					   &priv->msa_pa, GFP_KERNEL);
-	if (!priv->msa_va) {
-		icnss_pr_err("DMA alloc failed for MSA\n");
-		ret = -ENOMEM;
-		goto out;
-	}
-	icnss_pr_dbg("MSA pa: %pa, MSA va: 0x%p\n", &priv->msa_pa,
-		     priv->msa_va);
+	icnss_pr_dbg("MSA pa: %pa, MSA va: 0x%p MSA Memory Size: 0x%x\n",
+		     &priv->msa_pa, (void *)priv->msa_va, priv->msa_mem_size);
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 					   "smmu_iova_base");
@@ -4215,6 +4345,7 @@ static int icnss_probe(struct platform_device *pdev)
 
 	spin_lock_init(&priv->event_lock);
 	spin_lock_init(&priv->on_off_lock);
+	mutex_init(&priv->dev_lock);
 
 	priv->event_wq = alloc_workqueue("icnss_driver_event", WQ_UNBOUND, 1);
 	if (!priv->event_wq) {

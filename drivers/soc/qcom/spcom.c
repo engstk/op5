@@ -53,9 +53,6 @@
 /* Uncomment the line below to test spcom against modem rather than SP */
 /* #define SPCOM_TEST_HLOS_WITH_MODEM 1 */
 
-/* Uncomment the line below to enable debug messages */
-/* #define DEBUG 1 */
-
 #define pr_fmt(fmt)	"spcom [%s]: " fmt, __func__
 
 #include <linux/kernel.h>	/* min() */
@@ -121,7 +118,7 @@
 
 /*
  * After both sides get CONNECTED,
- * there is a race between once side queueing rx buffer and the other side
+ * there is a race between once side queuing rx buffer and the other side
  * trying to call glink_tx() , this race is only on the 1st tx.
  * do tx retry with some delay to allow the other side to queue rx buffer.
  */
@@ -138,7 +135,7 @@
 
 /*
  * ACK timeout from remote side for TX data.
- * Normally, it takes few msec for SPSS to responde with ACK for TX data.
+ * Normally, it takes few msec for SPSS to respond with ACK for TX data.
  * However, due to SPSS HW issue, the SPSS might disable interrupts
  * for a very long time.
  */
@@ -198,6 +195,7 @@ struct spcom_channel {
 	 * glink state: CONNECTED / LOCAL_DISCONNECTED, REMOTE_DISCONNECTED
 	 */
 	unsigned glink_state;
+	bool is_closing;
 
 	/* Events notification */
 	struct completion connect;
@@ -220,9 +218,9 @@ struct spcom_channel {
 	bool tx_abort;
 
 	/* rx data info */
-	int rx_buf_size;	/* allocated rx buffer size */
+	size_t rx_buf_size;	/* allocated rx buffer size */
 	bool rx_buf_ready;
-	int actual_rx_size;	/* actual data size received */
+	size_t actual_rx_size;	/* actual data size received */
 	const void *glink_rx_buf;
 
 	/* ION lock/unlock support */
@@ -247,7 +245,7 @@ struct spcom_device {
 	int channel_count;
 
 	/* private */
-	struct mutex lock;
+	struct mutex cmd_lock;
 
 	/* Link state */
 	struct completion link_state_changed;
@@ -302,6 +300,10 @@ static inline bool spcom_is_channel_open(struct spcom_channel *ch)
  */
 static inline bool spcom_is_channel_connected(struct spcom_channel *ch)
 {
+	/* Channel must be open before it gets connected */
+	if (!spcom_is_channel_open(ch))
+		return false;
+
 	return (ch->glink_state == GLINK_CONNECTED);
 }
 
@@ -359,6 +361,11 @@ static void spcom_link_state_notif_cb(struct glink_link_state_cb_info *cb_info,
 	struct spcom_channel *ch = NULL;
 	const char *ch_name = "sp_kernel";
 
+	if (!cb_info) {
+		pr_err("invalid NULL cb_info param\n");
+		return;
+	}
+
 	if (!spcom_is_ready()) {
 		pr_err("spcom is not ready.\n");
 		return;
@@ -411,13 +418,17 @@ static void spcom_notify_rx(void *handle,
 	struct spcom_channel *ch = (struct spcom_channel *) priv;
 
 	if (!ch) {
-		pr_err("invalid ch parameter.\n");
+		pr_err("invalid NULL channel param\n");
+		return;
+	}
+	if (!buf) {
+		pr_err("invalid NULL buf param\n");
 		return;
 	}
 
-	pr_debug("ch [%s] rx size [%d].\n", ch->name, (int) size);
+	pr_debug("ch [%s] rx size [%zu]\n", ch->name, size);
 
-	ch->actual_rx_size = (int) size;
+	ch->actual_rx_size = size;
 	ch->glink_rx_buf = (void *) buf;
 
 	complete_all(&ch->rx_done);
@@ -436,7 +447,11 @@ static void spcom_notify_tx_done(void *handle,
 	int *tx_buf = (int *) buf;
 
 	if (!ch) {
-		pr_err("invalid ch parameter.\n");
+		pr_err("invalid NULL channel param\n");
+		return;
+	}
+	if (!buf) {
+		pr_err("invalid NULL buf param\n");
 		return;
 	}
 
@@ -460,10 +475,24 @@ static void spcom_notify_state(void *handle, const void *priv, unsigned event)
 	int ret;
 	struct spcom_channel *ch = (struct spcom_channel *) priv;
 
+	if (!ch) {
+		pr_err("invalid NULL channel param\n");
+		return;
+	}
+
 	switch (event) {
 	case GLINK_CONNECTED:
 		pr_debug("GLINK_CONNECTED, ch name [%s].\n", ch->name);
-		complete_all(&ch->connect);
+		mutex_lock(&ch->lock);
+
+		if (ch->is_closing) {
+			pr_err("Unexpected CONNECTED while closing [%s].\n",
+				ch->name);
+			mutex_unlock(&ch->lock);
+			return;
+		}
+
+		ch->glink_state = event;
 
 		/*
 		 * if spcom_notify_state() is called within glink_open()
@@ -474,16 +503,28 @@ static void spcom_notify_state(void *handle, const void *priv, unsigned event)
 			ch->glink_handle = handle;
 		}
 
-		/* prepare default rx buffer after connected */
+		/* signal before unlock mutex & before calling glink */
+		complete_all(&ch->connect);
+
+		/*
+		 * Prepare default rx buffer.
+		 * glink_queue_rx_intent() can be called only AFTER connected.
+		 * We do it here, ASAP, to allow rx data.
+		 */
+
+		pr_debug("call glink_queue_rx_intent() ch [%s].\n", ch->name);
 		ret = glink_queue_rx_intent(ch->glink_handle,
 					    ch, ch->rx_buf_size);
 		if (ret) {
 			pr_err("glink_queue_rx_intent() err [%d]\n", ret);
 		} else {
-			pr_debug("rx buf is ready, size [%d].\n",
+			pr_debug("rx buf is ready, size [%zu]\n",
 				 ch->rx_buf_size);
 			ch->rx_buf_ready = true;
 		}
+
+		pr_debug("GLINK_CONNECTED, ch name [%s] done.\n", ch->name);
+		mutex_unlock(&ch->lock);
 		break;
 	case GLINK_LOCAL_DISCONNECTED:
 		/*
@@ -491,6 +532,7 @@ static void spcom_notify_state(void *handle, const void *priv, unsigned event)
 		 * only after *both* sides closed the channel.
 		 */
 		pr_debug("GLINK_LOCAL_DISCONNECTED, ch [%s].\n", ch->name);
+		ch->glink_state = event;
 		complete_all(&ch->disconnect);
 		break;
 	case GLINK_REMOTE_DISCONNECTED:
@@ -500,6 +542,8 @@ static void spcom_notify_state(void *handle, const void *priv, unsigned event)
 		 * This may happen upon remote SSR.
 		 */
 		pr_err("GLINK_REMOTE_DISCONNECTED, ch [%s].\n", ch->name);
+
+		ch->glink_state = event;
 
 		/*
 		 * Abort any blocking read() operation.
@@ -518,8 +562,6 @@ static void spcom_notify_state(void *handle, const void *priv, unsigned event)
 		       (int) event, ch->name);
 		return;
 	}
-
-	ch->glink_state = event;
 }
 
 /**
@@ -535,9 +577,7 @@ static void spcom_notify_state(void *handle, const void *priv, unsigned event)
 static bool spcom_notify_rx_intent_req(void *handle, const void *priv,
 				       size_t req_size)
 {
-	struct spcom_channel *ch = (struct spcom_channel *) priv;
-
-	pr_err("Unexpected intent request for ch [%s].\n", ch->name);
+	pr_err("Unexpected intent request\n");
 
 	return false;
 }
@@ -552,6 +592,11 @@ static void spcom_notify_rx_abort(void *handle, const void *priv,
 				  const void *pkt_priv)
 {
 	struct spcom_channel *ch = (struct spcom_channel *) priv;
+
+	if (!ch) {
+		pr_err("invalid NULL channel param\n");
+		return;
+	}
 
 	pr_debug("ch [%s] pending rx aborted.\n", ch->name);
 
@@ -572,6 +617,11 @@ static void spcom_notify_tx_abort(void *handle, const void *priv,
 				  const void *pkt_priv)
 {
 	struct spcom_channel *ch = (struct spcom_channel *) priv;
+
+	if (!ch) {
+		pr_err("invalid NULL channel param\n");
+		return;
+	}
 
 	pr_debug("ch [%s] pending tx aborted.\n", ch->name);
 
@@ -639,6 +689,13 @@ static int spcom_init_channel(struct spcom_channel *ch, const char *name)
 	ch->glink_state = GLINK_LOCAL_DISCONNECTED;
 	ch->actual_rx_size = 0;
 	ch->rx_buf_size = SPCOM_RX_BUF_SIZE;
+	ch->is_closing = false;
+	ch->glink_handle = NULL;
+	ch->ref_count = 0;
+	ch->rx_abort = false;
+	ch->tx_abort = false;
+	ch->txn_id = INITIAL_TXN_ID; /* use non-zero nonce for debug */
+	ch->pid = 0;
 
 	return 0;
 }
@@ -690,9 +747,6 @@ static int spcom_open(struct spcom_channel *ch, unsigned int timeout_msec)
 		pr_err("channel [%s] already in use.\n", name);
 		goto exit_err;
 	}
-	ch->ref_count++;
-	ch->pid = current_pid();
-	ch->txn_id = INITIAL_TXN_ID;
 
 	pr_debug("ch [%s] opened by PID [%d], count [%d]\n",
 		 name, ch->pid, ch->ref_count);
@@ -710,6 +764,8 @@ static int spcom_open(struct spcom_channel *ch, unsigned int timeout_msec)
 	/* init completion before calling glink_open() */
 	reinit_completion(&ch->connect);
 
+	ch->is_closing = false;
+
 	handle = glink_open(&cfg);
 	if (IS_ERR_OR_NULL(handle)) {
 		pr_err("glink_open failed.\n");
@@ -717,7 +773,14 @@ static int spcom_open(struct spcom_channel *ch, unsigned int timeout_msec)
 	} else {
 		pr_debug("glink_open [%s] ok.\n", name);
 	}
+
+	/* init channel context after successful open */
 	ch->glink_handle = handle;
+	ch->ref_count++;
+	ch->pid = current_pid();
+	ch->txn_id = INITIAL_TXN_ID;
+
+	mutex_unlock(&ch->lock);
 
 	pr_debug("Wait for connection on channel [%s] timeout_msec [%d].\n",
 		 name, timeout_msec);
@@ -734,8 +797,6 @@ static int spcom_open(struct spcom_channel *ch, unsigned int timeout_msec)
 		wait_for_completion(&(ch->connect));
 		pr_debug("Channel [%s] opened, no timeout.\n", name);
 	}
-
-	mutex_unlock(&ch->lock);
 
 	return 0;
 exit_err:
@@ -763,6 +824,8 @@ static int spcom_close(struct spcom_channel *ch)
 		return 0;
 	}
 
+	ch->is_closing = true;
+
 	ret = glink_close(ch->glink_handle);
 	if (ret)
 		pr_err("glink_close() fail, ret [%d].\n", ret);
@@ -778,6 +841,7 @@ static int spcom_close(struct spcom_channel *ch)
 	ch->pid = 0;
 
 	pr_debug("Channel closed [%s].\n", ch->name);
+
 	mutex_unlock(&ch->lock);
 
 	return 0;
@@ -791,6 +855,8 @@ static int spcom_close(struct spcom_channel *ch)
  * @size: buffer size
  *
  * ACK is expected within a very short time (few msec).
+ *
+ * Return: 0 on successful operation, negative value otherwise.
  */
 static int spcom_tx(struct spcom_channel *ch,
 		    void *buf,
@@ -855,13 +921,15 @@ exit_err:
  * @size: buffer size
  *
  * ACK is expected within a very short time (few msec).
+ *
+ * Return: size in bytes on success, negative value on failure.
  */
 static int spcom_rx(struct spcom_channel *ch,
 		     void *buf,
 		     uint32_t size,
 		     uint32_t timeout_msec)
 {
-	int ret;
+	int ret = -1;
 	unsigned long jiffies = msecs_to_jiffies(timeout_msec);
 	long timeleft = 1;
 
@@ -869,7 +937,7 @@ static int spcom_rx(struct spcom_channel *ch,
 
 	/* check for already pending data */
 	if (ch->actual_rx_size) {
-		pr_debug("already pending data size [%d].\n",
+		pr_debug("already pending data size [%zu]\n",
 			 ch->actual_rx_size);
 		goto copy_buf;
 	}
@@ -886,12 +954,13 @@ static int spcom_rx(struct spcom_channel *ch,
 
 	if (timeleft == 0) {
 		pr_err("rx_done timeout [%d] msec expired.\n", timeout_msec);
-		goto exit_err;
+		mutex_unlock(&ch->lock);
+		return -ETIMEDOUT;
 	} else if (ch->rx_abort) {
-		pr_err("rx aborted.\n");
-		goto exit_err;
+		mutex_unlock(&ch->lock);
+		return -ERESTART; /* probably SSR */
 	} else if (ch->actual_rx_size) {
-		pr_debug("actual_rx_size is [%d].\n", ch->actual_rx_size);
+		pr_debug("actual_rx_size is [%zu]\n", ch->actual_rx_size);
 	} else {
 		pr_err("actual_rx_size is zero.\n");
 		goto exit_err;
@@ -920,7 +989,7 @@ copy_buf:
 		pr_err("glink_queue_rx_intent() failed, ret [%d]", ret);
 		goto exit_err;
 	} else {
-		pr_debug("queue rx_buf, size [%d].\n", ch->rx_buf_size);
+		pr_debug("queue rx_buf, size [%zu]\n", ch->rx_buf_size);
 	}
 
 	mutex_unlock(&ch->lock);
@@ -940,6 +1009,8 @@ exit_err:
  * Server needs the size of the next request to allocate a request buffer.
  * Initially used intent-request, however this complicated the remote side,
  * so both sides are not using glink_tx() with INTENT_REQ anymore.
+ *
+ * Return: size in bytes on success, negative value on failure.
  */
 static int spcom_get_next_request_size(struct spcom_channel *ch)
 {
@@ -951,7 +1022,7 @@ static int spcom_get_next_request_size(struct spcom_channel *ch)
 
 	/* check if already got it via callback */
 	if (ch->actual_rx_size) {
-		pr_debug("next-req-size already ready ch [%s] size [%d].\n",
+		pr_debug("next-req-size already ready ch [%s] size [%zu]\n",
 			 ch->name, ch->actual_rx_size);
 		goto exit_ready;
 	}
@@ -966,7 +1037,7 @@ static int spcom_get_next_request_size(struct spcom_channel *ch)
 	}
 
 	if (ch->actual_rx_size <= 0) {
-		pr_err("invalid rx size [%d] ch [%s].\n",
+		pr_err("invalid rx size [%zu] ch [%s]\n",
 		       ch->actual_rx_size, ch->name);
 		goto exit_error;
 	}
@@ -1099,15 +1170,20 @@ int spcom_unregister_client(struct spcom_client *client)
 	}
 
 	if (!client) {
-		pr_err("Invalid parameter.\n");
+		pr_err("Invalid client parameter.\n");
 		return -EINVAL;
 	}
 
-	ch = client->ch;
 
-	kfree(client);
+	ch = client->ch;
+	if (!ch) {
+		pr_err("Invalid channel.\n");
+		return -EINVAL;
+	}
 
 	spcom_close(ch);
+
+	kfree(client);
 
 	return 0;
 }
@@ -1125,6 +1201,8 @@ EXPORT_SYMBOL(spcom_unregister_client);
  * @timeout_msec: timeout waiting for response.
  *
  * The timeout depends on the specific request handling time at the remote side.
+ *
+ * Return: number of rx bytes on success, negative value on failure.
  */
 int spcom_client_send_message_sync(struct spcom_client	*client,
 				    void	*req_ptr,
@@ -1147,6 +1225,10 @@ int spcom_client_send_message_sync(struct spcom_client	*client,
 	}
 
 	ch = client->ch;
+	if (!ch) {
+		pr_err("Invalid channel.\n");
+		return -EINVAL;
+	}
 
 	/* Check if remote side connect */
 	if (!spcom_is_channel_connected(ch)) {
@@ -1181,6 +1263,7 @@ EXPORT_SYMBOL(spcom_client_send_message_sync);
 bool spcom_client_is_server_connected(struct spcom_client *client)
 {
 	bool connected;
+	struct spcom_channel *ch;
 
 	if (!spcom_is_ready()) {
 		pr_err("spcom is not ready.\n");
@@ -1192,7 +1275,13 @@ bool spcom_client_is_server_connected(struct spcom_client *client)
 		return false;
 	}
 
-	connected = spcom_is_channel_connected(client->ch);
+	ch = client->ch;
+	if (!ch) {
+		pr_err("Invalid channel.\n");
+		return -EINVAL;
+	}
+
+	connected = spcom_is_channel_connected(ch);
 
 	return connected;
 }
@@ -1265,15 +1354,19 @@ int spcom_unregister_service(struct spcom_server *server)
 	}
 
 	if (!server) {
-		pr_err("Invalid parameter.\n");
+		pr_err("Invalid server parameter.\n");
 		return -EINVAL;
 	}
 
 	ch = server->ch;
-
-	kfree(server);
+	if (!ch) {
+		pr_err("Invalid channel parameter.\n");
+		return -EINVAL;
+	}
 
 	spcom_close(ch);
+
+	kfree(server);
 
 	return 0;
 }
@@ -1284,7 +1377,7 @@ EXPORT_SYMBOL(spcom_unregister_service);
  *
  * @server: server handle
  *
- * Return: request size in bytes.
+ * Return: size in bytes on success, negative value on failure.
  */
 int spcom_server_get_next_request_size(struct spcom_server *server)
 {
@@ -1297,6 +1390,10 @@ int spcom_server_get_next_request_size(struct spcom_server *server)
 	}
 
 	ch = server->ch;
+	if (!ch) {
+		pr_err("Invalid channel.\n");
+		return -EINVAL;
+	}
 
 	/* Check if remote side connect */
 	if (!spcom_is_channel_connected(ch)) {
@@ -1319,7 +1416,7 @@ EXPORT_SYMBOL(spcom_server_get_next_request_size);
  * @req_ptr: request buffer pointer
  * @req_size: max request size
  *
- * Return: request size in bytes.
+ * Return: size in bytes on success, negative value on failure.
  */
 int spcom_server_wait_for_request(struct spcom_server	*server,
 				  void			*req_ptr,
@@ -1339,6 +1436,10 @@ int spcom_server_wait_for_request(struct spcom_server	*server,
 	}
 
 	ch = server->ch;
+	if (!ch) {
+		pr_err("Invalid channel.\n");
+		return -EINVAL;
+	}
 
 	/* Check if remote side connect */
 	if (!spcom_is_channel_connected(ch)) {
@@ -1377,6 +1478,10 @@ int spcom_server_send_response(struct spcom_server	*server,
 	}
 
 	ch = server->ch;
+	if (!ch) {
+		pr_err("Invalid channel.\n");
+		return -EINVAL;
+	}
 
 	/* Check if remote side connect */
 	if (!spcom_is_channel_connected(ch)) {
@@ -1408,6 +1513,7 @@ static int spcom_handle_create_channel_command(void *cmd_buf, int cmd_size)
 	int ret = 0;
 	struct spcom_user_create_channel_command *cmd = cmd_buf;
 	const char *ch_name;
+	const size_t maxlen = sizeof(cmd->ch_name);
 
 	if (cmd_size != sizeof(*cmd)) {
 		pr_err("cmd_size [%d] , expected [%d].\n",
@@ -1416,6 +1522,10 @@ static int spcom_handle_create_channel_command(void *cmd_buf, int cmd_size)
 	}
 
 	ch_name = cmd->ch_name;
+	if (strnlen(cmd->ch_name, maxlen) == maxlen) {
+		pr_err("channel name is not NULL terminated\n");
+		return -EINVAL;
+	}
 
 	pr_debug("ch_name [%s].\n", ch_name);
 
@@ -1554,7 +1664,7 @@ static int modify_ion_addr(void *buf,
 
 	/* Get ION handle from fd */
 	handle = ion_import_dma_buf(spcom_dev->ion_client, fd);
-	if (handle == NULL) {
+	if (IS_ERR_OR_NULL(handle)) {
 		pr_err("fail to get ion handle.\n");
 		return -EINVAL;
 	}
@@ -1715,12 +1825,15 @@ static int spcom_handle_lock_ion_buf_command(struct spcom_channel *ch,
 
 	/* Get ION handle from fd - this increments the ref count */
 	ion_handle = ion_import_dma_buf(spcom_dev->ion_client, fd);
-	if (ion_handle == NULL) {
+	if (IS_ERR_OR_NULL(ion_handle)) {
 		pr_err("fail to get ion handle.\n");
 		return -EINVAL;
 	}
 
 	pr_debug("ion handle ok.\n");
+
+	/* ION buf lock doesn't involve any rx/tx data to SP. */
+	mutex_lock(&ch->lock);
 
 	/* Check if this ION buffer is already locked */
 	for (i = 0 ; i < ARRAY_SIZE(ch->ion_handle_table) ; i++) {
@@ -1728,6 +1841,7 @@ static int spcom_handle_lock_ion_buf_command(struct spcom_channel *ch,
 			pr_err("fd [%d] ion buf is already locked.\n", fd);
 			/* decrement back the ref count */
 			ion_free(spcom_dev->ion_client, ion_handle);
+			mutex_unlock(&ch->lock);
 			return -EINVAL;
 		}
 	}
@@ -1739,6 +1853,7 @@ static int spcom_handle_lock_ion_buf_command(struct spcom_channel *ch,
 			ch->ion_fd_table[i] = fd;
 			pr_debug("ch [%s] locked ion buf #%d, fd [%d].\n",
 				ch->name, i, fd);
+			mutex_unlock(&ch->lock);
 			return 0;
 		}
 	}
@@ -1746,6 +1861,8 @@ static int spcom_handle_lock_ion_buf_command(struct spcom_channel *ch,
 	pr_err("no free entry to store ion handle of fd [%d].\n", fd);
 	/* decrement back the ref count */
 	ion_free(spcom_dev->ion_client, ion_handle);
+
+	mutex_unlock(&ch->lock);
 
 	return -EFAULT;
 }
@@ -1786,6 +1903,8 @@ static int spcom_unlock_ion_buf(struct spcom_channel *ch, int fd)
 	} else {
 		/* unlock specific ION buf */
 		for (i = 0 ; i < ARRAY_SIZE(ch->ion_handle_table) ; i++) {
+			if (ch->ion_handle_table[i] == NULL)
+				continue;
 			if (ch->ion_fd_table[i] == fd) {
 				pr_debug("unlocked ion buf #%d fd [%d].\n",
 					i, ch->ion_fd_table[i]);
@@ -1825,21 +1944,14 @@ static int spcom_handle_unlock_ion_buf_command(struct spcom_channel *ch,
 		return -EINVAL;
 	}
 
+	/* ION buf unlock doesn't involve any rx/tx data to SP. */
+	mutex_lock(&ch->lock);
+
 	ret = spcom_unlock_ion_buf(ch, fd);
 
+	mutex_unlock(&ch->lock);
+
 	return ret;
-}
-
-/**
- * spcom_handle_fake_ssr_command() - Handle fake ssr command from user space.
- */
-static int spcom_handle_fake_ssr_command(struct spcom_channel *ch, int arg)
-{
-	pr_debug("Start Fake glink SSR subsystem [%s].\n", spcom_edge);
-	glink_ssr(spcom_edge);
-	pr_debug("Fake glink SSR subsystem [%s] done.\n", spcom_edge);
-
-	return 0;
 }
 
 /**
@@ -1860,9 +1972,9 @@ static int spcom_handle_write(struct spcom_channel *ch,
 	int swap_id;
 	char cmd_name[5] = {0}; /* debug only */
 
-	/* opcode field is the minimum length of cmd */
-	if (buf_size < sizeof(cmd->cmd_id)) {
-		pr_err("Invalid argument user buffer size %d.\n", buf_size);
+	/* Minimal command should have command-id and argument */
+	if (buf_size < sizeof(struct spcom_user_command)) {
+		pr_err("Command buffer size [%d] too small\n", buf_size);
 		return -EINVAL;
 	}
 
@@ -1870,6 +1982,8 @@ static int spcom_handle_write(struct spcom_channel *ch,
 	cmd_id = (int) cmd->cmd_id;
 	swap_id = htonl(cmd->cmd_id);
 	memcpy(cmd_name, &swap_id, sizeof(int));
+
+	mutex_lock(&spcom_dev->cmd_lock);
 
 	pr_debug("cmd_id [0x%x] cmd_name [%s].\n", cmd_id, cmd_name);
 
@@ -1886,16 +2000,15 @@ static int spcom_handle_write(struct spcom_channel *ch,
 	case SPCOM_CMD_UNLOCK_ION_BUF:
 		ret = spcom_handle_unlock_ion_buf_command(ch, buf, buf_size);
 	     break;
-	case SPCOM_CMD_FSSR:
-		ret = spcom_handle_fake_ssr_command(ch, cmd->arg);
-		break;
 	case SPCOM_CMD_CREATE_CHANNEL:
 		ret = spcom_handle_create_channel_command(buf, buf_size);
 		break;
 	default:
 		pr_err("Invalid Command Id [0x%x].\n", (int) cmd->cmd_id);
-		return -EINVAL;
+		ret = -EINVAL;
 	}
+
+	mutex_unlock(&spcom_dev->cmd_lock);
 
 	return ret;
 }
@@ -1907,7 +2020,7 @@ static int spcom_handle_write(struct spcom_channel *ch,
  * @buf:	command buffer.
  * @size:	command buffer size.
  *
- * Return: size in bytes.
+ * Return: size in bytes on success, negative value on failure.
  */
 static int spcom_handle_get_req_size(struct spcom_channel *ch,
 				      void *buf,
@@ -1935,7 +2048,7 @@ static int spcom_handle_get_req_size(struct spcom_channel *ch,
  * @buf:	command buffer.
  * @size:	command buffer size.
  *
- * Return: size in bytes.
+ * Return: size in bytes on success, negative value on failure.
  */
 static int spcom_handle_read_req_resp(struct spcom_channel *ch,
 				       void *buf,
@@ -1955,7 +2068,7 @@ static int spcom_handle_read_req_resp(struct spcom_channel *ch,
 
 	/* Check param validity */
 	if (size > SPCOM_MAX_RESPONSE_SIZE) {
-		pr_err("ch [%s] inavlid size [%d].\n",
+		pr_err("ch [%s] invalid size [%d].\n",
 			ch->name, size);
 		return -EINVAL;
 	}
@@ -1978,7 +2091,8 @@ static int spcom_handle_read_req_resp(struct spcom_channel *ch,
 	ret = spcom_rx(ch, rx_buf, rx_buf_size, timeout_msec);
 	if (ret < 0) {
 		pr_err("rx error %d.\n", ret);
-		goto exit_err;
+		kfree(rx_buf);
+		return ret;
 	} else {
 		size = ret; /* actual_rx_size */
 	}
@@ -2018,7 +2132,7 @@ exit_err:
  * A special size SPCOM_GET_NEXT_REQUEST_SIZE, which is bigger than the max
  * response/request tells the kernel that user space only need the size.
  *
- * Return: size in bytes.
+ * Return: size in bytes on success, negative value on failure.
  */
 static int spcom_handle_read(struct spcom_channel *ch,
 			      void *buf,
@@ -2082,6 +2196,10 @@ static int spcom_device_open(struct inode *inode, struct file *filp)
 	struct spcom_channel *ch;
 	const char *name = file_to_filename(filp);
 
+	/* silent error message until spss link is up */
+	if (!spcom_is_sp_subsystem_link_up())
+		return -ENODEV;
+
 	pr_debug("Open file [%s].\n", name);
 
 	if (strcmp(name, DEVICE_NAME) == 0) {
@@ -2100,8 +2218,6 @@ static int spcom_device_open(struct inode *inode, struct file *filp)
 		return -ENODEV;
 	}
 
-	filp->private_data = ch;
-
 	ret = spcom_open(ch, OPEN_CHANNEL_TIMEOUT_MSEC);
 	if (ret == -ETIMEDOUT) {
 		pr_err("Connection timeout channel [%s].\n", name);
@@ -2109,6 +2225,8 @@ static int spcom_device_open(struct inode *inode, struct file *filp)
 		pr_err("failed to open channel [%s] , err=%d.\n", name, ret);
 		return ret;
 	}
+
+	filp->private_data = ch;
 
 	pr_debug("finished.\n");
 
@@ -2130,7 +2248,6 @@ static int spcom_device_release(struct inode *inode, struct file *filp)
 {
 	struct spcom_channel *ch;
 	const char *name = file_to_filename(filp);
-	bool connected = false;
 
 	pr_debug("Close file [%s].\n", name);
 
@@ -2152,19 +2269,18 @@ static int spcom_device_release(struct inode *inode, struct file *filp)
 	}
 
 	/* channel might be already closed or disconnected */
-	if (spcom_is_channel_open(ch) && spcom_is_channel_connected(ch))
-		connected = true;
+	if (!spcom_is_channel_open(ch)) {
+		pr_err("ch [%s] already closed.\n", name);
+		return 0;
+	}
 
 	reinit_completion(&ch->disconnect);
 
 	spcom_close(ch);
 
-	if (connected) {
-		pr_debug("Wait for event GLINK_LOCAL_DISCONNECTED, ch [%s].\n",
-			 name);
-		wait_for_completion(&ch->disconnect);
-		pr_debug("GLINK_LOCAL_DISCONNECTED signaled, ch [%s].\n", name);
-	}
+	pr_debug("Wait for event GLINK_LOCAL_DISCONNECTED, ch [%s].\n", name);
+	wait_for_completion(&ch->disconnect);
+	pr_debug("GLINK_LOCAL_DISCONNECTED signaled, ch [%s].\n", name);
 
 	return 0;
 }
@@ -2196,8 +2312,8 @@ static ssize_t spcom_device_write(struct file *filp,
 
 	ch = filp->private_data;
 	if (!ch) {
-		pr_debug("invalid ch pointer.\n");
-		/* Allow some special commands via /dev/spcom and /dev/sp_ssr */
+		pr_err("invalid ch pointer, command not allowed.\n");
+		return -EINVAL;
 	} else {
 		/* Check if remote side connect */
 		if (!spcom_is_channel_connected(ch)) {
@@ -2281,8 +2397,14 @@ static ssize_t spcom_device_read(struct file *filp, char __user *user_buff,
 	if (buf == NULL)
 		return -ENOMEM;
 
-	actual_size = spcom_handle_read(ch, buf, size);
-	if ((actual_size <= 0) || (actual_size > size)) {
+	ret = spcom_handle_read(ch, buf, size);
+	if (ret < 0) {
+		pr_err("read error [%d].\n", ret);
+		kfree(buf);
+		return ret;
+	}
+	actual_size = ret;
+	if ((actual_size == 0) || (actual_size > size)) {
 		pr_err("invalid actual_size [%d].\n", actual_size);
 		kfree(buf);
 		return -EFAULT;
@@ -2588,7 +2710,7 @@ static int spcom_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	spcom_dev = dev;
-	mutex_init(&dev->lock);
+	mutex_init(&spcom_dev->cmd_lock);
 	init_completion(&dev->link_state_changed);
 	spcom_dev->link_state = GLINK_LINK_STATE_DOWN;
 
@@ -2661,7 +2783,7 @@ static int __init spcom_init(void)
 {
 	int ret;
 
-	pr_info("spcom driver Ver 1.0 23-Nov-2015.\n");
+	pr_info("spcom driver version 1.1 17-July-2017.\n");
 
 	ret = platform_driver_register(&spcom_driver);
 	if (ret)

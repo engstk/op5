@@ -1139,6 +1139,7 @@ int sdhci_msm_execute_tuning(struct sdhci_host *host, u32 opcode)
 	bool drv_type_changed = false;
 	struct mmc_card *card = host->mmc->card;
 	int sts_retry;
+	u8 last_good_phase = 0;
 
 	/*
 	 * Tuning is required for SDR104, HS200 and HS400 cards and
@@ -1224,6 +1225,22 @@ retry:
 		mmc_wait_for_req(mmc, &mrq);
 
 		if (card && (cmd.error || data.error)) {
+			/*
+			 * Set the dll to last known good phase while sending
+			 * status command to ensure that status command won't
+			 * fail due to bad phase.
+			 */
+			if (tuned_phase_cnt)
+				last_good_phase =
+					tuned_phases[tuned_phase_cnt-1];
+			else if (msm_host->saved_tuning_phase !=
+					INVALID_TUNING_PHASE)
+				last_good_phase = msm_host->saved_tuning_phase;
+
+			rc = msm_config_cm_dll_phase(host, last_good_phase);
+			if (rc)
+				goto kfree;
+
 			sts_cmd.opcode = MMC_SEND_STATUS;
 			sts_cmd.arg = card->rca << 16;
 			sts_cmd.flags = MMC_RSP_R1 | MMC_CMD_AC;
@@ -1837,13 +1854,13 @@ struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 	}
 
 	if (sdhci_msm_dt_get_array(dev, "qcom,devfreq,freq-table",
-			&msm_host->mmc->clk_scaling.freq_table,
-			&msm_host->mmc->clk_scaling.freq_table_sz, 0))
+			&msm_host->mmc->clk_scaling.pltfm_freq_table,
+			&msm_host->mmc->clk_scaling.pltfm_freq_table_sz, 0))
 		pr_debug("%s: no clock scaling frequencies were supplied\n",
 			dev_name(dev));
-	else if (!msm_host->mmc->clk_scaling.freq_table ||
-			!msm_host->mmc->clk_scaling.freq_table_sz)
-			dev_err(dev, "bad dts clock scaling frequencies\n");
+	else if (!msm_host->mmc->clk_scaling.pltfm_freq_table ||
+			!msm_host->mmc->clk_scaling.pltfm_freq_table_sz)
+		dev_err(dev, "bad dts clock scaling frequencies\n");
 
 	/*
 	 * Few hosts can support DDR52 mode at the same lower
@@ -2366,21 +2383,6 @@ out:
 	return ret;
 }
 
-/*
- * Reset vreg by ensuring it is off during probe. A call
- * to enable vreg is needed to balance disable vreg
- */
-static int sdhci_msm_vreg_reset(struct sdhci_msm_pltfm_data *pdata)
-{
-	int ret;
-
-	ret = sdhci_msm_setup_vreg(pdata, 1, true);
-	if (ret)
-		return ret;
-	ret = sdhci_msm_setup_vreg(pdata, 0, true);
-	return ret;
-}
-
 /* This init function should be called only once for each SDHC slot */
 static int sdhci_msm_vreg_init(struct device *dev,
 				struct sdhci_msm_pltfm_data *pdata,
@@ -2415,7 +2417,7 @@ static int sdhci_msm_vreg_init(struct device *dev,
 		if (ret)
 			goto vdd_reg_deinit;
 	}
-	ret = sdhci_msm_vreg_reset(pdata);
+
 	if (ret)
 		dev_err(dev, "vreg reset failed (%d)\n", ret);
 	goto out;
@@ -2509,15 +2511,30 @@ void sdhci_msm_dump_pwr_ctrl_regs(struct sdhci_host *host)
 	struct sdhci_msm_host *msm_host = pltfm_host->priv;
 	const struct sdhci_msm_offset *msm_host_offset =
 					msm_host->offset;
+	unsigned int irq_flags = 0;
+	struct irq_desc *pwr_irq_desc = irq_to_desc(msm_host->pwr_irq);
 
-	pr_err("%s: PWRCTL_STATUS: 0x%08x | PWRCTL_MASK: 0x%08x | PWRCTL_CTL: 0x%08x\n",
+	if (pwr_irq_desc)
+		irq_flags = pwr_irq_desc->irq_data.common->state_use_accessors;
+
+	pr_err("%s: PWRCTL_STATUS: 0x%08x | PWRCTL_MASK: 0x%08x | PWRCTL_CTL: 0x%08x, pwr isr state=0x%x\n",
 		mmc_hostname(host->mmc),
 		sdhci_msm_readl_relaxed(host,
 			msm_host_offset->CORE_PWRCTL_STATUS),
 		sdhci_msm_readl_relaxed(host,
 			msm_host_offset->CORE_PWRCTL_MASK),
 		sdhci_msm_readl_relaxed(host,
-			msm_host_offset->CORE_PWRCTL_CTL));
+			msm_host_offset->CORE_PWRCTL_CTL), irq_flags);
+
+	MMC_TRACE(host->mmc,
+		"%s: Sts: 0x%08x | Mask: 0x%08x | Ctrl: 0x%08x, pwr isr state=0x%x\n",
+		__func__,
+		sdhci_msm_readb_relaxed(host,
+			msm_host_offset->CORE_PWRCTL_STATUS),
+		sdhci_msm_readb_relaxed(host,
+			msm_host_offset->CORE_PWRCTL_MASK),
+		sdhci_msm_readb_relaxed(host,
+			msm_host_offset->CORE_PWRCTL_CTL), irq_flags);
 }
 
 static irqreturn_t sdhci_msm_pwr_irq(int irq, void *data)
@@ -2592,7 +2609,9 @@ static irqreturn_t sdhci_msm_pwr_irq(int irq, void *data)
 		io_level = REQ_IO_HIGH;
 	}
 	if (irq_status & CORE_PWRCTL_BUS_OFF) {
-		ret = sdhci_msm_setup_vreg(msm_host->pdata, false, false);
+		if (msm_host->pltfm_init_done)
+			ret = sdhci_msm_setup_vreg(msm_host->pdata,
+					false, false);
 		if (!ret) {
 			ret = sdhci_msm_setup_pins(msm_host->pdata, false);
 			ret |= sdhci_msm_set_vdd_io_vol(msm_host->pdata,
@@ -2786,10 +2805,14 @@ static void sdhci_msm_check_power_status(struct sdhci_host *host, u32 req_type)
 	if (done)
 		init_completion(&msm_host->pwr_irq_completion);
 	else if (!wait_for_completion_timeout(&msm_host->pwr_irq_completion,
-				msecs_to_jiffies(MSM_PWR_IRQ_TIMEOUT_MS)))
+				msecs_to_jiffies(MSM_PWR_IRQ_TIMEOUT_MS))) {
 		__WARN_printf("%s: request(%d) timed out waiting for pwr_irq\n",
 					mmc_hostname(host->mmc), req_type);
-
+		MMC_TRACE(host->mmc,
+			"%s: request(%d) timed out waiting for pwr_irq\n",
+			__func__, req_type);
+		sdhci_msm_dump_pwr_ctrl_regs(host);
+	}
 	pr_debug("%s: %s: request %d done\n", mmc_hostname(host->mmc),
 			__func__, req_type);
 }
@@ -4649,6 +4672,8 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Add host failed (%d)\n", ret);
 		goto vreg_deinit;
 	}
+
+	msm_host->pltfm_init_done = true;
 
 	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);

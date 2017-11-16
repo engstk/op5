@@ -600,7 +600,7 @@ static int ipa3_send_wan_msg(unsigned long usr_param, uint8_t msg_type)
 	msg_meta.msg_len = sizeof(struct ipa_wan_msg);
 	retval = ipa3_send_msg(&msg_meta, wan_msg, ipa3_wan_msg_free_cb);
 	if (retval) {
-		IPAERR("ipa3_send_msg failed: %d\n", retval);
+		IPAERR_RL("ipa3_send_msg failed: %d\n", retval);
 		kfree(wan_msg);
 		return retval;
 	}
@@ -692,7 +692,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_nat_dma_cmd *)param)->entries
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_nat_dma_cmd *)param)->entries,
 				pre_entry);
 			retval = -EFAULT;
@@ -739,7 +739,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_add_hdr *)param)->num_hdrs
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_add_hdr *)param)->num_hdrs,
 				pre_entry);
 			retval = -EFAULT;
@@ -778,7 +778,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_del_hdr *)param)->num_hdls
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_del_hdr *)param)->num_hdls,
 				pre_entry);
 			retval = -EFAULT;
@@ -818,7 +818,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_add_rt_rule *)param)->num_rules
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_add_rt_rule *)param)->
 				num_rules,
 				pre_entry);
@@ -858,7 +858,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_add_rt_rule_after *)param)->
 			num_rules != pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_add_rt_rule_after *)param)->
 				num_rules,
 				pre_entry);
@@ -900,7 +900,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_mdfy_rt_rule *)param)->num_rules
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_mdfy_rt_rule *)param)->
 				num_rules,
 				pre_entry);
@@ -940,7 +940,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_del_rt_rule *)param)->num_hdls
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_del_rt_rule *)param)->num_hdls,
 				pre_entry);
 			retval = -EFAULT;
@@ -979,7 +979,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_add_flt_rule *)param)->num_rules
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_add_flt_rule *)param)->
 				num_rules,
 				pre_entry);
@@ -1021,7 +1021,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_add_flt_rule_after *)param)->
 			num_rules != pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_add_flt_rule_after *)param)->
 				num_rules,
 				pre_entry);
@@ -1062,7 +1062,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_del_flt_rule *)param)->num_hdls
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_del_flt_rule *)param)->
 				num_hdls,
 				pre_entry);
@@ -1102,7 +1102,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_mdfy_flt_rule *)param)->num_rules
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_mdfy_flt_rule *)param)->
 				num_rules,
 				pre_entry);
@@ -1240,7 +1240,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (unlikely(((struct ipa_ioc_query_intf_tx_props *)
 			param)->num_tx_props
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_query_intf_tx_props *)
 				param)->num_tx_props, pre_entry);
 			retval = -EFAULT;
@@ -1285,7 +1285,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_query_intf_rx_props *)
 			param)->num_rx_props != pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_query_intf_rx_props *)
 				param)->num_rx_props, pre_entry);
 			retval = -EFAULT;
@@ -1330,7 +1330,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_query_intf_ext_props *)
 			param)->num_ext_props != pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_query_intf_ext_props *)
 				param)->num_ext_props, pre_entry);
 			retval = -EFAULT;
@@ -1368,7 +1368,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_msg_meta *)param)->msg_len
 			!= pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_msg_meta *)param)->msg_len,
 				pre_entry);
 			retval = -EFAULT;
@@ -1508,7 +1508,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_add_hdr_proc_ctx *)
 			param)->num_proc_ctxs != pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_add_hdr_proc_ctx *)
 				param)->num_proc_ctxs, pre_entry);
 			retval = -EFAULT;
@@ -1547,7 +1547,7 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		/* add check in case user-space module compromised */
 		if (unlikely(((struct ipa_ioc_del_hdr_proc_ctx *)
 			param)->num_hdls != pre_entry)) {
-			IPAERR("current %d pre %d\n",
+			IPAERR_RL("current %d pre %d\n",
 				((struct ipa_ioc_del_hdr_proc_ctx *)param)->
 				num_hdls,
 				pre_entry);
@@ -2225,6 +2225,36 @@ static int ipa3_q6_set_ex_path_to_apps(void)
 			if (!cmd_pyld) {
 				IPAERR("fail construct register_write cmd\n");
 				BUG();
+			}
+
+			desc[num_descs].opcode = ipahal_imm_cmd_get_opcode(
+				IPA_IMM_CMD_REGISTER_WRITE);
+			desc[num_descs].type = IPA_IMM_CMD_DESC;
+			desc[num_descs].callback = ipa3_destroy_imm;
+			desc[num_descs].user1 = cmd_pyld;
+			desc[num_descs].pyld = cmd_pyld->data;
+			desc[num_descs].len = cmd_pyld->len;
+			num_descs++;
+		}
+
+		/* disable statuses for modem producers */
+		if (IPA_CLIENT_IS_Q6_PROD(client_idx)) {
+			ipa_assert_on(num_descs >= ipa3_ctx->ipa_num_pipes);
+
+			reg_write.skip_pipeline_clear = false;
+			reg_write.pipeline_clear_options =
+				IPAHAL_HPS_CLEAR;
+			reg_write.offset =
+				ipahal_get_reg_n_ofst(IPA_ENDP_STATUS_n,
+					ep_idx);
+			reg_write.value = 0;
+			reg_write.value_mask = ~0;
+			cmd_pyld = ipahal_construct_imm_cmd(
+				IPA_IMM_CMD_REGISTER_WRITE, &reg_write, false);
+			if (!cmd_pyld) {
+				IPAERR("fail construct register_write cmd\n");
+				ipa_assert();
+				return -EFAULT;
 			}
 
 			desc[num_descs].opcode = ipahal_imm_cmd_get_opcode(
@@ -3543,6 +3573,8 @@ void ipa3_suspend_handler(enum ipa_irq_type interrupt,
 				 * pipe will be unsuspended as part of
 				 * enabling IPA clocks
 				 */
+				mutex_lock(&ipa3_ctx->transport_pm.
+					transport_pm_mutex);
 				if (!atomic_read(
 					&ipa3_ctx->transport_pm.dec_clients)
 					) {
@@ -3555,6 +3587,8 @@ void ipa3_suspend_handler(enum ipa_irq_type interrupt,
 					1);
 					ipa3_sps_process_irq_schedule_rel();
 				}
+				mutex_unlock(&ipa3_ctx->transport_pm.
+					transport_pm_mutex);
 			} else {
 				resource = ipa3_get_rm_resource_from_ep(i);
 				res =
@@ -3875,6 +3909,9 @@ static int ipa3_post_init(const struct ipa3_plat_drv_res *resource_p,
 	struct sps_bam_props bam_props = { 0 };
 	struct gsi_per_props gsi_props;
 	struct ipa3_uc_hdlrs uc_hdlrs = { 0 };
+
+	/* move proxy vote for modem on ipa3_post_init */
+	IPA_ACTIVE_CLIENTS_INC_SPECIAL("PROXY_CLK_VOTE");
 
 	if (ipa3_ctx->transport_prototype == IPA_TRANSPORT_TYPE_GSI) {
 		memset(&gsi_props, 0, sizeof(gsi_props));
@@ -4211,7 +4248,6 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 	int i;
 	struct ipa3_flt_tbl *flt_tbl;
 	struct ipa3_rt_tbl_set *rset;
-	struct ipa_active_client_logging_info log_info;
 
 	IPADBG("IPA Driver initialization started\n");
 
@@ -4404,8 +4440,7 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 
 	mutex_init(&ipa3_ctx->ipa3_active_clients.mutex);
 	spin_lock_init(&ipa3_ctx->ipa3_active_clients.spinlock);
-	IPA_ACTIVE_CLIENTS_PREP_SPECIAL(log_info, "PROXY_CLK_VOTE");
-	ipa3_active_clients_log_inc(&log_info, false);
+	/* move proxy vote for modem to ipa3_post_init() */
 	ipa3_ctx->ipa3_active_clients.cnt = 1;
 
 	/* Assign resource limitation to each group */
@@ -4648,7 +4683,6 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 
 	init_completion(&ipa3_ctx->init_completion_obj);
 	init_completion(&ipa3_ctx->uc_loaded_completion_obj);
-
 	/*
 	 * For GSI, we can't register the GSI driver yet, as it expects
 	 * the GSI FW to be up and running before the registration.
@@ -4671,6 +4705,8 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 	else
 		return ipa3_post_init(resource_p, ipa_dev);
 
+	/* proxy vote for motem is added in ipa3_post_init() phase */
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	return 0;
 
 fail_ipa_init_interrupts:

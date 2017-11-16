@@ -678,7 +678,8 @@ static void process_rx_data(struct edge_info *einfo, uint16_t cmd_id,
 		err = true;
 	} else if (intent->data == NULL) {
 		if (einfo->intentless) {
-			intent->data = kmalloc(cmd.frag_size, GFP_ATOMIC);
+			intent->data = kmalloc(cmd.frag_size,
+						__GFP_ATOMIC | __GFP_HIGH);
 			if (!intent->data) {
 				err = true;
 				GLINK_ERR(
@@ -798,6 +799,12 @@ static bool get_rx_fifo(struct edge_info *einfo)
 							einfo->remote_proc_id,
 							SMEM_ITEM_CACHED_FLAG);
 		if (!einfo->rx_fifo)
+			einfo->rx_fifo = smem_get_entry(
+						SMEM_GLINK_NATIVE_XPRT_FIFO_1,
+							&einfo->rx_fifo_size,
+							einfo->remote_proc_id,
+							0);
+		if (!einfo->rx_fifo)
 			return false;
 	}
 
@@ -838,7 +845,7 @@ static void __rx_worker(struct edge_info *einfo, bool atomic_ctx)
 
 	rcu_id = srcu_read_lock(&einfo->use_ref);
 
-	if (unlikely(!einfo->rx_fifo)) {
+	if (unlikely(!einfo->rx_fifo) && atomic_ctx) {
 		if (!get_rx_fifo(einfo)) {
 			srcu_read_unlock(&einfo->use_ref, rcu_id);
 			return;
@@ -2350,7 +2357,7 @@ static int glink_smem_native_probe(struct platform_device *pdev)
 	einfo->tx_fifo = smem_alloc(SMEM_GLINK_NATIVE_XPRT_FIFO_0,
 							einfo->tx_fifo_size,
 							einfo->remote_proc_id,
-							SMEM_ITEM_CACHED_FLAG);
+							0);
 	if (!einfo->tx_fifo) {
 		pr_err("%s: smem alloc of tx fifo failed\n", __func__);
 		rc = -ENOMEM;

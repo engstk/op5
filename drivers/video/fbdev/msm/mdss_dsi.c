@@ -26,6 +26,7 @@
 #include <linux/uaccess.h>
 #include <linux/msm-bus.h>
 #include <linux/pm_qos.h>
+#include <linux/dma-buf.h>
 
 #include "mdss.h"
 #include "mdss_panel.h"
@@ -43,6 +44,97 @@ static struct mdss_dsi_data *mdss_dsi_res;
 #define DSI_ENABLE_PC_LATENCY PM_QOS_DEFAULT_VALUE
 
 static struct pm_qos_request mdss_dsi_pm_qos_request;
+
+void mdss_dump_dsi_debug_bus(u32 bus_dump_flag,
+	u32 **dump_mem)
+{
+	struct mdss_dsi_data *sdata = mdss_dsi_res;
+	struct mdss_dsi_ctrl_pdata *m_ctrl, *s_ctrl;
+	bool in_log, in_mem;
+	u32 *dump_addr = NULL;
+	u32 status0 = 0, status1 = 0;
+	phys_addr_t phys = 0;
+	int list_size = 0;
+	int i;
+	bool dsi0_active = false, dsi1_active = false;
+
+	if (!sdata || !sdata->dbg_bus || !sdata->dbg_bus_size)
+		return;
+
+	m_ctrl = sdata->ctrl_pdata[0];
+	s_ctrl = sdata->ctrl_pdata[1];
+
+	if (!m_ctrl)
+		return;
+
+	if (m_ctrl && m_ctrl->shared_data->dsi0_active)
+		dsi0_active = true;
+	if (s_ctrl && s_ctrl->shared_data->dsi1_active)
+		dsi1_active = true;
+
+	list_size = (sdata->dbg_bus_size * sizeof(sdata->dbg_bus[0]) * 4);
+
+	in_log = (bus_dump_flag & MDSS_DBG_DUMP_IN_LOG);
+	in_mem = (bus_dump_flag & MDSS_DBG_DUMP_IN_MEM);
+
+	if (in_mem) {
+		if (!(*dump_mem))
+			*dump_mem = dma_alloc_coherent(&sdata->pdev->dev,
+				list_size, &phys, GFP_KERNEL);
+
+		if (*dump_mem) {
+			dump_addr = *dump_mem;
+			pr_info("%s: start_addr:0x%pK end_addr:0x%pK\n",
+				__func__, dump_addr, dump_addr + list_size);
+		} else {
+			in_mem = false;
+			pr_err("dump_mem: allocation fails\n");
+		}
+	}
+
+	pr_info("========= Start DSI Debug Bus =========\n");
+
+	mdss_dsi_clk_ctrl(m_ctrl, m_ctrl->dsi_clk_handle,
+			  MDSS_DSI_CORE_CLK, MDSS_DSI_CLK_ON);
+
+	for (i = 0; i < sdata->dbg_bus_size; i++) {
+		if (dsi0_active) {
+			writel_relaxed(sdata->dbg_bus[i],
+					m_ctrl->ctrl_base + 0x124);
+			wmb(); /* ensure regsiter is committed */
+		}
+		if (dsi1_active) {
+			writel_relaxed(sdata->dbg_bus[i],
+					s_ctrl->ctrl_base + 0x124);
+			wmb(); /* ensure register is committed */
+		}
+
+		if (dsi0_active) {
+			status0 = readl_relaxed(m_ctrl->ctrl_base + 0x128);
+			if (in_log)
+				pr_err("CTRL:0 bus_ctrl: 0x%x status: 0x%x\n",
+					sdata->dbg_bus[i], status0);
+		}
+		if (dsi1_active) {
+			status1 = readl_relaxed(s_ctrl->ctrl_base + 0x128);
+			if (in_log)
+				pr_err("CTRL:1 bus_ctrl: 0x%x status: 0x%x\n",
+					sdata->dbg_bus[i], status1);
+		}
+
+		if (dump_addr && in_mem) {
+			dump_addr[i*4]     = sdata->dbg_bus[i];
+			dump_addr[i*4 + 1] = status0;
+			dump_addr[i*4 + 2] = status1;
+			dump_addr[i*4 + 3] = 0x0;
+		}
+	}
+
+	mdss_dsi_clk_ctrl(m_ctrl, m_ctrl->dsi_clk_handle,
+			  MDSS_DSI_CORE_CLK, MDSS_DSI_CLK_OFF);
+
+	pr_info("========End DSI Debug Bus=========\n");
+}
 
 static void mdss_dsi_pm_qos_add_request(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
@@ -677,6 +769,11 @@ static ssize_t mdss_dsi_cmd_state_write(struct file *file,
 	int *link_state = file->private_data;
 	char *input;
 
+	if (!count) {
+		pr_err("%s: Zero bytes to be written\n", __func__);
+		return -EINVAL;
+	}
+
 	input = kmalloc(count, GFP_KERNEL);
 	if (!input) {
 		pr_err("%s: Failed to allocate memory\n", __func__);
@@ -808,10 +905,15 @@ static ssize_t mdss_dsi_cmd_write(struct file *file, const char __user *p,
 
 	/* Writing in batches is possible */
 	ret = simple_write_to_buffer(string_buf, blen, ppos, p, count);
+	if (ret < 0) {
+		pr_err("%s: Failed to copy data\n", __func__);
+		mutex_unlock(&pcmds->dbg_mutex);
+		return -EINVAL;
+	}
 
-	string_buf[blen] = '\0';
+	string_buf[ret] = '\0';
 	pcmds->string_buf = string_buf;
-	pcmds->sblen = blen;
+	pcmds->sblen = count;
 	mutex_unlock(&pcmds->dbg_mutex);
 	return ret;
 }
@@ -1463,15 +1565,6 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 	if (mipi->init_delay)
 		usleep_range(mipi->init_delay, mipi->init_delay);
 
-	if (mipi->force_clk_lane_hs) {
-		u32 tmp;
-
-		tmp = MIPI_INP((ctrl_pdata->ctrl_base) + 0xac);
-		tmp |= (1<<28);
-		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0xac, tmp);
-		wmb();
-	}
-
 	if (pdata->panel_info.type == MIPI_CMD_PANEL)
 		mdss_dsi_clk_ctrl(ctrl_pdata, ctrl_pdata->dsi_clk_handle,
 				  MDSS_DSI_ALL_CLKS, MDSS_DSI_CLK_OFF);
@@ -1726,6 +1819,18 @@ static int mdss_dsi_post_panel_on(struct mdss_panel_data *pdata)
 	pr_debug("%s-:\n", __func__);
 
 	return 0;
+}
+
+static irqreturn_t test_hw_vsync_handler(int irq, void *data)
+{
+	struct mdss_panel_data *pdata = (struct mdss_panel_data *)data;
+
+	pr_debug("HW VSYNC\n");
+	MDSS_XLOG(0xaaa, irq);
+	complete_all(&pdata->te_done);
+	if (pdata->next)
+		complete_all(&pdata->next->te_done);
+	return IRQ_HANDLED;
 }
 
 int mdss_dsi_cont_splash_on(struct mdss_panel_data *pdata)
@@ -2722,10 +2827,7 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		rc = mdss_dsi_reconfig(pdata, mode);
 		break;
 	case MDSS_EVENT_DSI_PANEL_STATUS:
-		if (ctrl_pdata->check_status)
-			rc = ctrl_pdata->check_status(ctrl_pdata);
-		else
-			rc = true;
+		rc = mdss_dsi_check_panel_status(ctrl_pdata, arg);
 		break;
 	case MDSS_EVENT_PANEL_TIMING_SWITCH:
 		rc = mdss_dsi_panel_timing_switch(ctrl_pdata, arg);
@@ -3212,6 +3314,8 @@ static int mdss_dsi_ctrl_probe(struct platform_device *pdev)
 	struct device_node *dsi_pan_node = NULL;
 	const char *ctrl_name;
 	struct mdss_util_intf *util;
+	static int te_irq_registered;
+	struct mdss_panel_data *pdata;
 
 	if (!pdev || !pdev->dev.of_node) {
 		pr_err("%s: pdev not found for DSI controller\n", __func__);
@@ -3337,6 +3441,23 @@ static int mdss_dsi_ctrl_probe(struct platform_device *pdev)
 		disable_irq(gpio_to_irq(ctrl_pdata->disp_te_gpio));
 	}
 
+	pdata = &ctrl_pdata->panel_data;
+	init_completion(&pdata->te_done);
+	if (pdata->panel_info.type == MIPI_CMD_PANEL) {
+		if (!te_irq_registered) {
+			rc = devm_request_irq(&pdev->dev,
+				gpio_to_irq(pdata->panel_te_gpio),
+				test_hw_vsync_handler, IRQF_TRIGGER_FALLING,
+				"VSYNC_GPIO", &ctrl_pdata->panel_data);
+			if (rc) {
+				pr_err("%s: TE request_irq failed\n", __func__);
+				goto error_shadow_clk_deinit;
+			}
+			te_irq_registered = 1;
+			disable_irq_nosync(gpio_to_irq(pdata->panel_te_gpio));
+		}
+	}
+
 	rc = mdss_dsi_get_bridge_chip_params(pinfo, ctrl_pdata, pdev);
 	if (rc) {
 		pr_err("%s: Failed to get bridge params\n", __func__);
@@ -3367,6 +3488,8 @@ static int mdss_dsi_ctrl_probe(struct platform_device *pdev)
 		ctrl_pdata->shared_data->dsi0_active = true;
 	else
 		ctrl_pdata->shared_data->dsi1_active = true;
+
+	mdss_dsi_debug_bus_init(mdss_dsi_res);
 
 	return 0;
 
@@ -4155,6 +4278,8 @@ static int mdss_dsi_parse_gpio_params(struct platform_device *ctrl_pdev,
 	 * If disp_en_gpio has been set previously (disp_en_gpio > 0)
 	 *  while parsing the panel node, then do not override it
 	 */
+	struct mdss_panel_data *pdata = &ctrl_pdata->panel_data;
+
 	if (ctrl_pdata->disp_en_gpio <= 0) {
 		ctrl_pdata->disp_en_gpio = of_get_named_gpio(
 			ctrl_pdev->dev.of_node,
@@ -4171,6 +4296,7 @@ static int mdss_dsi_parse_gpio_params(struct platform_device *ctrl_pdev,
 	if (!gpio_is_valid(ctrl_pdata->disp_te_gpio))
 		pr_err("%s:%d, TE gpio not specified\n",
 						__func__, __LINE__);
+	pdata->panel_te_gpio = ctrl_pdata->disp_te_gpio;
 
 	ctrl_pdata->bklt_en_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node,
 		"qcom,platform-bklight-en-gpio", 0);
@@ -4277,6 +4403,9 @@ int dsi_panel_device_register(struct platform_device *ctrl_pdev,
 						__func__, rc);
 		return rc;
 	}
+
+	/* default state of gpio is false */
+	ctrl_pdata->bklt_en_gpio_state = false;
 
 	pinfo->panel_max_fps = mdss_panel_get_framerate(pinfo);
 	pinfo->panel_max_vtotal = mdss_panel_get_vtotal(pinfo);

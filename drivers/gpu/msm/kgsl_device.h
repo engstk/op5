@@ -166,7 +166,7 @@ struct kgsl_functable {
 		unsigned int prelevel, unsigned int postlevel, bool post);
 	void (*regulator_disable_poll)(struct kgsl_device *device);
 	void (*clk_set_options)(struct kgsl_device *device,
-		const char *name, struct clk *clk);
+		const char *name, struct clk *clk, bool on);
 	void (*gpu_model)(struct kgsl_device *device, char *str,
 		size_t bufsz);
 	void (*stop_fault_timer)(struct kgsl_device *device);
@@ -254,6 +254,11 @@ struct kgsl_device {
 	struct timer_list idle_timer;
 	struct kgsl_pwrctrl pwrctrl;
 	int open_count;
+
+	/* For GPU inline submission */
+	uint32_t submit_now;
+	spinlock_t submit_lock;
+	bool slumber;
 
 	struct mutex mutex;
 	uint32_t state;

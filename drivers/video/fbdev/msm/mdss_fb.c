@@ -374,7 +374,8 @@ static int mdss_fb_get_panel_xres(struct mdss_panel_info *pinfo)
 	xres = pinfo->xres;
 	if (pdata->next && pdata->next->active)
 		xres += mdss_fb_get_panel_xres(&pdata->next->panel_info);
-
+	if (pinfo->split_link_enabled)
+		xres = xres * pinfo->mipi.num_of_sublinks;
 	return xres;
 }
 
@@ -652,7 +653,7 @@ static ssize_t mdss_fb_get_panel_status(struct device *dev,
 		ret = scnprintf(buf, PAGE_SIZE, "panel_status=%s\n", "suspend");
 	} else {
 		panel_status = mdss_fb_send_panel_event(mfd,
-				MDSS_EVENT_DSI_PANEL_STATUS, NULL);
+				MDSS_EVENT_DSI_PANEL_STATUS, mfd);
 		ret = scnprintf(buf, PAGE_SIZE, "panel_status=%s\n",
 			panel_status > 0 ? "alive" : "dead");
 	}
@@ -1191,11 +1192,24 @@ static int mdss_fb_init_panel_modes(struct msm_fb_data_type *mfd,
 		if (pdata->next) {
 			spt = mdss_panel_get_timing_by_name(pdata->next,
 					modedb[i].name);
-			if (!IS_ERR_OR_NULL(spt))
+			/* for split config, recalculate xres and pixel clock */
+			if (!IS_ERR_OR_NULL(spt)) {
+				unsigned long pclk, h_total, v_total;
 				modedb[i].xres += spt->xres;
-			else
+				h_total = modedb[i].xres +
+					modedb[i].left_margin +
+					modedb[i].right_margin +
+					modedb[i].hsync_len;
+				v_total = modedb[i].yres +
+					modedb[i].lower_margin +
+					modedb[i].upper_margin +
+					modedb[i].vsync_len;
+				pclk = h_total * v_total * modedb[i].refresh;
+				modedb[i].pixclock = KHZ2PICOS(pclk / 1000);
+			} else {
 				pr_debug("no matching split config for %s\n",
 						modedb[i].name);
+			}
 
 			/*
 			 * if no panel timing found for current, need to
@@ -1595,13 +1609,30 @@ static int mdss_fb_resume(struct platform_device *pdev)
 static int mdss_fb_pm_suspend(struct device *dev)
 {
 	struct msm_fb_data_type *mfd = dev_get_drvdata(dev);
+	int rc = 0;
 
 	if (!mfd)
 		return -ENODEV;
 
 	dev_dbg(dev, "display pm suspend\n");
 
-	return mdss_fb_suspend_sub(mfd);
+	rc = mdss_fb_suspend_sub(mfd);
+
+	/*
+	 * Call MDSS footswitch control to ensure GDSC is
+	 * off after pm suspend call. There are cases when
+	 * mdss runtime call doesn't trigger even when clock
+	 * ref count is zero after fb pm suspend.
+	 */
+	if (!rc) {
+		if (mfd->mdp.footswitch_ctrl)
+			mfd->mdp.footswitch_ctrl(false);
+	} else {
+		pr_err("fb pm suspend failed, rc: %d\n", rc);
+	}
+
+	return rc;
+
 }
 
 static int mdss_fb_pm_resume(struct device *dev)
@@ -1620,6 +1651,9 @@ static int mdss_fb_pm_resume(struct device *dev)
 	pm_runtime_disable(dev);
 	pm_runtime_set_suspended(dev);
 	pm_runtime_enable(dev);
+
+	if (mfd->mdp.footswitch_ctrl)
+		mfd->mdp.footswitch_ctrl(true);
 
 	return mdss_fb_resume_sub(mfd);
 }
@@ -2100,6 +2134,7 @@ static int mdss_fb_blank(int blank_mode, struct fb_info *info)
 		mdss_mdp_enable_panel_disable_mode(mfd, false);
 
 	ret = mdss_fb_blank_sub(blank_mode, info, mfd->op_enable);
+	MDSS_XLOG(blank_mode);
 
 end:
 	mutex_unlock(&mfd->mdss_sysfs_lock);
@@ -3399,6 +3434,10 @@ int mdss_fb_atomic_commit(struct fb_info *info,
 				MSMFB_ATOMIC_COMMIT, true, false);
 			if (mfd->panel.type == WRITEBACK_PANEL) {
 				output_layer = commit_v1->output_layer;
+				if (!output_layer) {
+					pr_err("Output layer is null\n");
+					goto end;
+				}
 				wb_change = !mdss_fb_is_wb_config_same(mfd,
 						commit_v1->output_layer);
 				if (wb_change) {
@@ -3592,7 +3631,6 @@ static void mdss_fb_var_to_panelinfo(struct fb_var_screeninfo *var,
 	else
 		pinfo->lcdc.v_polarity = 1;
 
-	pinfo->clk_rate = var->pixclock;
 }
 
 void mdss_panelinfo_to_fb_var(struct mdss_panel_info *pinfo,
@@ -4620,11 +4658,22 @@ static int mdss_fb_atomic_commit_ioctl(struct fb_info *info,
 	struct mdp_output_layer __user *output_layer_user;
 	struct mdp_destination_scaler_data *ds_data = NULL;
 	struct mdp_destination_scaler_data __user *ds_data_user;
+	struct msm_fb_data_type *mfd;
 
 	ret = copy_from_user(&commit, argp, sizeof(struct mdp_layer_commit));
 	if (ret) {
 		pr_err("%s:copy_from_user failed\n", __func__);
 		return ret;
+	}
+
+	mfd = (struct msm_fb_data_type *)info->par;
+	if (!mfd)
+		return -EINVAL;
+
+	if (mfd->panel_info->panel_dead) {
+		pr_debug("early commit return\n");
+		MDSS_XLOG(mfd->panel_info->panel_dead);
+		return 0;
 	}
 
 	output_layer_user = commit.commit_v1.output_layer;
@@ -4886,6 +4935,15 @@ static int __ioctl_wait_idle(struct msm_fb_data_type *mfd, u32 cmd)
 	return ret;
 }
 
+static bool check_not_supported_ioctl(u32 cmd)
+{
+	return((cmd == MSMFB_OVERLAY_SET) || (cmd == MSMFB_OVERLAY_UNSET) ||
+		(cmd == MSMFB_OVERLAY_GET) || (cmd == MSMFB_OVERLAY_PREPARE) ||
+		(cmd == MSMFB_DISPLAY_COMMIT) || (cmd == MSMFB_OVERLAY_PLAY) ||
+		(cmd == MSMFB_BUFFER_SYNC) || (cmd == MSMFB_OVERLAY_QUEUE) ||
+		(cmd == MSMFB_NOTIFY_UPDATE));
+}
+
 /*
  * mdss_fb_do_ioctl() - MDSS Framebuffer ioctl function
  * @info:	pointer to framebuffer info
@@ -4919,6 +4977,11 @@ int mdss_fb_do_ioctl(struct fb_info *info, unsigned int cmd,
 	pdata = dev_get_platdata(&mfd->pdev->dev);
 	if (!pdata || pdata->panel_info.dynamic_switch_pending)
 		return -EPERM;
+
+	if (check_not_supported_ioctl(cmd)) {
+		pr_err("Unsupported ioctl\n");
+		return -EINVAL;
+	}
 
 	atomic_inc(&mfd->ioctl_ref_cnt);
 

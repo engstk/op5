@@ -42,7 +42,6 @@ struct msm_ext_disp {
 	struct list_head display_list;
 	struct mutex lock;
 	struct completion hpd_comp;
-	u32 flags;
 };
 
 static int msm_ext_disp_get_intf_data(struct msm_ext_disp *ext_disp,
@@ -373,6 +372,11 @@ static int msm_ext_disp_process_display(struct msm_ext_disp *ext_disp,
 		goto end;
 	}
 
+	if (state == EXT_DISPLAY_CABLE_CONNECT)
+		ext_disp->current_disp = type;
+	else
+		ext_disp->current_disp = EXT_DISPLAY_TYPE_MAX;
+
 	ret = msm_ext_disp_send_cable_notification(ext_disp, state);
 
 	/* positive ret value means audio node was switched */
@@ -439,8 +443,6 @@ static bool msm_ext_disp_validate_connect(struct msm_ext_disp *ext_disp,
 	if (ext_disp->current_disp != type)
 		return false;
 end:
-	ext_disp->flags |= flags;
-	ext_disp->current_disp = type;
 	return true;
 }
 
@@ -455,13 +457,7 @@ static bool msm_ext_disp_validate_disconnect(struct msm_ext_disp *ext_disp,
 	if (ext_disp->current_disp != type)
 		return false;
 
-	/* allow only an already connected type  */
-	if (ext_disp->flags & flags) {
-		ext_disp->flags &= ~flags;
-		return true;
-	}
-
-	return false;
+	return true;
 }
 
 static int msm_ext_disp_hpd(struct platform_device *pdev,
@@ -528,9 +524,6 @@ static int msm_ext_disp_hpd(struct platform_device *pdev,
 		msm_ext_disp_process_audio(ext_disp, type, state, flags);
 		msm_ext_disp_update_audio_ops(ext_disp, type, state, flags);
 		msm_ext_disp_process_display(ext_disp, type, state, flags);
-
-		if (!ext_disp->flags)
-			ext_disp->current_disp = EXT_DISPLAY_TYPE_MAX;
 	}
 
 	pr_debug("Hpd (%d) for display (%s)\n", state,

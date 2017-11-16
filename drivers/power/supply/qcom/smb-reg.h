@@ -486,11 +486,11 @@ enum {
 #define UFP_TYPEC_OPEN_OPEN_BIT			BIT(0)
 
 #define TYPE_C_STATUS_2_REG			(USBIN_BASE + 0x0C)
-#define DFP_TYPEC_MASK				0x8F
 #define DFP_RA_OPEN_BIT				BIT(7)
 #define TIMER_STAGE_BIT				BIT(6)
 #define EXIT_UFP_MODE_BIT			BIT(5)
 #define EXIT_DFP_MODE_BIT			BIT(4)
+#define DFP_TYPEC_MASK				GENMASK(3, 0)
 #define DFP_RD_OPEN_BIT				BIT(3)
 #define DFP_RD_RA_VCONN_BIT			BIT(2)
 #define DFP_RD_RD_BIT				BIT(1)
@@ -919,6 +919,7 @@ enum {
 
 #define MISC_CFG_REG				(MISC_BASE + 0x52)
 #define GSM_PA_ON_ADJ_SEL_BIT			BIT(0)
+#define STAT_PARALLEL_1400MA_EN_CFG_BIT		BIT(3)
 #define TCC_DEBOUNCE_20MS_BIT			BIT(5)
 
 #define SNARL_BARK_BITE_WD_CFG_REG		(MISC_BASE + 0x53)
@@ -1018,6 +1019,8 @@ enum {
 
 #define CFG_BUCKBOOST_FREQ_SELECT_BUCK_REG	(MISC_BASE + 0xA0)
 #define CFG_BUCKBOOST_FREQ_SELECT_BOOST_REG	(MISC_BASE + 0xA1)
+
+#define TM_IO_DTEST4_SEL			(MISC_BASE + 0xE9)
 
 /* CHGR FREQ Peripheral registers */
 #define FREQ_CLK_DIV_REG			(CHGR_FREQ_BASE + 0x50)

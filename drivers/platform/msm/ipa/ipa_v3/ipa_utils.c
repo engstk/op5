@@ -838,7 +838,7 @@ int ipa3_cfg_route(struct ipahal_reg_route *route)
  */
 int ipa3_cfg_filter(u32 disable)
 {
-	IPAERR("Filter disable is not supported!\n");
+	IPAERR_RL("Filter disable is not supported!\n");
 	return -EPERM;
 }
 
@@ -928,8 +928,8 @@ int ipa3_get_ep_mapping(enum ipa_client_type client)
 	int ipa_ep_idx;
 
 	if (client >= IPA_CLIENT_MAX || client < 0) {
-		IPAERR("Bad client number! client =%d\n", client);
-		return -EINVAL;
+		IPAERR_RL("Bad client number! client =%d\n", client);
+		return IPA_EP_NOT_ALLOCATED;
 	}
 
 	ipa_ep_idx = ipa3_ep_mapping[ipa3_get_hw_type_index()][client].pipe_num;
@@ -1064,6 +1064,11 @@ enum ipacm_client_enum ipa3_get_client(int pipe_idx)
  */
 bool ipa3_get_client_uplink(int pipe_idx)
 {
+	if (pipe_idx < 0 || pipe_idx >= IPA3_MAX_NUM_PIPES) {
+		IPAERR("invalid pipe idx %d\n", pipe_idx);
+		return false;
+	}
+
 	return ipa3_ctx->ipacm_client[pipe_idx].uplink;
 }
 
@@ -1996,19 +2001,19 @@ int ipa3_write_qmap_id(struct ipa_ioc_write_qmapid *param_in)
 	int result = -EINVAL;
 
 	if (param_in->client  >= IPA_CLIENT_MAX) {
-		IPAERR("bad parm client:%d\n", param_in->client);
+		IPAERR_RL("bad parm client:%d\n", param_in->client);
 		goto fail;
 	}
 
 	ipa_ep_idx = ipa3_get_ep_mapping(param_in->client);
 	if (ipa_ep_idx == -1) {
-		IPAERR("Invalid client.\n");
+		IPAERR_RL("Invalid client.\n");
 		goto fail;
 	}
 
 	ep = &ipa3_ctx->ep[ipa_ep_idx];
 	if (!ep->valid) {
-		IPAERR("EP not allocated.\n");
+		IPAERR_RL("EP not allocated.\n");
 		goto fail;
 	}
 
@@ -2021,7 +2026,7 @@ int ipa3_write_qmap_id(struct ipa_ioc_write_qmapid *param_in)
 		ipa3_ctx->ep[ipa_ep_idx].cfg.meta = meta;
 		result = ipa3_write_qmapid_wdi_pipe(ipa_ep_idx, meta.qmap_id);
 		if (result)
-			IPAERR("qmap_id %d write failed on ep=%d\n",
+			IPAERR_RL("qmap_id %d write failed on ep=%d\n",
 					meta.qmap_id, ipa_ep_idx);
 		result = 0;
 	}
@@ -3430,6 +3435,7 @@ static void ipa3_gsi_poll_after_suspend(struct ipa3_ep_context *ep)
 		/* queue a work to start polling if don't have one */
 		atomic_set(&ipa3_ctx->transport_pm.eot_activity, 1);
 		if (!atomic_read(&ep->sys->curr_polling_state)) {
+			ipa3_inc_acquire_wakelock();
 			atomic_set(&ep->sys->curr_polling_state, 1);
 			queue_work(ep->sys->wq, &ep->sys->work);
 		}
@@ -3446,6 +3452,11 @@ void ipa3_suspend_apps_pipes(bool suspend)
 	cfg.ipa_ep_suspend = suspend;
 
 	ipa_ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_APPS_LAN_CONS);
+	if (ipa_ep_idx < 0) {
+		IPAERR("IPA client mapping failed\n");
+		ipa_assert();
+		return;
+	}
 	ep = &ipa3_ctx->ep[ipa_ep_idx];
 	if (ep->valid) {
 		IPADBG("%s pipe %d\n", suspend ? "suspend" : "unsuspend",
@@ -3560,21 +3571,30 @@ int ipa3_stop_gsi_channel(u32 clnt_hdl)
 
 	memset(&mem, 0, sizeof(mem));
 
-	for (i = 0; i < IPA_GSI_CHANNEL_STOP_MAX_RETRY; i++) {
-		IPADBG("Calling gsi_stop_channel\n");
+	if (IPA_CLIENT_IS_PROD(ep->client)) {
+		IPADBG("Calling gsi_stop_channel ch:%lu\n",
+			ep->gsi_chan_hdl);
 		res = gsi_stop_channel(ep->gsi_chan_hdl);
-		IPADBG("gsi_stop_channel returned %d\n", res);
+		IPADBG("gsi_stop_channel ch: %lu returned %d\n",
+			ep->gsi_chan_hdl, res);
+		goto end_sequence;
+	}
+
+	for (i = 0; i < IPA_GSI_CHANNEL_STOP_MAX_RETRY; i++) {
+		IPADBG("Calling gsi_stop_channel ch:%lu\n",
+			ep->gsi_chan_hdl);
+		res = gsi_stop_channel(ep->gsi_chan_hdl);
+		IPADBG("gsi_stop_channel ch: %lu returned %d\n",
+			ep->gsi_chan_hdl, res);
 		if (res != -GSI_STATUS_AGAIN && res != -GSI_STATUS_TIMED_OUT)
 			goto end_sequence;
 
-		if (IPA_CLIENT_IS_CONS(ep->client)) {
-			IPADBG("Inject a DMA_TASK with 1B packet to IPA\n");
-			/* Send a 1B packet DMA_TASK to IPA and try again */
-			res = ipa3_inject_dma_task_for_gsi();
-			if (res) {
-				IPAERR("Failed to inject DMA TASk for GSI\n");
-				goto end_sequence;
-			}
+		IPADBG("Inject a DMA_TASK with 1B packet to IPA\n");
+		/* Send a 1B packet DMA_TASK to IPA and try again */
+		res = ipa3_inject_dma_task_for_gsi();
+		if (res) {
+			IPAERR("Failed to inject DMA TASk for GSI\n");
+			goto end_sequence;
 		}
 
 		/* sleep for short period to flush IPA */

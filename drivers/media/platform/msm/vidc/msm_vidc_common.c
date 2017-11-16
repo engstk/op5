@@ -3124,7 +3124,7 @@ static int set_output_buffers(struct msm_vidc_inst *inst,
 				goto err_no_mem;
 			}
 			rc = msm_comm_smem_cache_operations(inst,
-					handle, SMEM_CACHE_CLEAN);
+					handle, SMEM_CACHE_CLEAN, -1);
 			if (rc) {
 				dprintk(VIDC_WARN,
 					"Failed to clean cache may cause undefined behavior\n");
@@ -3215,7 +3215,7 @@ static int set_internal_buf_on_fw(struct msm_vidc_inst *inst,
 	hdev = inst->core->device;
 
 	rc = msm_comm_smem_cache_operations(inst,
-					handle, SMEM_CACHE_CLEAN);
+					handle, SMEM_CACHE_CLEAN, -1);
 	if (rc) {
 		dprintk(VIDC_WARN,
 			"Failed to clean cache. Undefined behavior\n");
@@ -3291,9 +3291,9 @@ static bool reuse_internal_buffers(struct msm_vidc_inst *inst,
 	return reused;
 }
 
-static int allocate_and_set_internal_bufs(struct msm_vidc_inst *inst,
+int allocate_and_set_internal_bufs(struct msm_vidc_inst *inst,
 			struct hal_buffer_requirements *internal_bufreq,
-			struct msm_vidc_list *buf_list)
+			struct msm_vidc_list *buf_list, bool set_on_fw)
 {
 	struct msm_smem *handle;
 	struct internal_buf *binfo;
@@ -3330,11 +3330,13 @@ static int allocate_and_set_internal_bufs(struct msm_vidc_inst *inst,
 		binfo->handle = handle;
 		binfo->buffer_type = internal_bufreq->buffer_type;
 
-		rc = set_internal_buf_on_fw(inst, internal_bufreq->buffer_type,
-				handle, false);
-		if (rc)
-			goto fail_set_buffers;
-
+		if (set_on_fw) {
+			rc = set_internal_buf_on_fw(inst,
+					internal_bufreq->buffer_type,
+					handle, false);
+			if (rc)
+				goto fail_set_buffers;
+		}
 		mutex_lock(&buf_list->lock);
 		list_add_tail(&binfo->list, &buf_list->list);
 		mutex_unlock(&buf_list->lock);
@@ -3375,7 +3377,7 @@ static int set_internal_buffers(struct msm_vidc_inst *inst,
 		return 0;
 
 	return allocate_and_set_internal_bufs(inst, internal_buf,
-				buf_list);
+				buf_list, true);
 }
 
 int msm_comm_try_state(struct msm_vidc_inst *inst, int state)
@@ -3536,39 +3538,6 @@ int msm_vidc_comm_cmd(void *instance, union msm_v4l2_cmd *cmd)
 				"Failed to flush buffers: %d\n", rc);
 		}
 		break;
-	case V4L2_DEC_QCOM_CMD_RECONFIG_HINT:
-	{
-		u32 *ptr = NULL;
-		struct hal_buffer_requirements *output_buf;
-
-		rc = msm_comm_try_get_bufreqs(inst);
-		if (rc) {
-			dprintk(VIDC_ERR,
-					"Getting buffer requirements failed: %d\n",
-					rc);
-			break;
-		}
-
-		output_buf = get_buff_req_buffer(inst,
-				msm_comm_get_hal_output_buffer(inst));
-		if (output_buf) {
-			if (dec) {
-				ptr = (u32 *)dec->raw.data;
-				ptr[0] = output_buf->buffer_size;
-				ptr[1] = output_buf->buffer_count_actual;
-				dprintk(VIDC_DBG,
-					"Reconfig hint, size is %u, count is %u\n",
-					ptr[0], ptr[1]);
-			} else {
-				dprintk(VIDC_ERR, "Null decoder\n");
-			}
-		} else {
-			dprintk(VIDC_DBG,
-					"This output buffer not required, buffer_type: %x\n",
-					HAL_BUFFER_OUTPUT);
-		}
-		break;
-	}
 	default:
 		dprintk(VIDC_ERR, "Unknown Command %d\n", which_cmd);
 		rc = -ENOTSUPP;
@@ -4402,15 +4371,15 @@ error:
 	return rc;
 }
 
-int msm_comm_set_scratch_buffers(struct msm_vidc_inst *inst)
-{
+int msm_comm_set_scratch_buffers(struct msm_vidc_inst *inst,
+						bool max_int_buffer) {
 	int rc = 0;
 	if (!inst || !inst->core || !inst->core->device) {
 		dprintk(VIDC_ERR, "%s invalid parameters\n", __func__);
 		return -EINVAL;
 	}
 
-	if (msm_comm_release_scratch_buffers(inst, true))
+	if (!max_int_buffer && msm_comm_release_scratch_buffers(inst, true))
 		dprintk(VIDC_WARN, "Failed to release scratch buffers\n");
 
 	rc = set_internal_buffers(inst, HAL_BUFFER_INTERNAL_SCRATCH,
@@ -5104,14 +5073,16 @@ void msm_comm_smem_free(struct msm_vidc_inst *inst, struct msm_smem *mem)
 }
 
 int msm_comm_smem_cache_operations(struct msm_vidc_inst *inst,
-		struct msm_smem *mem, enum smem_cache_ops cache_ops)
+		struct msm_smem *mem, enum smem_cache_ops cache_ops,
+		int size)
 {
 	if (!inst || !mem) {
 		dprintk(VIDC_ERR,
 			"%s: invalid params: %pK %pK\n", __func__, inst, mem);
 		return -EINVAL;
 	}
-	return msm_smem_cache_operations(inst->mem_client, mem, cache_ops);
+	return msm_smem_cache_operations(inst->mem_client, mem,
+						cache_ops, size);
 }
 
 struct msm_smem *msm_comm_smem_user_to_kernel(struct msm_vidc_inst *inst,

@@ -150,9 +150,6 @@ static void _ab_buslevel_update(struct kgsl_pwrctrl *pwr,
 		*ab = pwr->bus_ab_mbytes;
 	else
 		*ab = (pwr->bus_percent_ab * max_bw) / 100;
-
-	if (*ab > ib)
-		*ab = ib;
 }
 
 /**
@@ -2003,10 +2000,6 @@ static int _get_clocks(struct kgsl_device *device)
 
 			if (!strcmp(name, "isense_clk"))
 				pwr->isense_clk_indx = i;
-
-			if (device->ftbl->clk_set_options)
-				device->ftbl->clk_set_options(device, name,
-					pwr->grp_clks[i]);
 			break;
 		}
 	}
@@ -2354,9 +2347,24 @@ void kgsl_idle_check(struct work_struct *work)
 		   || device->state ==  KGSL_STATE_NAP) {
 
 		if (!atomic_read(&device->active_cnt)) {
+			spin_lock(&device->submit_lock);
+			if (device->submit_now) {
+				spin_unlock(&device->submit_lock);
+				goto done;
+			}
+			/* Don't allow GPU inline submission in SLUMBER */
+			if (requested_state == KGSL_STATE_SLUMBER)
+				device->slumber = true;
+			spin_unlock(&device->submit_lock);
+
 			ret = kgsl_pwrctrl_change_state(device,
 					device->requested_state);
 			if (ret == -EBUSY) {
+				if (requested_state == KGSL_STATE_SLUMBER) {
+					spin_lock(&device->submit_lock);
+					device->slumber = false;
+					spin_unlock(&device->submit_lock);
+				}
 				/*
 				 * If the GPU is currently busy, restore
 				 * the requested state and reschedule
@@ -2367,7 +2375,7 @@ void kgsl_idle_check(struct work_struct *work)
 				kgsl_schedule_work(&device->idle_check_ws);
 			}
 		}
-
+done:
 		if (!ret)
 			kgsl_pwrctrl_request_state(device, KGSL_STATE_NONE);
 
@@ -2453,6 +2461,22 @@ static void kgsl_pwrctrl_disable(struct kgsl_device *device)
 	kgsl_pwrctrl_pwrrail(device, KGSL_PWRFLAGS_OFF);
 }
 
+static void
+kgsl_pwrctrl_clk_set_options(struct kgsl_device *device, bool on)
+{
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	int i;
+
+	for (i = 0; i < KGSL_MAX_CLKS; i++) {
+		if (pwr->grp_clks[i] == NULL)
+			continue;
+
+		if (device->ftbl->clk_set_options)
+			device->ftbl->clk_set_options(device, clocks[i],
+				pwr->grp_clks[i], on);
+	}
+}
+
 /**
  * _init() - Get the GPU ready to start, but don't turn anything on
  * @device - Pointer to the kgsl_device struct
@@ -2499,6 +2523,7 @@ static int _wake(struct kgsl_device *device)
 		device->ftbl->resume(device);
 		/* fall through */
 	case KGSL_STATE_SLUMBER:
+		kgsl_pwrctrl_clk_set_options(device, true);
 		status = device->ftbl->start(device,
 				device->pwrctrl.superfast);
 		device->pwrctrl.superfast = false;
@@ -2535,6 +2560,7 @@ static int _wake(struct kgsl_device *device)
 				device->pwrctrl.interval_timeout);
 		break;
 	case KGSL_STATE_AWARE:
+		kgsl_pwrctrl_clk_set_options(device, true);
 		/* Enable state before turning on irq */
 		kgsl_pwrctrl_set_state(device, KGSL_STATE_ACTIVE);
 		kgsl_pwrctrl_irq(device, KGSL_PWRFLAGS_ON);
@@ -2649,6 +2675,7 @@ _slumber(struct kgsl_device *device)
 		status = kgsl_pwrctrl_enable(device);
 		device->ftbl->suspend_context(device);
 		device->ftbl->stop(device);
+		kgsl_pwrctrl_clk_set_options(device, false);
 		kgsl_pwrctrl_disable(device);
 		kgsl_pwrscale_sleep(device);
 		kgsl_pwrctrl_irq(device, KGSL_PWRFLAGS_OFF);
@@ -2777,6 +2804,13 @@ static void kgsl_pwrctrl_set_state(struct kgsl_device *device,
 	trace_kgsl_pwr_set_state(device, state);
 	device->state = state;
 	device->requested_state = KGSL_STATE_NONE;
+
+	spin_lock(&device->submit_lock);
+	if (state == KGSL_STATE_SLUMBER || state == KGSL_STATE_SUSPEND)
+		device->slumber = true;
+	else
+		device->slumber = false;
+	spin_unlock(&device->submit_lock);
 }
 
 static void kgsl_pwrctrl_request_state(struct kgsl_device *device,

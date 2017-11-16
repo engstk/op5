@@ -248,7 +248,7 @@ static int smb138x_usb_get_prop(struct power_supply *psy,
 		val->intval = chg->usb_psy_desc.type;
 		break;
 	case POWER_SUPPLY_PROP_TYPEC_MODE:
-		rc = smblib_get_prop_typec_mode(chg, val);
+		val->intval = chg->typec_mode;
 		break;
 	case POWER_SUPPLY_PROP_TYPEC_POWER_ROLE:
 		rc = smblib_get_prop_typec_power_role(chg, val);
@@ -535,6 +535,8 @@ static enum power_supply_property smb138x_parallel_props[] = {
 	POWER_SUPPLY_PROP_CHARGING_ENABLED,
 	POWER_SUPPLY_PROP_PIN_ENABLED,
 	POWER_SUPPLY_PROP_INPUT_SUSPEND,
+	POWER_SUPPLY_PROP_INPUT_CURRENT_LIMITED,
+	POWER_SUPPLY_PROP_CURRENT_MAX,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
@@ -573,6 +575,21 @@ static int smb138x_parallel_get_prop(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
 		rc = smblib_get_usb_suspend(chg, &val->intval);
+		break;
+	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMITED:
+		if ((chip->dt.pl_mode == POWER_SUPPLY_PL_USBIN_USBIN)
+		|| (chip->dt.pl_mode == POWER_SUPPLY_PL_USBIN_USBIN_EXT))
+			rc = smblib_get_prop_input_current_limited(chg, val);
+		else
+			val->intval = 0;
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_MAX:
+		if ((chip->dt.pl_mode == POWER_SUPPLY_PL_USBIN_USBIN)
+		|| (chip->dt.pl_mode == POWER_SUPPLY_PL_USBIN_USBIN_EXT))
+			rc = smblib_get_charge_param(chg, &chg->param.usb_icl,
+				&val->intval);
+		else
+			val->intval = 0;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
 		rc = smblib_get_charge_param(chg, &chg->param.fv, &val->intval);
@@ -652,6 +669,12 @@ static int smb138x_parallel_set_prop(struct power_supply *psy,
 	switch (prop) {
 	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
 		rc = smb138x_set_parallel_suspend(chip, (bool)val->intval);
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_MAX:
+		if ((chip->dt.pl_mode == POWER_SUPPLY_PL_USBIN_USBIN)
+		|| (chip->dt.pl_mode == POWER_SUPPLY_PL_USBIN_USBIN_EXT))
+			rc = smblib_set_charge_param(chg, &chg->param.usb_icl,
+				val->intval);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
 		rc = smblib_set_charge_param(chg, &chg->param.fv, val->intval);
@@ -822,6 +845,13 @@ static int smb138x_init_slave_hw(struct smb138x *chip)
 		}
 	}
 
+	/* configure to a fixed 700khz freq to avoid tdie errors */
+	rc = smblib_set_charge_param(chg, &chg->param.freq_buck, 700);
+	if (rc < 0) {
+		pr_err("Couldn't configure 700Khz switch freq rc=%d\n", rc);
+		return rc;
+	}
+
 	/* enable watchdog bark and bite interrupts, and disable the watchdog */
 	rc = smblib_masked_write(chg, WD_CFG_REG, WDOG_TIMER_EN_BIT
 			| WDOG_TIMER_EN_ON_PLUGIN_BIT | BITE_WDOG_INT_EN_BIT
@@ -915,13 +945,6 @@ static int smb138x_init_slave_hw(struct smb138x *chip)
 				chip->dt.connector_temp_max_mdegc + MDEGC_15);
 	if (rc < 0) {
 		pr_err("Couldn't set connector temp threshold3 rc=%d\n", rc);
-		return rc;
-	}
-
-	rc = smblib_write(chg, THERMREG_SRC_CFG_REG,
-						THERMREG_SKIN_ADC_SRC_EN_BIT);
-	if (rc < 0) {
-		pr_err("Couldn't enable connector thermreg source rc=%d\n", rc);
 		return rc;
 	}
 
@@ -1464,7 +1487,8 @@ static int smb138x_slave_probe(struct smb138x *chip)
 		goto cleanup;
 	}
 
-	if (chip->dt.pl_mode == POWER_SUPPLY_PL_USBIN_USBIN) {
+	if ((chip->dt.pl_mode == POWER_SUPPLY_PL_USBIN_USBIN)
+		|| (chip->dt.pl_mode == POWER_SUPPLY_PL_USBIN_USBIN_EXT)) {
 		rc = smb138x_init_vbus_regulator(chip);
 		if (rc < 0) {
 			pr_err("Couldn't initialize vbus regulator rc=%d\n",

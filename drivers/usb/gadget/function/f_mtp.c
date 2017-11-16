@@ -1487,6 +1487,7 @@ mtp_function_bind(struct usb_configuration *c, struct usb_function *f)
 			mtp_fullspeed_out_desc.bEndpointAddress;
 	}
 
+	fi_mtp->func_inst.f = &dev->function;
 	DBG(cdev, "%s speed %s: IN/%s, OUT/%s\n",
 		gadget_is_superspeed(c->cdev->gadget) ? "super" :
 		(gadget_is_dualspeed(c->cdev->gadget) ? "dual" : "full"),
@@ -1498,9 +1499,11 @@ static void
 mtp_function_unbind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct mtp_dev	*dev = func_to_mtp(f);
+	struct mtp_instance *fi_mtp;
 	struct usb_request *req;
 	int i;
-
+	fi_mtp = container_of(f->fi, struct mtp_instance, func_inst);
+	mtp_string_defs[INTERFACE_STRING_INDEX].id = 0;
 	mutex_lock(&dev->read_mutex);
 	while ((req = mtp_req_get(dev, &dev->tx_idle)))
 		mtp_request_free(req, dev->ep_in);
@@ -1513,6 +1516,7 @@ mtp_function_unbind(struct usb_configuration *c, struct usb_function *f)
 	dev->is_ptp = false;
 	kfree(f->os_desc_table);
 	f->os_desc_n = 0;
+	fi_mtp->func_inst.f = NULL;
 }
 
 static int mtp_function_set_alt(struct usb_function *f,
@@ -1849,6 +1853,8 @@ struct usb_function_instance *alloc_inst_mtp_ptp(bool mtp_config)
 	config_group_init_type_name(&fi_mtp->func_inst.group,
 					"", &mtp_func_type);
 
+	mutex_init(&fi_mtp->dev->read_mutex);
+
 	return  &fi_mtp->func_inst;
 }
 EXPORT_SYMBOL_GPL(alloc_inst_mtp_ptp);
@@ -1909,9 +1915,7 @@ struct usb_function *function_alloc_mtp_ptp(struct usb_function_instance *fi,
 	dev->function.setup = mtp_ctrlreq_configfs;
 	dev->function.free_func = mtp_free;
 	dev->is_ptp = !mtp_config;
-	fi->f = &dev->function;
 
-	mutex_init(&dev->read_mutex);
 	return &dev->function;
 }
 EXPORT_SYMBOL_GPL(function_alloc_mtp_ptp);

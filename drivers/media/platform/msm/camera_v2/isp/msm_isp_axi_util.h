@@ -136,10 +136,15 @@ static inline void msm_isp_cfg_stream_scratch(
 }
 
 static inline struct msm_vfe_axi_stream *msm_isp_get_stream_common_data(
-			struct vfe_device *vfe_dev, int stream_idx)
+			struct vfe_device *vfe_dev, uint32_t stream_idx)
 {
 	struct msm_vfe_common_dev_data *common_data = vfe_dev->common_data;
 	struct msm_vfe_axi_stream *stream_info;
+
+	if (stream_idx >= VFE_AXI_SRC_MAX) {
+		pr_err("invalid stream_idx %d\n", stream_idx);
+		return NULL;
+	}
 
 	if (vfe_dev->is_split &&  stream_idx < RDI_INTF_0)
 		stream_info = &common_data->streams[stream_idx];

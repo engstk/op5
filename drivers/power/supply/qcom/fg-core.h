@@ -46,10 +46,16 @@
 			&& (value) <= (right)))
 
 /* Awake votable reasons */
-#define SRAM_READ	"fg_sram_read"
-#define SRAM_WRITE	"fg_sram_write"
-#define PROFILE_LOAD	"fg_profile_load"
-#define DELTA_SOC	"fg_delta_soc"
+#define SRAM_READ		"fg_sram_read"
+#define SRAM_WRITE		"fg_sram_write"
+#define PROFILE_LOAD		"fg_profile_load"
+#define DELTA_SOC		"fg_delta_soc"
+
+/* Delta BSOC irq votable reasons */
+#define DELTA_BSOC_IRQ_VOTER	"fg_delta_bsoc_irq"
+
+/* Battery missing irq votable reasons */
+#define BATT_MISS_IRQ_VOTER	"fg_batt_miss_irq"
 
 #define DEBUG_PRINT_BUFFER_SIZE		64
 /* 3 byte address + 1 space character */
@@ -125,11 +131,6 @@ enum fg_irq_index {
 	FG_IRQ_MAX,
 };
 
-/* WA flags */
-enum {
-	DELTA_SOC_IRQ_WA = BIT(0),
-};
-
 /*
  * List of FG_SRAM parameters. Please add a parameter only if it is an entry
  * that will be used either to configure an entity (e.g. termination current)
@@ -149,6 +150,7 @@ enum fg_sram_param_id {
 	FG_SRAM_CC_SOC,
 	FG_SRAM_CC_SOC_SW,
 	FG_SRAM_ACT_BATT_CAP,
+	FG_SRAM_TIMEBASE,
 	/* Entries below here are configurable during initialization */
 	FG_SRAM_CUTOFF_VOLT,
 	FG_SRAM_EMPTY_VOLT,
@@ -159,14 +161,17 @@ enum fg_sram_param_id {
 	FG_SRAM_ESR_TIMER_DISCHG_INIT,
 	FG_SRAM_ESR_TIMER_CHG_MAX,
 	FG_SRAM_ESR_TIMER_CHG_INIT,
+	FG_SRAM_ESR_PULSE_THRESH,
 	FG_SRAM_SYS_TERM_CURR,
 	FG_SRAM_CHG_TERM_CURR,
+	FG_SRAM_CHG_TERM_BASE_CURR,
 	FG_SRAM_DELTA_MSOC_THR,
 	FG_SRAM_DELTA_BSOC_THR,
 	FG_SRAM_RECHARGE_SOC_THR,
 	FG_SRAM_RECHARGE_VBATT_THR,
 	FG_SRAM_KI_COEFF_MED_DISCHG,
 	FG_SRAM_KI_COEFF_HI_DISCHG,
+	FG_SRAM_KI_COEFF_FULL_SOC,
 	FG_SRAM_ESR_TIGHT_FILTER,
 	FG_SRAM_ESR_BROAD_FILTER,
 	FG_SRAM_SLOPE_LIMIT,
@@ -206,6 +211,7 @@ struct fg_alg_flag {
 
 enum wa_flags {
 	PMI8998_V1_REV_WA = BIT(0),
+	PM660_TSMC_OSC_WA = BIT(1),
 };
 
 enum slope_limit_status {
@@ -214,6 +220,12 @@ enum slope_limit_status {
 	HIGH_TEMP_DISCHARGE,
 	HIGH_TEMP_CHARGE,
 	SLOPE_LIMIT_NUM_COEFFS,
+};
+
+enum esr_timer_config {
+	TIMER_RETRY = 0,
+	TIMER_MAX,
+	NUM_ESR_TIMERS,
 };
 
 /* DT parameters for FG device */
@@ -225,14 +237,15 @@ struct fg_dt_props {
 	int	empty_volt_mv;
 	int	vbatt_low_thr_mv;
 	int	chg_term_curr_ma;
+	int	chg_term_base_curr_ma;
 	int	sys_term_curr_ma;
 	int	delta_soc_thr;
 	int	recharge_soc_thr;
 	int	recharge_volt_thr_mv;
 	int	rsense_sel;
-	int	esr_timer_charging;
-	int	esr_timer_awake;
-	int	esr_timer_asleep;
+	int	esr_timer_charging[NUM_ESR_TIMERS];
+	int	esr_timer_awake[NUM_ESR_TIMERS];
+	int	esr_timer_asleep[NUM_ESR_TIMERS];
 	int	rconn_mohms;
 	int	esr_clamp_mohms;
 	int	cl_start_soc;
@@ -250,6 +263,8 @@ struct fg_dt_props {
 	int	esr_tight_lt_flt_upct;
 	int	esr_broad_lt_flt_upct;
 	int	slope_limit_temp;
+	int	esr_pulse_thresh_ma;
+	int	esr_meas_curr_ma;
 	int	jeita_thresholds[NUM_JEITA_LEVELS];
 	int	ki_coeff_soc[KI_COEFF_SOC_LEVELS];
 	int	ki_coeff_med_dischg[KI_COEFF_SOC_LEVELS];
@@ -316,6 +331,23 @@ static const struct fg_pt fg_ln_table[] = {
 	{ 128000,	4852 },
 };
 
+/* each tuple is - <temperature in degC, Timebase> */
+static const struct fg_pt fg_tsmc_osc_table[] = {
+	{ -20,		395064 },
+	{ -10,		398114 },
+	{   0,		401669 },
+	{  10,		404641 },
+	{  20,		408856 },
+	{  25,		412449 },
+	{  30,		416532 },
+	{  40,		420289 },
+	{  50,		425020 },
+	{  60,		430160 },
+	{  70,		434175 },
+	{  80,		439475 },
+	{  90,		444992 },
+};
+
 struct fg_chip {
 	struct device		*dev;
 	struct pmic_revid_data	*pmic_rev_id;
@@ -327,9 +359,12 @@ struct fg_chip {
 	struct power_supply	*dc_psy;
 	struct power_supply	*parallel_psy;
 	struct iio_channel	*batt_id_chan;
+	struct iio_channel	*die_temp_chan;
 	struct fg_memif		*sram;
 	struct fg_irq_info	*irqs;
 	struct votable		*awake_votable;
+	struct votable		*delta_bsoc_irq_en_votable;
+	struct votable		*batt_miss_irq_en_votable;
 	struct fg_sram_param	*sp;
 	struct fg_alg_flag	*alg_flags;
 	int			*debug_mask;
@@ -349,6 +384,7 @@ struct fg_chip {
 	u32			rradc_base;
 	u32			wa_flags;
 	int			batt_id_ohms;
+	int			ki_coeff_full_soc;
 	int			charge_status;
 	int			prev_charge_status;
 	int			charge_done;
@@ -359,6 +395,7 @@ struct fg_chip {
 	int			maint_soc;
 	int			delta_soc;
 	int			last_msoc;
+	int			esr_timer_charging_default[NUM_ESR_TIMERS];
 	enum slope_limit_status	slope_limit_sts;
 	bool			profile_available;
 	bool			profile_loaded;
@@ -370,7 +407,6 @@ struct fg_chip {
 	bool			esr_fcc_ctrl_en;
 	bool			soc_reporting_ready;
 	bool			esr_flt_cold_temp_en;
-	bool			bsoc_delta_irq_en;
 	bool			slope_limit_en;
 	bool			use_ima_single_mode;
 	struct completion	soc_update;
@@ -435,6 +471,7 @@ extern void dump_sram(u8 *buf, int addr, int len);
 extern int64_t twos_compliment_extend(int64_t val, int s_bit_pos);
 extern s64 fg_float_decode(u16 val);
 extern bool is_input_present(struct fg_chip *chip);
+extern bool is_qnovo_en(struct fg_chip *chip);
 extern void fg_circ_buf_add(struct fg_circ_buf *, int);
 extern void fg_circ_buf_clr(struct fg_circ_buf *);
 extern int fg_circ_buf_avg(struct fg_circ_buf *, int *);

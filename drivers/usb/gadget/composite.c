@@ -35,7 +35,8 @@
 	(speed == USB_SPEED_SUPER ?\
 	SSUSB_GADGET_VBUS_DRAW : CONFIG_USB_GADGET_VBUS_DRAW)
 
-static bool disable_l1_for_hs;
+/* disable LPM by default */
+static bool disable_l1_for_hs = true;
 module_param(disable_l1_for_hs, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(disable_l1_for_hs,
 	"Disable support for L1 LPM for HS devices");
@@ -1649,9 +1650,6 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 					DBG(cdev,
 					"Config HS device with LPM(L1)\n");
 				}
-			} else if (!disable_l1_for_hs) {
-				cdev->desc.bcdUSB = cpu_to_le16(0x0210);
-				DBG(cdev, "Config HS device with LPM(L1)\n");
 			}
 
 			value = min(w_length, (u16) sizeof cdev->desc);
