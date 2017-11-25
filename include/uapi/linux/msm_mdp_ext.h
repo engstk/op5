@@ -178,6 +178,12 @@ VALIDATE/COMMIT FLAG CONFIGURATION
  */
 #define MDP_COMMIT_CWB_DSPP 0x1000
 
+/*
+ * Flag to indicate that rectangle number is being assigned
+ * by userspace in multi-rectangle mode
+ */
+#define MDP_COMMIT_RECT_NUM 0x2000
+
 #define MDP_COMMIT_VERSION_1_0		0x00010000
 
 #define OUT_LAYER_COLOR_SPACE
@@ -425,8 +431,14 @@ struct mdp_input_layer {
 	 */
 	int			error_code;
 
+	/*
+	 * For source pipes supporting multi-rectangle, this field identifies
+	 * the rectangle index of the source pipe.
+	 */
+	uint32_t		rect_num;
+
 	/* 32bits reserved value for future usage. */
-	uint32_t		reserved[6];
+	uint32_t		reserved[5];
 };
 
 struct mdp_output_layer {
@@ -809,4 +821,26 @@ struct mdp_hdr_stream {
 	uint32_t content_type;
 	uint32_t reserved[5];
 };
+
+/* hdr hdmi state takes possible values of 1, 2 and 4 respectively */
+#define HDR_ENABLE  (1 << 0)
+#define HDR_DISABLE (1 << 1)
+#define HDR_RESET   (1 << 2)
+
+/*
+ * HDR Control
+ * This encapsulates the HDR metadata as well as a state control
+ * for the HDR metadata as required by the HDMI spec to send the
+ * relevant metadata depending on the state of the HDR playback.
+ * hdr_state: Controls HDR state, takes values HDR_ENABLE, HDR_DISABLE
+ * and HDR_RESET.
+ * hdr_meta: Metadata sent by the userspace for the HDR clip.
+ */
+
+#define DRM_MSM_EXT_PANEL_HDR_CTRL
+struct mdp_hdr_stream_ctrl {
+	__u8 hdr_state;                   /* HDR state */
+	struct mdp_hdr_stream hdr_stream; /* HDR metadata */
+};
+
 #endif

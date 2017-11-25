@@ -250,9 +250,8 @@
 				<0xd900 0x100>;
 			reg-names = "qpnp-wled-ctrl-base",
 					"qpnp-wled-sink-base";
-			interrupts = <0x3 0xd8 0x1 IRQ_TYPE_EDGE_BOTH>,
-					<0x3 0xd8 0x2 IRQ_TYPE_EDGE_BOTH>;
-			interrupt-names = "ovp-irq", "sc-irq";
+			interrupts = <0x3 0xd8 0x1 IRQ_TYPE_EDGE_RISING>;
+			interrupt-names = "ovp-irq";
 			linux,name = "wled";
 			linux,default-trigger = "bkl-trigger";
 			qcom,fdbk-output = "auto";
@@ -268,9 +267,9 @@
 			qcom,fs-curr-ua = <25000>;
 			qcom,cons-sync-write-delay-us = <1000>;
 			qcom,led-strings-list = [00 01 02];
-			qcom,en-ext-pfet-sc-pro;
 			qcom,loop-auto-gm-en;
 			qcom,pmic-revid = <&pm660l_revid>;
+			qcom,auto-calibration-enable;
 			status = "ok";
 		};
 
@@ -330,9 +329,6 @@
 				qcom,ires-ua = <12500>;
 				qcom,hdrm-voltage-mv = <325>;
 				qcom,hdrm-vol-hi-lo-win-mv = <100>;
-				pinctrl-names = "led_enable","led_disable";
-				pinctrl-0 = <&led_enable>;
-				pinctrl-1 = <&led_disable>;
 			};
 
 			pm660l_torch0: qcom,torch_0 {
@@ -369,9 +365,6 @@
 				qcom,ires-ua = <12500>;
 				qcom,hdrm-voltage-mv = <325>;
 				qcom,hdrm-vol-hi-lo-win-mv = <100>;
-				pinctrl-names = "led_enable","led_disable";
-				pinctrl-0 = <&led_enable>;
-				pinctrl-1 = <&led_disable>;
 			};
 
 			pm660l_switch0: qcom,led_switch_0 {
@@ -397,7 +390,7 @@
 			interrupts = <0x3 0xec 0x1 IRQ_TYPE_EDGE_RISING>;
 			interrupt-names = "sc-irq";
 
-			qcom,force-module-reenable;
+			qcom,pmic-revid = <&pm660l_revid>;
 
 			lcdb_ldo_vreg: ldo {
 				label = "ldo";
@@ -418,7 +411,9 @@
 		       compatible = "qcom,qpnp-oledb-regulator";
 		       #address-cells = <1>;
 		       #size-cells = <1>;
+		       qcom,pmic-revid = <&pm660l_revid>;
 		       reg = <0xe000 0x100>;
+		       qcom,pbs-client = <&pm660l_pbs>;
 
 		       label = "oledb";
 		       regulator-name = "regulator-oledb";
@@ -466,6 +461,8 @@
 				qcom,qpnp-lab-slew-rate = <5000>;
 				qcom,qpnp-lab-init-voltage = <4600000>;
 				qcom,qpnp-lab-init-amoled-voltage = <4600000>;
+
+				qcom,notify-lab-vreg-ok-sts;
 			};
 		};
 	};

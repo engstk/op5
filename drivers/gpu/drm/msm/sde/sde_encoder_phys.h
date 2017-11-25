@@ -174,6 +174,7 @@ enum sde_intr_idx {
  * @split_role:		Role to play in a split-panel configuration
  * @intf_mode:		Interface mode
  * @intf_idx:		Interface index on sde hardware
+ * @enc_cdm_csc:	Cached CSC type of CDM block
  * @enc_spinlock:	Virtual-Encoder-Wide Spin Lock for IRQ purposes
  * @enable_state:	Enable state tracking
  * @vblank_refcount:	Reference count of vblank request
@@ -201,6 +202,7 @@ struct sde_encoder_phys {
 	enum sde_enc_split_role split_role;
 	enum sde_intf_mode intf_mode;
 	enum sde_intf intf_idx;
+	enum sde_csc_type enc_cdm_csc;
 	spinlock_t *enc_spinlock;
 	enum sde_enc_enable_state enable_state;
 	atomic_t vblank_refcount;
@@ -264,7 +266,7 @@ struct sde_encoder_phys_cmd {
  * @wb_fmt:		Writeback pixel format
  * @frame_count:	Counter of completed writeback operations
  * @kickoff_count:	Counter of issued writeback operations
- * @mmu_id:		mmu identifier for non-secure/secure domain
+ * @aspace:		address space identifier for non-secure/secure domain
  * @wb_dev:		Pointer to writeback device
  * @start_time:		Start time of writeback latest request
  * @end_time:		End time of writeback latest request
@@ -285,7 +287,7 @@ struct sde_encoder_phys_wb {
 	const struct sde_format *wb_fmt;
 	u32 frame_count;
 	u32 kickoff_count;
-	int mmu_id[SDE_IOMMU_DOMAIN_MAX];
+	struct msm_gem_address_space *aspace[SDE_IOMMU_DOMAIN_MAX];
 	struct sde_wb_device *wb_dev;
 	ktime_t start_time;
 	ktime_t end_time;
@@ -349,8 +351,8 @@ struct sde_encoder_phys *sde_encoder_phys_wb_init(
 #endif
 
 void sde_encoder_phys_setup_cdm(struct sde_encoder_phys *phys_enc,
-		struct drm_framebuffer *fb, const struct sde_format *format,
-		struct sde_rect *wb_roi);
+		const struct sde_format *format, u32 output_type,
+		struct sde_rect *roi);
 
 /**
  * sde_encoder_helper_trigger_start - control start helper function

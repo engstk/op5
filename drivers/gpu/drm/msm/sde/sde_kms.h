@@ -22,6 +22,7 @@
 #include "msm_drv.h"
 #include "msm_kms.h"
 #include "msm_mmu.h"
+#include "msm_gem.h"
 #include "sde_dbg.h"
 #include "sde_hw_catalog.h"
 #include "sde_hw_ctl.h"
@@ -33,6 +34,7 @@
 #include "sde_power_handle.h"
 #include "sde_irq.h"
 #include "sde_core_perf.h"
+#include "sde_splash.h"
 
 #define DRMID(x) ((x) ? (x)->base.id : -1)
 
@@ -121,8 +123,7 @@ struct sde_kms {
 	int core_rev;
 	struct sde_mdss_cfg *catalog;
 
-	struct msm_mmu *mmu[MSM_SMMU_DOMAIN_MAX];
-	int mmu_id[MSM_SMMU_DOMAIN_MAX];
+	struct msm_gem_address_space *aspace[MSM_SMMU_DOMAIN_MAX];
 	struct sde_power_client *core_client;
 
 	/* directory entry for debugfs */
@@ -154,8 +155,12 @@ struct sde_kms {
 	void **dsi_displays;
 	int wb_display_count;
 	void **wb_displays;
-
 	bool has_danger_ctrl;
+	void **hdmi_displays;
+	int hdmi_display_count;
+
+	/* splash handoff structure */
+	struct sde_splash_info splash_info;
 };
 
 struct vsync_info {
@@ -276,10 +281,12 @@ struct sde_kms_info {
 
 /**
  * SDE_KMS_INFO_DATALEN - Macro for accessing sde_kms_info data length
+ *			it adds an extra character length to count null.
  * @S: Pointer to sde_kms_info structure
  * Returns: Size of available byte data
  */
-#define SDE_KMS_INFO_DATALEN(S) ((S) ? ((struct sde_kms_info *)(S))->len : 0)
+#define SDE_KMS_INFO_DATALEN(S) ((S) ? ((struct sde_kms_info *)(S))->len + 1 \
+							: 0)
 
 /**
  * sde_kms_info_reset - reset sde_kms_info structure

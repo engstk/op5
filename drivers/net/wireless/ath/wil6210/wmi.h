@@ -59,6 +59,8 @@ enum wmi_fw_capability {
 	WMI_FW_CAPABILITY_DISABLE_AP_SME	= 4,
 	WMI_FW_CAPABILITY_WMI_ONLY		= 5,
 	WMI_FW_CAPABILITY_THERMAL_THROTTLING	= 7,
+	WMI_FW_CAPABILITY_D3_SUSPEND		= 8,
+	WMI_FW_CAPABILITY_RSSI_REPORTING	= 12,
 	WMI_FW_CAPABILITY_MAX,
 };
 
@@ -157,7 +159,7 @@ enum wmi_command_id {
 	WMI_FLASH_READ_CMDID				= 0x902,
 	WMI_FLASH_WRITE_CMDID				= 0x903,
 	/* Power management */
-	WMI_TRAFFIC_DEFERRAL_CMDID			= 0x904,
+	WMI_TRAFFIC_SUSPEND_CMDID			= 0x904,
 	WMI_TRAFFIC_RESUME_CMDID			= 0x905,
 	/* P2P */
 	WMI_P2P_CFG_CMDID				= 0x910,
@@ -500,8 +502,14 @@ struct wmi_port_delete_cmd {
 	u8 reserved[3];
 } __packed;
 
-/* WMI_TRAFFIC_DEFERRAL_CMDID */
-struct wmi_traffic_deferral_cmd {
+/* WMI_TRAFFIC_SUSPEND_CMD wakeup trigger bit mask values */
+enum wmi_wakeup_trigger {
+	WMI_WAKEUP_TRIGGER_UCAST	= 0x01,
+	WMI_WAKEUP_TRIGGER_BCAST	= 0x02,
+};
+
+/* WMI_TRAFFIC_SUSPEND_CMDID */
+struct wmi_traffic_suspend_cmd {
 	/* Bit vector: bit[0] - wake on Unicast, bit[1] - wake on Broadcast */
 	u8 wakeup_trigger;
 } __packed;
@@ -1084,7 +1092,7 @@ enum wmi_event_id {
 	WMI_FLASH_READ_DONE_EVENTID			= 0x1902,
 	WMI_FLASH_WRITE_DONE_EVENTID			= 0x1903,
 	/* Power management */
-	WMI_TRAFFIC_DEFERRAL_EVENTID			= 0x1904,
+	WMI_TRAFFIC_SUSPEND_EVENTID			= 0x1904,
 	WMI_TRAFFIC_RESUME_EVENTID			= 0x1905,
 	/* P2P */
 	WMI_P2P_CFG_DONE_EVENTID			= 0x1910,
@@ -1299,7 +1307,8 @@ struct wmi_notify_req_done_event {
 	/* beamforming status, 0: fail; 1: OK; 2: retrying */
 	__le32 status;
 	__le64 tsf;
-	__le32 snr_val;
+	s8 rssi;
+	u8 reserved0[3];
 	__le32 tx_tpt;
 	__le32 tx_goodput;
 	__le32 rx_goodput;
@@ -1595,7 +1604,7 @@ struct wmi_get_ssid_event {
 /* wmi_rx_mgmt_info */
 struct wmi_rx_mgmt_info {
 	u8 mcs;
-	s8 snr;
+	s8 rssi;
 	u8 range;
 	u8 sqi;
 	__le16 stype;
@@ -1926,14 +1935,14 @@ struct wmi_link_maintain_cfg_read_done_event {
 	struct wmi_link_maintain_cfg lm_cfg;
 } __packed;
 
-enum wmi_traffic_deferral_status {
-	WMI_TRAFFIC_DEFERRAL_APPROVED	= 0x0,
-	WMI_TRAFFIC_DEFERRAL_REJECTED	= 0x1,
+enum wmi_traffic_suspend_status {
+	WMI_TRAFFIC_SUSPEND_APPROVED	= 0x0,
+	WMI_TRAFFIC_SUSPEND_REJECTED	= 0x1,
 };
 
-/* WMI_TRAFFIC_DEFERRAL_EVENTID */
-struct wmi_traffic_deferral_event {
-	/* enum wmi_traffic_deferral_status_e */
+/* WMI_TRAFFIC_SUSPEND_EVENTID */
+struct wmi_traffic_suspend_event {
+	/* enum wmi_traffic_suspend_status_e */
 	u8 status;
 } __packed;
 

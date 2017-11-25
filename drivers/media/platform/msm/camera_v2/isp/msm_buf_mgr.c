@@ -86,7 +86,7 @@ struct msm_isp_bufq *msm_isp_get_bufq(
 	/* bufq_handle cannot be 0 */
 	if ((bufq_handle == 0) ||
 		bufq_index >= BUF_MGR_NUM_BUF_Q ||
-		(bufq_index > buf_mgr->num_buf_q))
+		(bufq_index >= buf_mgr->num_buf_q))
 		return NULL;
 
 	bufq = &buf_mgr->bufq[bufq_index];
@@ -1166,10 +1166,15 @@ int msm_isp_smmu_attach(struct msm_isp_buf_mgr *buf_mgr,
 {
 	struct msm_vfe_smmu_attach_cmd *cmd = arg;
 	int rc = 0;
+	int32_t stall_disable = 1;
 
 	pr_debug("%s: cmd->security_mode : %d\n", __func__, cmd->security_mode);
+
 	mutex_lock(&buf_mgr->lock);
 	if (cmd->iommu_attach_mode == IOMMU_ATTACH) {
+		/* disable smmu stall on fault */
+		cam_smmu_set_attr(buf_mgr->iommu_hdl,
+			DOMAIN_ATTR_CB_STALL_DISABLE, &stall_disable);
 		/*
 		 * Call hypervisor thru scm call to notify secure or
 		 * non-secure mode

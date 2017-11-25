@@ -98,8 +98,7 @@ static int __apr_tal_write(struct apr_svc_ch_dev *apr_ch, void *data,
 	unsigned long flags;
 
 	spin_lock_irqsave(&apr_ch->w_lock, flags);
-	rc = glink_tx(apr_ch->handle, pkt_priv, data, len,
-			GLINK_TX_REQ_INTENT | GLINK_TX_ATOMIC);
+	rc = glink_tx(apr_ch->handle, pkt_priv, data, len, GLINK_TX_ATOMIC);
 	spin_unlock_irqrestore(&apr_ch->w_lock, flags);
 
 	if (rc)
@@ -115,7 +114,7 @@ int apr_tal_write(struct apr_svc_ch_dev *apr_ch, void *data,
 {
 	int rc = 0, retries = 0;
 	void *pkt_data = NULL;
-	struct apr_tx_buf *tx_buf;
+	struct apr_tx_buf *tx_buf = NULL;
 	struct apr_pkt_priv *pkt_priv_ptr = pkt_priv;
 
 	if (!apr_ch->handle || !pkt_priv)

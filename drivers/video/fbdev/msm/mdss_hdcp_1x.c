@@ -793,9 +793,13 @@ static void hdcp_1x_enable_sink_irq_hpd(struct hdcp_1x *hdcp)
 {
 	int rc;
 	u8 enable_hpd_irq = 0x1;
-	u16 version = *hdcp->init_data.version;
+	u16 version;
 	const int major = 1, minor = 2;
 
+	if (hdcp->init_data.client_id == HDCP_CLIENT_HDMI)
+		return;
+
+	version = *hdcp->init_data.version;
 	pr_debug("version 0x%x\n", version);
 
 	if (((version & 0xFF) < minor) ||
@@ -1381,7 +1385,8 @@ int hdcp_1x_authenticate(void *input)
 
 	flush_delayed_work(&hdcp->hdcp_auth_work);
 
-	if (!hdcp_1x_state(HDCP_STATE_INACTIVE)) {
+	if (!hdcp_1x_state(HDCP_STATE_INACTIVE) &&
+			!hdcp_1x_state(HDCP_STATE_AUTH_FAIL)) {
 		pr_err("invalid state\n");
 		return -EINVAL;
 	}
@@ -1443,7 +1448,6 @@ int hdcp_1x_reauthenticate(void *input)
 
 	DSS_REG_W(io, reg_set->reset, reg & ~reg_set->reset_bit);
 
-	hdcp->hdcp_state = HDCP_STATE_INACTIVE;
 	hdcp_1x_authenticate(hdcp);
 
 	return ret;

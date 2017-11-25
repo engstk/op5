@@ -16,6 +16,7 @@
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/msm_mdp.h>
+#include <linux/msm_mdp_ext.h>
 #include "mdss_hdmi_util.h"
 
 #define RESOLUTION_NAME_STR_LEN 30
@@ -857,7 +858,7 @@ static int hdmi_ddc_read_retry(struct hdmi_tx_ddc_ctrl *ddc_ctrl)
 	u32 reg_val, ndx, time_out_count, wait_time;
 	struct hdmi_tx_ddc_data *ddc_data;
 	int status;
-	int busy_wait_us;
+	int busy_wait_us = 0;
 
 	if (!ddc_ctrl || !ddc_ctrl->io) {
 		pr_err("invalid input\n");
@@ -1335,7 +1336,7 @@ int hdmi_ddc_write(struct hdmi_tx_ddc_ctrl *ddc_ctrl)
 	u32 time_out_count;
 	struct hdmi_tx_ddc_data *ddc_data;
 	u32 wait_time;
-	int busy_wait_us;
+	int busy_wait_us = 0;
 
 	if (!ddc_ctrl || !ddc_ctrl->io) {
 		pr_err("invalid input\n");
@@ -1810,4 +1811,52 @@ int hdmi_hdcp2p2_ddc_read_rxstatus(struct hdmi_tx_ddc_ctrl *ctrl)
 	}
 
 	return rc;
+}
+
+u8 hdmi_hdr_get_ops(u8 curr_state, u8 new_state)
+{
+
+	/** There could be 3 valid state transitions:
+	* 1. HDR_DISABLE -> HDR_ENABLE
+	*
+	* In this transition, we shall start sending
+	* HDR metadata with metadata from the HDR clip
+	*
+	* 2. HDR_ENABLE -> HDR_RESET
+	*
+	* In this transition, we will keep sending
+	* HDR metadata but with EOTF and metadata as 0
+	*
+	* 3. HDR_RESET -> HDR_ENABLE
+	*
+	* In this transition, we will start sending
+	* HDR metadata with metadata from the HDR clip
+	*
+	* 4. HDR_RESET -> HDR_DISABLE
+	*
+	* In this transition, we will stop sending
+	* metadata to the sink and clear PKT_CTRL register
+	* bits.
+	*/
+
+	if ((curr_state == HDR_DISABLE)
+		&& (new_state == HDR_ENABLE)) {
+		pr_debug("State changed HDR_DISABLE ---> HDR_ENABLE\n");
+		return HDR_SEND_INFO;
+	} else if ((curr_state == HDR_ENABLE)
+		&& (new_state == HDR_RESET)) {
+		pr_debug("State changed HDR_ENABLE ---> HDR_RESET\n");
+		return HDR_SEND_INFO;
+	} else if ((curr_state == HDR_RESET)
+		&& (new_state == HDR_ENABLE)) {
+		pr_debug("State changed HDR_RESET ---> HDR_ENABLE\n");
+		return HDR_SEND_INFO;
+	} else if ((curr_state == HDR_RESET)
+		&& (new_state == HDR_DISABLE)) {
+		pr_debug("State changed HDR_RESET ---> HDR_DISABLE\n");
+		return HDR_CLEAR_INFO;
+	}
+
+	pr_debug("Unsupported OR no state change\n");
+	return HDR_UNSUPPORTED_OP;
 }

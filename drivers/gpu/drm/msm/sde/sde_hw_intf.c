@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -83,6 +83,7 @@ static struct sde_intf_cfg *_intf_offset(enum sde_intf intf,
 		(m->intf[i].type != INTF_NONE)) {
 			b->base_off = addr;
 			b->blk_off = m->intf[i].base;
+			b->length = m->intf[i].len;
 			b->hwversion = m->hwversion;
 			b->log_mask = SDE_DBG_MASK_INTF;
 			return &m->intf[i];
@@ -157,13 +158,8 @@ static void sde_hw_intf_setup_timing_engine(struct sde_hw_intf *ctx,
 	display_hctl = (hsync_end_x << 16) | hsync_start_x;
 
 	den_polarity = 0;
-	if (ctx->cap->type == INTF_HDMI) {
-		hsync_polarity = p->yres >= 720 ? 0 : 1;
-		vsync_polarity = p->yres >= 720 ? 0 : 1;
-	} else {
-		hsync_polarity = 0;
-		vsync_polarity = 0;
-	}
+	hsync_polarity = p->hsync_polarity;
+	vsync_polarity = p->vsync_polarity;
 	polarity_ctl = (den_polarity << 2) | /*  DEN Polarity  */
 		(vsync_polarity << 1) | /* VSYNC Polarity */
 		(hsync_polarity << 0);  /* HSYNC Polarity */

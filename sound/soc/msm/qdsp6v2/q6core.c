@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -119,6 +119,18 @@ static int32_t aprv2_core_fn_q(struct apr_client_data *data, void *priv)
 			q6core_lcl.bus_bw_resp_received = 1;
 			wake_up(&q6core_lcl.bus_bw_req_wait);
 			break;
+		case AVCS_CMD_ADD_POOL_PAGES:
+			pr_debug("%s: Cmd = AVCS_CMD_ADD_POOL_PAGES status[0x%x]\n",
+				__func__, payload1[1]);
+			q6core_lcl.bus_bw_resp_received = 1;
+			wake_up(&q6core_lcl.bus_bw_req_wait);
+			break;
+		case AVCS_CMD_REMOVE_POOL_PAGES:
+			pr_debug("%s: Cmd = AVCS_CMD_REMOVE_POOL_PAGES status[0x%x]\n",
+				__func__, payload1[1]);
+			q6core_lcl.bus_bw_resp_received = 1;
+			wake_up(&q6core_lcl.bus_bw_req_wait);
+			break;
 		default:
 			pr_err("%s: Invalid cmd rsp[0x%x][0x%x] opcode %d\n",
 					__func__,
@@ -169,7 +181,7 @@ static int32_t aprv2_core_fn_q(struct apr_client_data *data, void *priv)
 			generic_get_data->valid = 1;
 			generic_get_data->size_in_ints =
 				data->payload_size/sizeof(int);
-			pr_debug("DTS_EAGLE_CORE callback size = %i\n",
+			pr_debug("callback size = %i\n",
 				 data->payload_size);
 			memcpy(generic_get_data->ints, data->payload,
 				data->payload_size);
@@ -353,119 +365,6 @@ fail_cmd:
 	return ret;
 }
 
-int core_dts_eagle_set(int size, char *data)
-{
-	struct adsp_dts_eagle *payload = NULL;
-	int rc = 0, size_aligned4byte;
-
-	pr_debug("DTS_EAGLE_CORE - %s\n", __func__);
-	if (size <= 0 || !data) {
-		pr_err("DTS_EAGLE_CORE - %s: invalid size %i or pointer %pK.\n",
-			__func__, size, data);
-		return -EINVAL;
-	}
-
-	size_aligned4byte = (size+3) & 0xFFFFFFFC;
-	mutex_lock(&(q6core_lcl.cmd_lock));
-	ocm_core_open();
-	if (q6core_lcl.core_handle_q) {
-		payload = kzalloc(sizeof(struct adsp_dts_eagle) +
-				  size_aligned4byte, GFP_KERNEL);
-		if (!payload) {
-			rc = -ENOMEM;
-			goto exit;
-		}
-		payload->hdr.hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_EVENT,
-						APR_HDR_LEN(APR_HDR_SIZE),
-						APR_PKT_VER);
-		payload->hdr.pkt_size = sizeof(struct adsp_dts_eagle) +
-					       size_aligned4byte;
-		payload->hdr.src_port = 0;
-		payload->hdr.dest_port = 0;
-		payload->hdr.token = 0;
-		payload->hdr.opcode = ADSP_CMD_SET_DTS_EAGLE_DATA_ID;
-		payload->id = DTS_EAGLE_LICENSE_ID;
-		payload->overwrite = 1;
-		payload->size = size;
-		memcpy(payload->data, data, size);
-		rc = apr_send_pkt(q6core_lcl.core_handle_q,
-				(uint32_t *)payload);
-		if (rc < 0) {
-			pr_err("DTS_EAGLE_CORE - %s: failed op[0x%x]rc[%d]\n",
-				__func__, payload->hdr.opcode, rc);
-		}
-		kfree(payload);
-	}
-
-exit:
-	mutex_unlock(&(q6core_lcl.cmd_lock));
-	return rc;
-}
-
-int core_dts_eagle_get(int id, int size, char *data)
-{
-	struct apr_hdr ah;
-	int rc = 0;
-
-	pr_debug("DTS_EAGLE_CORE - %s\n", __func__);
-	if (size <= 0 || !data) {
-		pr_err("DTS_EAGLE_CORE - %s: invalid size %i or pointer %pK.\n",
-			__func__, size, data);
-		return -EINVAL;
-	}
-	mutex_lock(&(q6core_lcl.cmd_lock));
-	ocm_core_open();
-	if (q6core_lcl.core_handle_q) {
-		ah.hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_EVENT,
-				APR_HDR_LEN(APR_HDR_SIZE), APR_PKT_VER);
-		ah.pkt_size = sizeof(struct apr_hdr);
-		ah.src_port = 0;
-		ah.dest_port = 0;
-		ah.token = 0;
-		ah.opcode = id;
-
-		q6core_lcl.bus_bw_resp_received = 0;
-		generic_get_data = kzalloc(sizeof(struct generic_get_data_)
-					   + size, GFP_KERNEL);
-		if (!generic_get_data) {
-			rc = -ENOMEM;
-			goto exit;
-		}
-
-		rc = apr_send_pkt(q6core_lcl.core_handle_q,
-				(uint32_t *)&ah);
-		if (rc < 0) {
-			pr_err("DTS_EAGLE_CORE - %s: failed op[0x%x]rc[%d]\n",
-				__func__, ah.opcode, rc);
-			goto exit;
-		}
-
-		rc = wait_event_timeout(q6core_lcl.bus_bw_req_wait,
-				(q6core_lcl.bus_bw_resp_received == 1),
-				msecs_to_jiffies(TIMEOUT_MS));
-		if (!rc) {
-			pr_err("DTS_EAGLE_CORE - %s: EAGLE get params timed out\n",
-				__func__);
-			rc = -EINVAL;
-			goto exit;
-		}
-		if (generic_get_data->valid) {
-			rc = 0;
-			memcpy(data, generic_get_data->ints, size);
-		} else {
-			rc = -EINVAL;
-			pr_err("DTS_EAGLE_CORE - %s: EAGLE get params problem getting data - check callback error value\n",
-				__func__);
-		}
-	}
-
-exit:
-	kfree(generic_get_data);
-	generic_get_data = NULL;
-	mutex_unlock(&(q6core_lcl.cmd_lock));
-	return rc;
-}
-
 uint32_t core_set_dolby_manufacturer_id(int manufacturer_id)
 {
 	struct adsp_dolby_manufacturer_id payload;
@@ -511,21 +410,23 @@ bool q6core_is_adsp_ready(void)
 
 	mutex_lock(&(q6core_lcl.cmd_lock));
 	ocm_core_open();
-	q6core_lcl.bus_bw_resp_received = 0;
-	rc = apr_send_pkt(q6core_lcl.core_handle_q, (uint32_t *)&hdr);
-	if (rc < 0) {
-		pr_err("%s: Get ADSP state APR packet send event %d\n",
-			__func__, rc);
-		goto bail;
-	}
+	if (q6core_lcl.core_handle_q) {
+		q6core_lcl.bus_bw_resp_received = 0;
+		rc = apr_send_pkt(q6core_lcl.core_handle_q, (uint32_t *)&hdr);
+		if (rc < 0) {
+			pr_err("%s: Get ADSP state APR packet send event %d\n",
+				__func__, rc);
+			goto bail;
+		}
 
-	rc = wait_event_timeout(q6core_lcl.bus_bw_req_wait,
-				(q6core_lcl.bus_bw_resp_received == 1),
-				msecs_to_jiffies(Q6_READY_TIMEOUT_MS));
-	if (rc > 0 && q6core_lcl.bus_bw_resp_received) {
-		/* ensure to read updated param by callback thread */
-		rmb();
-		ret = !!q6core_lcl.param;
+		rc = wait_event_timeout(q6core_lcl.bus_bw_req_wait,
+					(q6core_lcl.bus_bw_resp_received == 1),
+					msecs_to_jiffies(Q6_READY_TIMEOUT_MS));
+		if (rc > 0 && q6core_lcl.bus_bw_resp_received) {
+			/* ensure to read updated param by callback thread */
+			rmb();
+			ret = !!q6core_lcl.param;
+		}
 	}
 bail:
 	pr_debug("%s: leave, rc %d, adsp ready %d\n", __func__, rc, ret);
@@ -649,6 +550,56 @@ static int q6core_memory_unmap_regions(uint32_t mem_map_handle)
 		ret = -ETIME;
 		goto done;
 	}
+done:
+	return ret;
+}
+
+int q6core_add_remove_pool_pages(ion_phys_addr_t buf_add, uint32_t bufsz,
+			uint32_t mempool_id, bool add_pages)
+{
+	struct avs_mem_assign_region mem_pool;
+	int ret = 0, sz;
+
+	if (add_pages)
+		mem_pool.hdr.opcode = AVCS_CMD_ADD_POOL_PAGES;
+	else
+		mem_pool.hdr.opcode = AVCS_CMD_REMOVE_POOL_PAGES;
+
+	/* get payload length */
+	sz = sizeof(struct avs_mem_assign_region);
+	mem_pool.hdr.hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD,
+					APR_HDR_LEN(sizeof(struct apr_hdr)),
+					APR_PKT_VER);
+	mem_pool.hdr.src_port = 0;
+	mem_pool.hdr.dest_port = 0;
+	mem_pool.hdr.token = 0;
+	mem_pool.hdr.pkt_size = sz;
+	mem_pool.pool_id = mempool_id;
+	mem_pool.size = bufsz;
+	mem_pool.addr_lsw = lower_32_bits(buf_add);
+	mem_pool.addr_msw = msm_audio_populate_upper_32_bits(buf_add);
+	pr_debug("%s: sending memory map, size %d\n",
+		  __func__, bufsz);
+
+	q6core_lcl.bus_bw_resp_received = 0;
+	ret = apr_send_pkt(q6core_lcl.core_handle_q, (uint32_t *)&mem_pool);
+	if (ret < 0) {
+		pr_err("%s: library map region failed %d\n",
+			__func__, ret);
+		ret = -EINVAL;
+		goto done;
+	}
+
+	ret = wait_event_timeout(q6core_lcl.bus_bw_req_wait,
+				(q6core_lcl.bus_bw_resp_received == 1),
+				msecs_to_jiffies(TIMEOUT_MS));
+	if (!ret) {
+		pr_err("%s: timeout. waited for library memory map\n",
+			__func__);
+		ret = -ETIME;
+		goto done;
+	}
+	ret = 0;
 done:
 	return ret;
 }

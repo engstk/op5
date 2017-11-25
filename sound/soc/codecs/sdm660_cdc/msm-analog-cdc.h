@@ -144,6 +144,9 @@ struct sdm660_cdc_regulator {
 struct on_demand_supply {
 	struct regulator *supply;
 	atomic_t ref;
+	int min_uv;
+	int max_uv;
+	int optimum_ua;
 };
 
 struct wcd_imped_i_ref {
@@ -165,6 +168,7 @@ struct msm_dig_ctrl_data {
 
 struct msm_dig_ctrl_platform_data {
 	void *handle;
+	void (*set_compander_mode)(void *handle, int val);
 	void (*update_clkdiv)(void *handle, int val);
 	int (*get_cdc_version)(void *handle);
 	int (*register_notifier)(void *handle,

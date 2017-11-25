@@ -1536,7 +1536,6 @@ static void ath10k_core_restart(struct work_struct *work)
 	struct ath10k *ar = container_of(work, struct ath10k, restart_work);
 
 	set_bit(ATH10K_FLAG_CRASH_FLUSH, &ar->dev_flags);
-	ath10k_gen_set_base_mac_addr(ar, ar->base_mac_addr);
 
 	/* Place a barrier to make sure the compiler doesn't reorder
 	 * CRASH_FLUSH and calling other functions.
@@ -1551,6 +1550,7 @@ static void ath10k_core_restart(struct work_struct *work)
 	complete(&ar->offchan_tx_completed);
 	complete(&ar->install_key_done);
 	complete(&ar->vdev_setup_done);
+	complete(&ar->vdev_delete_done);
 	complete(&ar->thermal.wmi_sync);
 	complete(&ar->bss_survey_done);
 	wake_up(&ar->htt.empty_tx_wq);
@@ -1698,7 +1698,11 @@ static int ath10k_core_init_firmware_features(struct ath10k *ar)
 		ar->max_num_stations = TARGET_TLV_NUM_STATIONS;
 		ar->max_num_vdevs = TARGET_TLV_NUM_VDEVS;
 		ar->max_num_tdls_vdevs = TARGET_TLV_NUM_TDLS_VDEVS;
-		ar->htt.max_num_pending_tx = TARGET_TLV_NUM_MSDU_DESC;
+		if (QCA_REV_WCN3990(ar))
+			ar->htt.max_num_pending_tx =
+						TARGET_HL_1_0_NUM_MSDU_DESC;
+		else
+			ar->htt.max_num_pending_tx = TARGET_TLV_NUM_MSDU_DESC;
 		ar->wow.max_num_patterns = TARGET_TLV_NUM_WOW_PATTERNS;
 		ar->fw_stats_req_mask = WMI_STAT_PDEV | WMI_STAT_VDEV |
 			WMI_STAT_PEER;
@@ -1886,6 +1890,12 @@ int ath10k_core_start(struct ath10k *ar, enum ath10k_firmware_mode mode,
 		goto err_wmi_detach;
 	}
 
+	/* If firmware indicates Full Rx Reorder support it must be used in a
+	 * slightly different manner. Let HTT code know.
+	 */
+	ar->htt.rx_ring.in_ord_rx = !!(test_bit(WMI_SERVICE_RX_FULL_REORDER,
+						ar->wmi.svc_map));
+
 	status = ath10k_htt_rx_alloc(&ar->htt);
 	if (status) {
 		ath10k_err(ar, "failed to alloc htt rx: %d\n", status);
@@ -1915,6 +1925,12 @@ int ath10k_core_start(struct ath10k *ar, enum ath10k_firmware_mode mode,
 	status = ath10k_wmi_connect(ar);
 	if (status) {
 		ath10k_err(ar, "could not connect wmi: %d\n", status);
+		goto err_hif_stop;
+	}
+
+	status = ath10k_pktlog_connect(ar);
+	if (status) {
+		ath10k_err(ar, "could not connect pktlog: %d\n", status);
 		goto err_hif_stop;
 	}
 
@@ -1996,12 +2012,6 @@ int ath10k_core_start(struct ath10k *ar, enum ath10k_firmware_mode mode,
 			goto err_hif_stop;
 		}
 	}
-
-	/* If firmware indicates Full Rx Reorder support it must be used in a
-	 * slightly different manner. Let HTT code know.
-	 */
-	ar->htt.rx_ring.in_ord_rx = !!(test_bit(WMI_SERVICE_RX_FULL_REORDER,
-						ar->wmi.svc_map));
 
 	status = ath10k_htt_rx_ring_refill(ar);
 	if (status) {
@@ -2324,28 +2334,34 @@ struct ath10k *ath10k_core_create(size_t priv_size, struct device *dev,
 	case ATH10K_HW_QCA988X:
 	case ATH10K_HW_QCA9887:
 		ar->regs = &qca988x_regs;
+		ar->hw_ce_regs = &qcax_ce_regs;
 		ar->hw_values = &qca988x_values;
 		break;
 	case ATH10K_HW_QCA6174:
 	case ATH10K_HW_QCA9377:
 		ar->regs = &qca6174_regs;
+		ar->hw_ce_regs = &qcax_ce_regs;
 		ar->hw_values = &qca6174_values;
 		break;
 	case ATH10K_HW_QCA99X0:
 	case ATH10K_HW_QCA9984:
 		ar->regs = &qca99x0_regs;
+		ar->hw_ce_regs = &qcax_ce_regs;
 		ar->hw_values = &qca99x0_values;
 		break;
 	case ATH10K_HW_QCA9888:
 		ar->regs = &qca99x0_regs;
+		ar->hw_ce_regs = &qcax_ce_regs;
 		ar->hw_values = &qca9888_values;
 		break;
 	case ATH10K_HW_QCA4019:
 		ar->regs = &qca4019_regs;
+		ar->hw_ce_regs = &qcax_ce_regs;
 		ar->hw_values = &qca4019_values;
 		break;
 	case ATH10K_HW_WCN3990:
 		ar->regs = &wcn3990_regs;
+		ar->hw_ce_regs = &wcn3990_ce_regs;
 		ar->hw_values = &wcn3990_values;
 		/* WCN3990 chip set is non bmi based */
 		ar->is_bmi = false;
@@ -2368,8 +2384,10 @@ struct ath10k *ath10k_core_create(size_t priv_size, struct device *dev,
 
 	init_completion(&ar->install_key_done);
 	init_completion(&ar->vdev_setup_done);
+	init_completion(&ar->vdev_delete_done);
 	init_completion(&ar->thermal.wmi_sync);
 	init_completion(&ar->bss_survey_done);
+	init_completion(&ar->peer_delete_done);
 
 	INIT_DELAYED_WORK(&ar->scan.timeout, ath10k_scan_timeout_work);
 
@@ -2384,6 +2402,7 @@ struct ath10k *ath10k_core_create(size_t priv_size, struct device *dev,
 	mutex_init(&ar->conf_mutex);
 	spin_lock_init(&ar->data_lock);
 	spin_lock_init(&ar->txqs_lock);
+	spin_lock_init(&ar->datapath_rx_stat_lock);
 
 	INIT_LIST_HEAD(&ar->txqs);
 	INIT_LIST_HEAD(&ar->peers);

@@ -111,11 +111,11 @@ static int stmvl53l0_get_dt_data(struct device *dev, struct cci_data *data)
 				vl53l0_errmsg("failed %d\n", __LINE__);
 				return rc;
 			}
+			vl53l0_dbgmsg("vreg-name: %s min_volt: %d max_volt: %d",
+					vreg_cfg->cam_vreg->reg_name,
+					vreg_cfg->cam_vreg->min_voltage,
+					vreg_cfg->cam_vreg->max_voltage);
 		}
-		vl53l0_dbgmsg("vreg-name: %s min_volt: %d max_volt: %d",
-			      vreg_cfg->cam_vreg->reg_name,
-			      vreg_cfg->cam_vreg->min_voltage,
-			      vreg_cfg->cam_vreg->max_voltage);
 
 		rc = msm_sensor_driver_get_gpio_data(&(data->gconf), of_node);
 		if ((rc < 0) || (data->gconf == NULL)) {
@@ -187,8 +187,15 @@ static const struct v4l2_subdev_internal_ops msm_tof_internal_ops = {
 static long msm_tof_subdev_ioctl(struct v4l2_subdev *sd,
 				 unsigned int cmd, void *arg)
 {
-	vl53l0_dbgmsg("Subdev_ioctl not handled\n");
-	return 0;
+	struct cci_data *cci_object = NULL;
+	int32_t rc = 0;
+
+	cci_object = v4l2_get_subdevdata(sd);
+	if (cmd == MSM_SD_SHUTDOWN)
+		cci_object->power_up = 0;
+
+	vl53l0_dbgmsg("cmd = %d power_up = %d", cmd, cci_object->power_up);
+	return rc;
 }
 
 static int32_t msm_tof_power(struct v4l2_subdev *sd, int on)
@@ -248,6 +255,7 @@ static int stmvl53l0_cci_init(struct cci_data *data)
 	cci_client->retries = 3;
 	cci_client->id_map = 0;
 	cci_client->cci_i2c_master = data->cci_master;
+	cci_client->i2c_freq_mode = I2C_FAST_MODE;
 	rc = data->client->i2c_func_tbl->i2c_util(data->client, MSM_CCI_INIT);
 	if (rc < 0) {
 		vl53l0_errmsg("%d: CCI Init failed\n", __LINE__);
@@ -281,6 +289,11 @@ static int32_t stmvl53l0_platform_probe(struct platform_device *pdev)
 	if (vl53l0_data) {
 		vl53l0_data->client_object =
 		    kzalloc(sizeof(struct cci_data), GFP_KERNEL);
+		if (!vl53l0_data->client_object) {
+			rc = -ENOMEM;
+			kfree(vl53l0_data);
+			return rc;
+		}
 		cci_object = (struct cci_data *)vl53l0_data->client_object;
 	}
 	cci_object->client =
@@ -295,8 +308,20 @@ static int32_t stmvl53l0_platform_probe(struct platform_device *pdev)
 	rc = stmvl53l0_get_dt_data(&pdev->dev, cci_object);
 	if (rc < 0) {
 		vl53l0_errmsg("%d, failed rc %d\n", __LINE__, rc);
+		kfree(vl53l0_data->client_object);
+		kfree(vl53l0_data);
 		return rc;
 	}
+	vl53l0_data->irq_gpio = of_get_named_gpio_flags(pdev->dev.of_node,
+		"stm,irq-gpio", 0, NULL);
+
+	if (!gpio_is_valid(vl53l0_data->irq_gpio)) {
+		vl53l0_errmsg("%d failed get irq gpio", __LINE__);
+		kfree(vl53l0_data->client_object);
+		kfree(vl53l0_data);
+		return -EINVAL;
+	}
+
 	cci_object->subdev_id = pdev->id;
 
 	/* Set device type as platform device */
@@ -360,6 +385,11 @@ int stmvl53l0_power_up_cci(void *cci_object, unsigned int *preset_flag)
 	vl53l0_dbgmsg("Enter");
 
 	/* need to init cci first */
+	if (!data) {
+		pr_err("%s:%d failed\n", __func__, __LINE__);
+		return -EINVAL;
+	}
+
 	ret = stmvl53l0_cci_init(data);
 	if (ret) {
 		vl53l0_errmsg("stmvl53l0_cci_init failed %d\n", __LINE__);
@@ -409,7 +439,7 @@ int stmvl53l0_power_up_cci(void *cci_object, unsigned int *preset_flag)
 	}
 
 	/* actual power up */
-	if (data && data->device_type == MSM_CAMERA_PLATFORM_DEVICE) {
+	if (data->device_type == MSM_CAMERA_PLATFORM_DEVICE) {
 		ret = stmvl53l0_vreg_control(data, 1);
 		if (ret < 0) {
 			vl53l0_errmsg("stmvl53l0_vreg_control failed %d\n",
@@ -418,6 +448,7 @@ int stmvl53l0_power_up_cci(void *cci_object, unsigned int *preset_flag)
 		}
 	}
 	data->power_up = 1;
+	usleep_range(3000, 3500);
 	*preset_flag = 1;
 	vl53l0_dbgmsg("End\n");
 
@@ -477,6 +508,13 @@ int stmvl53l0_power_down_cci(void *cci_object)
 	data->power_up = 0;
 	vl53l0_dbgmsg("End\n");
 	return ret;
+}
+
+int stmvl53l0_cci_power_status(void *cci_object)
+{
+	struct cci_data *data = (struct cci_data *)cci_object;
+
+	return data->power_up;
 }
 
 int stmvl53l0_init_cci(void)

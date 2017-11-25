@@ -171,11 +171,16 @@ enum tpm_chip_flags {
 };
 
 struct tpm_chip {
-	struct device *pdev;	/* Device stuff */
 	struct device dev;
 	struct cdev cdev;
 
+	/* A driver callback under ops cannot be run unless ops_sem is held
+	 * (sometimes implicitly, eg for the sysfs code). ops becomes null
+	 * when the driver is unregistered, see tpm_try_get_ops.
+	 */
+	struct rw_semaphore ops_sem;
 	const struct tpm_class_ops *ops;
+
 	unsigned int flags;
 
 	int dev_num;		/* /dev/tpm# */
@@ -200,11 +205,6 @@ struct tpm_chip {
 };
 
 #define to_tpm_chip(d) container_of(d, struct tpm_chip, dev)
-
-static inline void tpm_chip_put(struct tpm_chip *chip)
-{
-	module_put(chip->pdev->driver->owner);
-}
 
 static inline int tpm_read_index(int base, int index)
 {
@@ -498,11 +498,15 @@ extern struct class *tpm_class;
 extern dev_t tpm_devt;
 extern const struct file_operations tpm_fops;
 
+enum tpm_transmit_flags {
+	TPM_TRANSMIT_UNLOCKED	= BIT(0),
+};
+
+ssize_t tpm_transmit(struct tpm_chip *chip, const u8 *buf, size_t bufsiz,
+		     unsigned int flags);
+ssize_t tpm_transmit_cmd(struct tpm_chip *chip, const void *cmd, int len,
+			 unsigned int flags, const char *desc);
 ssize_t	tpm_getcap(struct device *, __be32, cap_t *, const char *);
-ssize_t tpm_transmit(struct tpm_chip *chip, const char *buf,
-		     size_t bufsiz);
-ssize_t tpm_transmit_cmd(struct tpm_chip *chip, void *cmd, int len,
-			 const char *desc);
 extern int tpm_get_timeouts(struct tpm_chip *);
 extern void tpm_gen_interrupt(struct tpm_chip *);
 extern int tpm_do_selftest(struct tpm_chip *);
@@ -513,6 +517,9 @@ extern int wait_for_tpm_stat(struct tpm_chip *, u8, unsigned long,
 			     wait_queue_head_t *, bool);
 
 struct tpm_chip *tpm_chip_find_get(int chip_num);
+__must_check int tpm_try_get_ops(struct tpm_chip *chip);
+void tpm_put_ops(struct tpm_chip *chip);
+
 extern struct tpm_chip *tpmm_chip_alloc(struct device *dev,
 				       const struct tpm_class_ops *ops);
 extern int tpm_chip_register(struct tpm_chip *chip);

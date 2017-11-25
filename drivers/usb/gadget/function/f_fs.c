@@ -71,6 +71,7 @@ __ffs_data_got_strings(struct ffs_data *ffs, char *data, size_t len);
 /* The function structure ***************************************************/
 
 struct ffs_ep;
+static bool first_read_done;
 
 struct ffs_function {
 	struct usb_configuration	*conf;
@@ -756,6 +757,7 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 {
 	struct ffs_epfile *epfile = file->private_data;
 	struct ffs_ep *ep;
+	struct ffs_data *ffs = epfile->ffs;
 	char *data = NULL;
 	ssize_t ret, data_len = -EINVAL;
 	int halt;
@@ -764,6 +766,7 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 		atomic_read(&epfile->error), io_data->read ? "READ" : "WRITE");
 
 	smp_mb__before_atomic();
+retry:
 	if (atomic_read(&epfile->error))
 		return -ENODEV;
 
@@ -968,10 +971,36 @@ static ssize_t ffs_epfile_io(struct file *file, struct ffs_io_data *io_data)
 				 * disabled (disconnect) or changed
 				 * (composition switch) ?
 				 */
-				if (epfile->ep == ep)
+				if (epfile->ep == ep) {
 					ret = ep->status;
-				else
+					if (ret >= 0)
+						first_read_done = true;
+				} else {
 					ret = -ENODEV;
+				}
+
+				/* do wait again if func eps are not enabled */
+				if (io_data->read && !first_read_done
+							&& ret < 0) {
+					unsigned short count = ffs->eps_count;
+
+					pr_debug("%s: waiting for the online state\n",
+						 __func__);
+					ret = 0;
+					kfree(data);
+					data = NULL;
+					data_len = -EINVAL;
+					spin_unlock_irq(&epfile->ffs->eps_lock);
+					mutex_unlock(&epfile->mutex);
+					epfile = ffs->epfiles;
+					do {
+						atomic_set(&epfile->error, 0);
+						++epfile;
+					} while (--count);
+					epfile = file->private_data;
+					goto retry;
+				}
+
 				spin_unlock_irq(&epfile->ffs->eps_lock);
 				if (io_data->read && ret > 0) {
 
@@ -1038,6 +1067,7 @@ ffs_epfile_open(struct inode *inode, struct file *file)
 
 	smp_mb__before_atomic();
 	atomic_set(&epfile->error, 0);
+	first_read_done = false;
 
 	ffs_log("exit:state %d setup_state %d flag %lu", epfile->ffs->state,
 		epfile->ffs->setup_state, epfile->ffs->flags);
@@ -1159,7 +1189,7 @@ static ssize_t ffs_epfile_read_iter(struct kiocb *kiocb, struct iov_iter *to)
 		*to = p->data;
 	}
 
-	ffs_log("enter");
+	ffs_log("exit");
 
 	return res;
 }
@@ -1985,6 +2015,12 @@ static int ffs_func_eps_enable(struct ffs_function *func)
 			break;
 		}
 
+		/*
+		 * userspace setting maxburst > 1 results more fifo
+		 * allocation than without maxburst. Change maxburst to 1
+		 * only to allocate fifo size of max packet size.
+		 */
+		ep->ep->maxburst = 1;
 		ret = usb_ep_enable(ep->ep);
 		if (likely(!ret)) {
 			epfile->ep = ep;
@@ -2437,6 +2473,8 @@ static int __ffs_data_do_os_desc(enum ffs_os_desc_type type,
 		if (len < sizeof(*d) || h->interface >= ffs->interfaces_count)
 			return -EINVAL;
 		length = le32_to_cpu(d->dwSize);
+		if (len < length)
+			return -EINVAL;
 		type = le32_to_cpu(d->dwPropertyDataType);
 		if (type < USB_EXT_PROP_UNICODE ||
 		    type > USB_EXT_PROP_UNICODE_MULTI) {
@@ -2445,6 +2483,11 @@ static int __ffs_data_do_os_desc(enum ffs_os_desc_type type,
 			return -EINVAL;
 		}
 		pnl = le16_to_cpu(d->wPropertyNameLength);
+		if (length < 14 + pnl) {
+			pr_vdebug("invalid os descriptor length: %d pnl:%d (descriptor %d)\n",
+				  length, pnl, type);
+			return -EINVAL;
+		}
 		pdl = le32_to_cpu(*(u32 *)((u8 *)data + 10 + pnl));
 		if (length != 14 + pnl + pdl) {
 			pr_vdebug("invalid os descriptor length: %d pnl:%d pdl:%d (descriptor %d)\n",
@@ -2534,6 +2577,9 @@ static int __ffs_data_got_descs(struct ffs_data *ffs,
 		}
 	}
 	if (flags & (1 << i)) {
+		if (len < 4) {
+			goto error;
+		}
 		os_descs_count = get_unaligned_le32(data);
 		data += 4;
 		len -= 4;
@@ -2611,7 +2657,8 @@ static int __ffs_data_got_strings(struct ffs_data *ffs,
 
 	ffs_log("enter: len %zu", len);
 
-	if (unlikely(get_unaligned_le32(data) != FUNCTIONFS_STRINGS_MAGIC ||
+	if (unlikely(len < 16 ||
+		     get_unaligned_le32(data) != FUNCTIONFS_STRINGS_MAGIC ||
 		     get_unaligned_le32(data + 4) != len))
 		goto error;
 	str_count  = get_unaligned_le32(data + 8);
@@ -3343,6 +3390,8 @@ static int ffs_func_set_alt(struct usb_function *f,
 	if (ffs->func) {
 		ffs_func_eps_disable(ffs->func);
 		ffs->func = NULL;
+		/* matching put to allow LPM on disconnect */
+		usb_gadget_autopm_put_async(ffs->gadget);
 	}
 
 	if (ffs->state == FFS_DEACTIVATED) {
@@ -3376,14 +3425,9 @@ static int ffs_func_set_alt(struct usb_function *f,
 
 static void ffs_func_disable(struct usb_function *f)
 {
-	struct ffs_function *func = ffs_func_from_usb(f);
-	struct ffs_data *ffs = func->ffs;
-
 	ffs_log("enter");
 
 	ffs_func_set_alt(f, 0, (unsigned)-1);
-	/* matching put to allow LPM on disconnect */
-	usb_gadget_autopm_put_async(ffs->gadget);
 
 	ffs_log("exit");
 }

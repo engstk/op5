@@ -401,6 +401,7 @@ int mmc_add_card(struct mmc_card *card)
 		return ret;
 
 	mmc_card_set_present(card);
+	device_enable_async_suspend(&card->dev);
 
 	return 0;
 }
@@ -428,7 +429,6 @@ void mmc_remove_card(struct mmc_card *card)
 	}
 
 	kfree(card->wr_pack_stats.packing_events);
-	kfree(card->cached_ext_csd);
 
 	put_device(&card->dev);
 }

@@ -46,6 +46,7 @@
 #define SMEM_IMAGE_VERSION_OEM_OFFSET 95
 #define SMEM_IMAGE_VERSION_PARTITION_APPS 10
 
+static DECLARE_RWSEM(current_image_rwsem);
 enum {
 	HW_PLATFORM_UNKNOWN = 0,
 	HW_PLATFORM_SURF    = 1,
@@ -64,6 +65,7 @@ enum {
 	HW_PLATFORM_RCM	= 21,
 	HW_PLATFORM_STP = 23,
 	HW_PLATFORM_SBC = 24,
+	HW_PLATFORM_ADP = 25,
 	HW_PLATFORM_INVALID
 };
 
@@ -84,6 +86,7 @@ const char *hw_platform[] = {
 	[HW_PLATFORM_DTV] = "DTV",
 	[HW_PLATFORM_STP] = "STP",
 	[HW_PLATFORM_SBC] = "SBC",
+	[HW_PLATFORM_ADP] = "ADP",
 };
 
 enum {
@@ -107,6 +110,22 @@ const char *qrd_hw_platform_subtype[] = {
 	[PLATFORM_SUBTYPE_SKUAB] = "SKUAB",
 	[PLATFORM_SUBTYPE_SKUG] = "SKUG",
 	[PLATFORM_SUBTYPE_QRD_INVALID] = "INVALID",
+};
+
+enum {
+	PLATFORM_SUBTYPE_MOJAVE_V1 = 0x0,
+	PLATFORM_SUBTYPE_MMX = 0x1,
+	PLATFORM_SUBTYPE_MOJAVE_FULL_V2 = 0x2,
+	PLATFORM_SUBTYPE_MOJAVE_BARE_V2 = 0x3,
+	PLATFORM_SUBTYPE_ADP_INVALID,
+};
+
+const char *adp_hw_platform_subtype[] = {
+	[PLATFORM_SUBTYPE_MOJAVE_V1] = "MOJAVE_V1",
+	[PLATFORM_SUBTYPE_MMX] = "MMX",
+	[PLATFORM_SUBTYPE_MOJAVE_FULL_V2] = "_MOJAVE_V2_FULL",
+	[PLATFORM_SUBTYPE_MOJAVE_BARE_V2] = "_MOJAVE_V2_BARE",
+	[PLATFORM_SUBTYPE_ADP_INVALID] = "INVALID",
 };
 
 enum {
@@ -513,11 +532,13 @@ static struct msm_soc_info cpu_of_id[] = {
 
 	/* 8996 IDs */
 	[246] = {MSM_CPU_8996, "MSM8996"},
-	[310] = {MSM_CPU_8996, "MSM8996"},
-	[311] = {MSM_CPU_8996, "APQ8096"},
 	[291] = {MSM_CPU_8996, "APQ8096"},
 	[305] = {MSM_CPU_8996, "MSM8996pro"},
+	[310] = {MSM_CPU_8996, "MSM8996"},
+	[311] = {MSM_CPU_8996, "APQ8096"},
 	[312] = {MSM_CPU_8996, "APQ8096pro"},
+	[315] = {MSM_CPU_8996, "MSM8996pro"},
+	[316] = {MSM_CPU_8996, "APQ8096pro"},
 
 	/* 8976 ID */
 	[266] = {MSM_CPU_8976, "MSM8976"},
@@ -530,7 +551,7 @@ static struct msm_soc_info cpu_of_id[] = {
 
 	/* Cobalt IDs */
 	[292] = {MSM_CPU_8998, "MSM8998"},
-	[319] = {MSM_CPU_8998, "APQ8998"},
+	[319] = {MSM_CPU_8998, "APQ8098"},
 
 	/* Hamster ID */
 	[306] = {MSM_CPU_HAMSTER, "MSMHAMSTER"},
@@ -544,6 +565,10 @@ static struct msm_soc_info cpu_of_id[] = {
 	/* 630 ID */
 	[318] = {MSM_CPU_630, "SDM630"},
 	[327] = {MSM_CPU_630, "SDA630"},
+
+	/* 636 ID */
+	[345] = {MSM_CPU_636, "SDM636"},
+	[346] = {MSM_CPU_636, "SDA636"},
 
 	/* Uninitialized IDs are not known to run Linux.
 	   MSM_CPU_UNKNOWN is set to 0 to ensure these IDs are
@@ -755,8 +780,10 @@ msm_get_build_id(struct device *dev,
 		   struct device_attribute *attr,
 		   char *buf)
 {
-	return snprintf(buf, PAGE_SIZE, "%-.32s\n",
-			socinfo_get_build_id());
+	if (socinfo_get_build_id())
+		return snprintf(buf, PAGE_SIZE, "%-.32s\n",
+				socinfo_get_build_id());
+	return 0;
 }
 
 static ssize_t
@@ -803,6 +830,14 @@ msm_get_platform_subtype(struct device *dev,
 		}
 		return snprintf(buf, PAGE_SIZE, "%-.32s\n",
 					qrd_hw_platform_subtype[hw_subtype]);
+	}
+	if (socinfo_get_platform_type() == HW_PLATFORM_ADP) {
+		if (hw_subtype >= PLATFORM_SUBTYPE_ADP_INVALID) {
+			pr_err("Invalid hardware platform sub type for adp found\n");
+			hw_subtype = PLATFORM_SUBTYPE_ADP_INVALID;
+		}
+		return snprintf(buf, PAGE_SIZE, "%-.32s\n",
+					adp_hw_platform_subtype[hw_subtype]);
 	} else {
 		if (hw_subtype >= PLATFORM_SUBTYPE_INVALID) {
 			pr_err("Invalid hardware platform subtype\n");
@@ -899,7 +934,9 @@ msm_get_image_version(struct device *dev,
 		pr_err("Failed to get image version base address");
 		return snprintf(buf, SMEM_IMAGE_VERSION_NAME_SIZE, "Unknown");
 	}
+	down_read(&current_image_rwsem);
 	string_address += current_image * SMEM_IMAGE_VERSION_SINGLE_BLOCK_SIZE;
+	up_read(&current_image_rwsem);
 	return snprintf(buf, SMEM_IMAGE_VERSION_NAME_SIZE, "%-.75s\n",
 			string_address);
 }
@@ -912,14 +949,19 @@ msm_set_image_version(struct device *dev,
 {
 	char *store_address;
 
-	if (current_image != SMEM_IMAGE_VERSION_PARTITION_APPS)
+	down_read(&current_image_rwsem);
+	if (current_image != SMEM_IMAGE_VERSION_PARTITION_APPS) {
+		up_read(&current_image_rwsem);
 		return count;
+	}
 	store_address = socinfo_get_image_version_base_address();
 	if (IS_ERR_OR_NULL(store_address)) {
 		pr_err("Failed to get image version base address");
+		up_read(&current_image_rwsem);
 		return count;
 	}
 	store_address += current_image * SMEM_IMAGE_VERSION_SINGLE_BLOCK_SIZE;
+	up_read(&current_image_rwsem);
 	snprintf(store_address, SMEM_IMAGE_VERSION_NAME_SIZE, "%-.75s", buf);
 	return count;
 }
@@ -937,7 +979,9 @@ msm_get_image_variant(struct device *dev,
 		return snprintf(buf, SMEM_IMAGE_VERSION_VARIANT_SIZE,
 		"Unknown");
 	}
+	down_read(&current_image_rwsem);
 	string_address += current_image * SMEM_IMAGE_VERSION_SINGLE_BLOCK_SIZE;
+	up_read(&current_image_rwsem);
 	string_address += SMEM_IMAGE_VERSION_VARIANT_OFFSET;
 	return snprintf(buf, SMEM_IMAGE_VERSION_VARIANT_SIZE, "%-.20s\n",
 			string_address);
@@ -951,14 +995,19 @@ msm_set_image_variant(struct device *dev,
 {
 	char *store_address;
 
-	if (current_image != SMEM_IMAGE_VERSION_PARTITION_APPS)
+	down_read(&current_image_rwsem);
+	if (current_image != SMEM_IMAGE_VERSION_PARTITION_APPS) {
+		up_read(&current_image_rwsem);
 		return count;
+	}
 	store_address = socinfo_get_image_version_base_address();
 	if (IS_ERR_OR_NULL(store_address)) {
 		pr_err("Failed to get image version base address");
+		up_read(&current_image_rwsem);
 		return count;
 	}
 	store_address += current_image * SMEM_IMAGE_VERSION_SINGLE_BLOCK_SIZE;
+	up_read(&current_image_rwsem);
 	store_address += SMEM_IMAGE_VERSION_VARIANT_OFFSET;
 	snprintf(store_address, SMEM_IMAGE_VERSION_VARIANT_SIZE, "%-.20s", buf);
 	return count;
@@ -976,7 +1025,9 @@ msm_get_image_crm_version(struct device *dev,
 		pr_err("Failed to get image version base address");
 		return snprintf(buf, SMEM_IMAGE_VERSION_OEM_SIZE, "Unknown");
 	}
+	down_read(&current_image_rwsem);
 	string_address += current_image * SMEM_IMAGE_VERSION_SINGLE_BLOCK_SIZE;
+	up_read(&current_image_rwsem);
 	string_address += SMEM_IMAGE_VERSION_OEM_OFFSET;
 	return snprintf(buf, SMEM_IMAGE_VERSION_OEM_SIZE, "%-.33s\n",
 			string_address);
@@ -990,14 +1041,19 @@ msm_set_image_crm_version(struct device *dev,
 {
 	char *store_address;
 
-	if (current_image != SMEM_IMAGE_VERSION_PARTITION_APPS)
+	down_read(&current_image_rwsem);
+	if (current_image != SMEM_IMAGE_VERSION_PARTITION_APPS) {
+		up_read(&current_image_rwsem);
 		return count;
+	}
 	store_address = socinfo_get_image_version_base_address();
 	if (IS_ERR_OR_NULL(store_address)) {
 		pr_err("Failed to get image version base address");
+		up_read(&current_image_rwsem);
 		return count;
 	}
 	store_address += current_image * SMEM_IMAGE_VERSION_SINGLE_BLOCK_SIZE;
+	up_read(&current_image_rwsem);
 	store_address += SMEM_IMAGE_VERSION_OEM_OFFSET;
 	snprintf(store_address, SMEM_IMAGE_VERSION_OEM_SIZE, "%-.33s", buf);
 	return count;
@@ -1008,8 +1064,14 @@ msm_get_image_number(struct device *dev,
 			struct device_attribute *attr,
 			char *buf)
 {
-	return snprintf(buf, PAGE_SIZE, "%d\n",
+	int ret;
+
+	down_read(&current_image_rwsem);
+	ret = snprintf(buf, PAGE_SIZE, "%d\n",
 			current_image);
+	up_read(&current_image_rwsem);
+	return ret;
+
 }
 
 static ssize_t
@@ -1021,10 +1083,12 @@ msm_select_image(struct device *dev, struct device_attribute *attr,
 	ret = kstrtoint(buf, 10, &digit);
 	if (ret)
 		return ret;
+	down_write(&current_image_rwsem);
 	if (0 <= digit && digit < SMEM_IMAGE_VERSION_BLOCKS_COUNT)
 		current_image = digit;
 	else
 		current_image = 0;
+	up_write(&current_image_rwsem);
 	return count;
 }
 
@@ -1195,10 +1259,6 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 246;
 		strlcpy(dummy_socinfo.build_id, "msm8996 - ",
 			sizeof(dummy_socinfo.build_id));
-	} else if (early_machine_is_msm8996_auto()) {
-		dummy_socinfo.id = 310;
-		strlcpy(dummy_socinfo.build_id, "msm8996-auto - ",
-		sizeof(dummy_socinfo.build_id));
 	} else if (early_machine_is_msm8929()) {
 		dummy_socinfo.id = 268;
 		strlcpy(dummy_socinfo.build_id, "msm8929 - ",
@@ -1235,9 +1295,17 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 327;
 		strlcpy(dummy_socinfo.build_id, "sda630 - ",
 			sizeof(dummy_socinfo.build_id));
-	} else if (early_machine_is_apq8998()) {
+	} else if (early_machine_is_sdm636()) {
+		dummy_socinfo.id = 345;
+		strlcpy(dummy_socinfo.build_id, "sdm636 - ",
+			sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_sda636()) {
+		dummy_socinfo.id = 346;
+		strlcpy(dummy_socinfo.build_id, "sda636 - ",
+			sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_apq8098()) {
 		dummy_socinfo.id = 319;
-		strlcpy(dummy_socinfo.build_id, "apq8998 - ",
+		strlcpy(dummy_socinfo.build_id, "apq8098 - ",
 			sizeof(dummy_socinfo.build_id));
 	}
 

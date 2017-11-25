@@ -208,6 +208,17 @@
 #define PM660_V1P1_REV3		0x01
 #define PM660_V1P1_REV4		0x01
 
+/* PM660L REV_ID */
+#define PM660L_V1P1_REV1	0x00
+#define PM660L_V1P1_REV2	0x00
+#define PM660L_V1P1_REV3	0x01
+#define PM660L_V1P1_REV4	0x01
+
+#define PM660L_V2P0_REV1	0x00
+#define PM660L_V2P0_REV2	0x00
+#define PM660L_V2P0_REV3	0x00
+#define PM660L_V2P0_REV4	0x02
+
 /* PMI8998 FAB_ID */
 #define PMI8998_FAB_ID_SMIC	0x11
 #define PMI8998_FAB_ID_GF	0x30
@@ -229,6 +240,9 @@
 /* SMB1381 */
 #define SMB1381_SUBTYPE		0x17
 
+/* SMB1355 */
+#define SMB1355_SUBTYPE		0x1C
+
 struct pmic_revid_data {
 	u8		rev1;
 	u8		rev2;
@@ -238,6 +252,7 @@ struct pmic_revid_data {
 	u8		pmic_subtype;
 	const char	*pmic_name;
 	int		fab_id;
+	int		tp_rev;
 };
 
 #ifdef CONFIG_QPNP_REVID

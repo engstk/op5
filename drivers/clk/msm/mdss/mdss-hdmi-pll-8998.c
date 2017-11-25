@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -30,8 +30,8 @@
 #define _R(x, y)    MDSS_PLL_REG_R(x, y)
 
 /* CONSTANTS */
-#define HDMI_VERSION_8998_3_3        1
-#define HDMI_VERSION_8998_1_8        2
+#define HDMI_VERSION_8998_3_3		1
+#define HDMI_VERSION_8998_1_8		2
 
 /* PLL REGISTERS */
 #define FREQ_UPDATE                  (0x008)

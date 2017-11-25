@@ -516,7 +516,7 @@ struct sdhci_host {
  * Some controllers may use PIO mode to workaround HW issues in ADMA for
  * eMMC tuning commands.
  */
-#define SDHCI_QUIRK2_USE_PIO_FOR_EMMC_TUNING (1 << 23)
+#define SDHCI_QUIRK2_USE_PIO_FOR_EMMC_TUNING (1 << 29)
 
 
 	int irq;		/* Device IRQ */
@@ -564,6 +564,7 @@ struct sdhci_host {
 	bool runtime_suspended;	/* Host is runtime suspended */
 	bool bus_on;		/* Bus power prevents runtime suspend */
 	bool preset_enabled;	/* Preset is enabled */
+	bool cdr_support;
 
 	struct mmc_request *mrq;	/* Current request */
 	struct mmc_command *cmd;	/* Current command */

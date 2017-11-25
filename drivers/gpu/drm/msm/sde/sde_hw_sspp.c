@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -755,14 +755,17 @@ static void sde_hw_sspp_setup_csc(struct sde_hw_pipe *ctx,
 		struct sde_csc_cfg *data)
 {
 	u32 idx;
+	bool csc10 = false;
 
 	if (_sspp_subblk_offset(ctx, SDE_SSPP_CSC, &idx) || !data)
 		return;
 
-	if (test_bit(SDE_SSPP_CSC_10BIT, &ctx->cap->features))
+	if (test_bit(SDE_SSPP_CSC_10BIT, &ctx->cap->features)) {
 		idx += CSC_10BIT_OFFSET;
+		csc10 = true;
+	}
 
-	sde_hw_csc_setup(&ctx->hw, idx, data);
+	sde_hw_csc_setup(&ctx->hw, idx, data, csc10);
 }
 
 static void sde_hw_sspp_setup_sharpening(struct sde_hw_pipe *ctx,
@@ -900,6 +903,7 @@ static struct sde_sspp_cfg *_sspp_offset(enum sde_sspp sspp,
 			if (sspp == catalog->sspp[i].id) {
 				b->base_off = addr;
 				b->blk_off = catalog->sspp[i].base;
+				b->length = catalog->sspp[i].len;
 				b->hwversion = catalog->hwversion;
 				b->log_mask = SDE_DBG_MASK_SSPP;
 				return &catalog->sspp[i];
@@ -914,26 +918,26 @@ struct sde_hw_pipe *sde_hw_sspp_init(enum sde_sspp idx,
 			void __iomem *addr,
 			struct sde_mdss_cfg *catalog)
 {
-	struct sde_hw_pipe *ctx;
+	struct sde_hw_pipe *hw_pipe;
 	struct sde_sspp_cfg *cfg;
 
-	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
-	if (!ctx)
+	hw_pipe = kzalloc(sizeof(*hw_pipe), GFP_KERNEL);
+	if (!hw_pipe)
 		return ERR_PTR(-ENOMEM);
 
-	cfg = _sspp_offset(idx, addr, catalog, &ctx->hw);
+	cfg = _sspp_offset(idx, addr, catalog, &hw_pipe->hw);
 	if (IS_ERR_OR_NULL(cfg)) {
-		kfree(ctx);
+		kfree(hw_pipe);
 		return ERR_PTR(-EINVAL);
 	}
 
 	/* Assign ops */
-	ctx->idx = idx;
-	ctx->cap = cfg;
-	_setup_layer_ops(ctx, ctx->cap->features);
-	ctx->highest_bank_bit = catalog->mdp[0].highest_bank_bit;
+	hw_pipe->idx = idx;
+	hw_pipe->cap = cfg;
+	_setup_layer_ops(hw_pipe, hw_pipe->cap->features);
+	hw_pipe->highest_bank_bit = catalog->mdp[0].highest_bank_bit;
 
-	return ctx;
+	return hw_pipe;
 }
 
 void sde_hw_sspp_destroy(struct sde_hw_pipe *ctx)

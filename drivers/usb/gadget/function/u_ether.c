@@ -66,7 +66,7 @@ struct eth_dev {
 
 	spinlock_t		req_lock;	/* guard {rx,tx}_reqs */
 	struct list_head	tx_reqs, rx_reqs;
-	unsigned		tx_qlen;
+	atomic_t		tx_qlen;
 /* Minimum number of TX USB request queued to UDC */
 #define TX_REQ_THRESHOLD	5
 	int			no_tx_req_used;
@@ -568,6 +568,7 @@ static void tx_complete(struct usb_ep *ep, struct usb_request *req)
 		dev_kfree_skb_any(skb);
 	}
 
+	atomic_dec(&dev->tx_qlen);
 	if (netif_carrier_ok(dev->net))
 		netif_wake_queue(dev->net);
 }
@@ -741,19 +742,13 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 
 	req->length = length;
 
-	/* throttle highspeed IRQ rate back slightly */
-	if (gadget_is_dualspeed(dev->gadget) &&
-			 (dev->gadget->speed == USB_SPEED_HIGH)) {
-		dev->tx_qlen++;
-		if (dev->tx_qlen == (dev->qmult/2)) {
-			req->no_interrupt = 0;
-			dev->tx_qlen = 0;
-		} else {
-			req->no_interrupt = 1;
-		}
-	} else {
-		req->no_interrupt = 0;
-	}
+	/* throttle high/super speed IRQ rate back slightly */
+	if (gadget_is_dualspeed(dev->gadget))
+		req->no_interrupt = (((dev->gadget->speed == USB_SPEED_HIGH ||
+				       dev->gadget->speed == USB_SPEED_SUPER)) &&
+					!list_empty(&dev->tx_reqs))
+			? ((atomic_read(&dev->tx_qlen) % dev->qmult) != 0)
+			: 0;
 
 	retval = usb_ep_queue(in, req, GFP_ATOMIC);
 	switch (retval) {
@@ -762,6 +757,7 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 		break;
 	case 0:
 		net->trans_start = jiffies;
+		atomic_inc(&dev->tx_qlen);
 	}
 
 	if (retval) {
@@ -790,7 +786,7 @@ static void eth_start(struct eth_dev *dev, gfp_t gfp_flags)
 	rx_fill(dev, gfp_flags);
 
 	/* and open the tx floodgates */
-	dev->tx_qlen = 0;
+	atomic_set(&dev->tx_qlen, 0);
 	netif_wake_queue(dev->net);
 }
 
@@ -1077,6 +1073,9 @@ int gether_set_dev_addr(struct net_device *net, const char *dev_addr)
 	struct eth_dev *dev;
 	u8 new_addr[ETH_ALEN];
 
+	if (!net)
+		return -ENODEV;
+
 	dev = netdev_priv(net);
 	if (get_ether_addr(dev_addr, new_addr))
 		return -EINVAL;
@@ -1089,6 +1088,9 @@ int gether_get_dev_addr(struct net_device *net, char *dev_addr, int len)
 {
 	struct eth_dev *dev;
 
+	if (!net)
+		return -ENODEV;
+
 	dev = netdev_priv(net);
 	return get_ether_addr_str(dev->dev_mac, dev_addr, len);
 }
@@ -1098,6 +1100,9 @@ int gether_set_host_addr(struct net_device *net, const char *host_addr)
 {
 	struct eth_dev *dev;
 	u8 new_addr[ETH_ALEN];
+
+	if (!net)
+		return -ENODEV;
 
 	dev = netdev_priv(net);
 	if (get_ether_addr(host_addr, new_addr))
@@ -1110,6 +1115,9 @@ EXPORT_SYMBOL_GPL(gether_set_host_addr);
 int gether_get_host_addr(struct net_device *net, char *host_addr, int len)
 {
 	struct eth_dev *dev;
+
+	if (!net)
+		return -ENODEV;
 
 	dev = netdev_priv(net);
 	return get_ether_addr_str(dev->host_mac, host_addr, len);
@@ -1143,6 +1151,9 @@ void gether_set_qmult(struct net_device *net, unsigned qmult)
 {
 	struct eth_dev *dev;
 
+	if (!net)
+		return;
+
 	dev = netdev_priv(net);
 	dev->qmult = qmult;
 }
@@ -1152,6 +1163,9 @@ unsigned gether_get_qmult(struct net_device *net)
 {
 	struct eth_dev *dev;
 
+	if (!net)
+		return -ENODEV;
+
 	dev = netdev_priv(net);
 	return dev->qmult;
 }
@@ -1159,6 +1173,9 @@ EXPORT_SYMBOL_GPL(gether_get_qmult);
 
 int gether_get_ifname(struct net_device *net, char *name, int len)
 {
+	if (!net)
+		return -ENODEV;
+
 	rtnl_lock();
 	strlcpy(name, netdev_name(net), len);
 	rtnl_unlock();

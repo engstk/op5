@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -40,6 +40,10 @@ static void sde_hw_setup_split_pipe(struct sde_hw_mdp *mdp,
 	u32 lower_pipe = 0;
 
 	if (!mdp || !cfg)
+		return;
+
+	/* The SPLIT registers are only for DSI interfaces */
+	if ((cfg->intf != INTF_1) && (cfg->intf != INTF_2))
 		return;
 
 	if (cfg->en) {
@@ -221,6 +225,7 @@ static const struct sde_mdp_cfg *_top_offset(enum sde_mdp mdp,
 		if (mdp == m->mdp[i].id) {
 			b->base_off = addr;
 			b->blk_off = m->mdp[i].base;
+			b->length = m->mdp[i].len;
 			b->hwversion = m->hwversion;
 			b->log_mask = SDE_DBG_MASK_TOP;
 			return &m->mdp[i];

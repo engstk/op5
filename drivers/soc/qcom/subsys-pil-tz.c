@@ -850,7 +850,7 @@ static int subsys_ramdump(int enable, const struct subsys_desc *subsys)
 	if (!enable)
 		return 0;
 
-	return pil_do_ramdump(&d->desc, d->ramdump_dev);
+	return pil_do_ramdump(&d->desc, d->ramdump_dev, NULL);
 }
 
 static void subsys_free_memory(const struct subsys_desc *subsys)
@@ -1113,6 +1113,7 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 		rc = PTR_ERR(d->subsys);
 		goto err_subsys;
 	}
+	d->desc.subsys_dev = d->subsys;
 
 	return 0;
 err_subsys:
