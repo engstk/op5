@@ -40,6 +40,9 @@
 
 #define HDD_MAX_CMP_PER_PACKET_FILTER	5
 
+#define HDD_WAKELOCK_TIMEOUT_CONNECT 1000
+#define HDD_WAKELOCK_TIMEOUT_RESUME 1000
+
 /**
  * enum pkt_filter_protocol_layer - packet filter protocol layer
  * @HDD_FILTER_PROTO_TYPE_INVALID: Invalid initial value
@@ -206,6 +209,17 @@ void hdd_wlan_suspend_resume_event(uint8_t state);
 static inline
 void hdd_wlan_suspend_resume_event(uint8_t state) {}
 #endif /* FEATURE_WLAN_DIAG_SUPPORT */
+
+/**
+ * wlan_hdd_set_powersave() - Set powersave mode
+ * @adapter: adapter upon which the request was received
+ * @allow_power_save: is wlan allowed to go into power save mode
+ * @timeout: timeout period in ms
+ *
+ * Return: 0 on success, non-zero on any error
+ */
+int wlan_hdd_set_powersave(hdd_adapter_t *adapter,
+			   bool allow_power_save, uint32_t timeout);
 
 /**
  * wlan_hdd_inc_suspend_stats() - Prints, then increments, then prints suspend

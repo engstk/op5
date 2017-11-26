@@ -83,26 +83,21 @@ void hdd_get_tx_resource(hdd_adapter_t *adapter,
 #else
 static inline void hdd_tx_resume_cb(void *adapter_context, bool tx_resume)
 {
-	return;
 }
 static inline void hdd_tx_resume_timer_expired_handler(void *adapter_context)
 {
-	return;
 }
 static inline void hdd_register_tx_flow_control(hdd_adapter_t *adapter,
 		qdf_mc_timer_callback_t timer_callback,
 		ol_txrx_tx_flow_control_fp flowControl)
 {
-	return;
 }
 static inline void hdd_deregister_tx_flow_control(hdd_adapter_t *adapter)
 {
-	return;
 }
 static inline void hdd_get_tx_resource(hdd_adapter_t *adapter,
 			uint8_t STAId, uint16_t timer_value)
 {
-	return;
 }
 #endif /* QCA_LL_LEGACY_TX_FLOW_CONTROL */
 
@@ -151,5 +146,17 @@ static inline void netif_trans_update(struct net_device *dev)
 	"%s: Transmission timeout occurred jiffies %lu", \
 	__func__, jiffies)
 #endif
+
+static inline void
+hdd_skb_fill_gso_size (struct net_device *dev,
+					struct sk_buff *skb) {
+	if (skb_cloned(skb) && skb_is_nonlinear(skb) &&
+		skb_shinfo(skb)->gso_size == 0 &&
+		ip_hdr(skb)->protocol == IPPROTO_TCP) {
+		skb_shinfo(skb)->gso_size = dev->mtu -
+			((skb_transport_header(skb) - skb_network_header(skb))
+				+ tcp_hdrlen(skb));
+	}
+}
 
 #endif /* end #if !defined(WLAN_HDD_TX_RX_H) */

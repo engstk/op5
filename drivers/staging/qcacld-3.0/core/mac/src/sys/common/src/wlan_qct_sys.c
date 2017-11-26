@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -116,7 +116,7 @@ QDF_STATUS sys_stop(v_CONTEXT_t p_cds_context)
 	sysMsg.bodyptr = (void *)&g_stop_evt;
 
 	/* post the message.. */
-	qdf_status = cds_mq_post_message(CDS_MQ_ID_SYS, &sysMsg);
+	qdf_status = cds_mq_post_message(QDF_MODULE_ID_SYS, &sysMsg);
 	if (!QDF_IS_STATUS_SUCCESS(qdf_status))
 		qdf_status = QDF_STATUS_E_BADMSG;
 
@@ -142,6 +142,7 @@ QDF_STATUS sys_mc_process_msg(v_CONTEXT_t p_cds_context, cds_msg_t *pMsg)
 {
 	QDF_STATUS qdf_status = QDF_STATUS_SUCCESS;
 	qdf_mc_timer_callback_t timerCB;
+	data_stall_detect_cb data_stall_detect_callback;
 	tpAniSirGlobal mac_ctx;
 	void *hHal;
 
@@ -243,6 +244,12 @@ QDF_STATUS sys_mc_process_msg(v_CONTEXT_t p_cds_context, cds_msg_t *pMsg)
 			qdf_mem_free(pMsg->bodyptr);
 			break;
 
+		case SYS_MSG_ID_DATA_STALL_MSG:
+			data_stall_detect_callback = pMsg->callback;
+			if (NULL != data_stall_detect_callback)
+				data_stall_detect_callback(pMsg->bodyptr);
+			qdf_mem_free(pMsg->bodyptr);
+			break;
 		default:
 			QDF_TRACE(QDF_MODULE_ID_SYS, QDF_TRACE_LEVEL_ERROR,
 				"Unknown message type msgType= %d [0x%08x]",
@@ -275,7 +282,7 @@ QDF_STATUS sys_mc_process_msg(v_CONTEXT_t p_cds_context, cds_msg_t *pMsg)
  */
 void sys_process_mmh_msg(tpAniSirGlobal pMac, tSirMsgQ *pMsg)
 {
-	CDS_MQ_ID targetMQ = CDS_MQ_ID_SYS;
+	QDF_MODULE_ID targetMQ = QDF_MODULE_ID_SYS;
 
 	/*
 	 * The body of this pMsg is a tSirMbMsg
@@ -296,7 +303,7 @@ void sys_process_mmh_msg(tpAniSirGlobal pMac, tSirMsgQ *pMsg)
 	case WNI_CFG_DNLD_REQ:
 	case WNI_CFG_DNLD_CNF:
 		/* Forward this message to the SYS module */
-		targetMQ = CDS_MQ_ID_SYS;
+		targetMQ = QDF_MODULE_ID_SYS;
 		QDF_TRACE(QDF_MODULE_ID_SYS, QDF_TRACE_LEVEL_ERROR,
 			"Handling for the Message ID %d is removed in SYS",
 			pMsg->type);
@@ -308,7 +315,7 @@ void sys_process_mmh_msg(tpAniSirGlobal pMac, tSirMsgQ *pMsg)
 		 */
 	case WNI_CFG_DNLD_RSP:
 		/* Forward this message to the HAL module */
-		targetMQ = CDS_MQ_ID_WMA;
+		targetMQ = QDF_MODULE_ID_WMA;
 		QDF_TRACE(QDF_MODULE_ID_SYS, QDF_TRACE_LEVEL_ERROR,
 			"Handling for the Message ID %d is removed as no HAL",
 			pMsg->type);
@@ -321,19 +328,19 @@ void sys_process_mmh_msg(tpAniSirGlobal pMac, tSirMsgQ *pMsg)
 	case WNI_CFG_SET_REQ_NO_RSP:
 	case eWNI_SME_SYS_READY_IND:
 		/* Forward this message to the PE module */
-		targetMQ = CDS_MQ_ID_PE;
+		targetMQ = QDF_MODULE_ID_PE;
 		break;
 
 	case WNI_CFG_GET_RSP:
 	case WNI_CFG_SET_CNF:
 		/* Forward this message to the SME module */
-		targetMQ = CDS_MQ_ID_SME;
+		targetMQ = QDF_MODULE_ID_SME;
 		break;
 
 	default:
 		if ((pMsg->type >= eWNI_SME_MSG_TYPES_BEGIN)
 				&& (pMsg->type <= eWNI_SME_MSG_TYPES_END)) {
-			targetMQ = CDS_MQ_ID_SME;
+			targetMQ = QDF_MODULE_ID_SME;
 			break;
 		}
 
@@ -372,5 +379,5 @@ void wlan_sys_probe(void)
 	cds_message.reserved = SYS_MSG_COOKIE;
 	cds_message.type = SYS_MSG_ID_MC_THR_PROBE;
 	cds_message.bodyptr = NULL;
-	cds_mq_post_message(CDS_MQ_ID_SYS, &cds_message);
+	cds_mq_post_message(QDF_MODULE_ID_SYS, &cds_message);
 }

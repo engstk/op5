@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2016 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -32,6 +32,7 @@
    ============================================================================*/
 
 #include <net/cfg80211.h>
+#include "pld_common.h"
 #include "qdf_types.h"
 #include "qdf_trace.h"
 #include "cds_api.h"
@@ -204,13 +205,7 @@ QDF_STATUS cds_read_default_country(uint8_t *def_ctry)
 	return QDF_STATUS_SUCCESS;
 }
 
-/**
- * cds_get_channel_enum() - get the channel enumeration
- * @chan_num: channel number
- *
- * Return: enum for the channel
- */
-static enum channel_enum cds_get_channel_enum(uint32_t chan_num)
+enum channel_enum cds_get_channel_enum(uint32_t chan_num)
 {
 	uint32_t loop;
 
@@ -363,6 +358,8 @@ enum channel_state cds_get_2g_bonded_channel_state(uint16_t oper_ch,
 		return chan_state;
 
 	chan_enum = cds_get_channel_enum(oper_ch);
+	if (INVALID_CHANNEL == chan_enum)
+		return CHANNEL_STATE_INVALID;
 	if (CH_WIDTH_5MHZ == ch_width)
 		bw_enabled = true;
 	else if (CH_WIDTH_10MHZ == ch_width)
@@ -408,6 +405,8 @@ enum channel_state cds_get_5g_bonded_channel_state(
 		return chan_state;
 
 	chan_enum = cds_get_channel_enum(chan_num);
+	if (INVALID_CHANNEL == chan_enum)
+		return CHANNEL_STATE_INVALID;
 	if (CH_WIDTH_5MHZ == ch_width)
 		bw_enabled = true;
 	else if (CH_WIDTH_10MHZ == ch_width)
@@ -534,8 +533,8 @@ static void cds_set_5g_channel_params(uint16_t oper_ch,
 				(bonded_chan_ptr->start_ch +
 				 bonded_chan_ptr->end_ch)/2;
 	}
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO,
-			"ch %d ch_wd %d freq0 %d freq1 %d", oper_ch,
+	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_DEBUG,
+			"ch: %d ch_wd: %d freq0: %d freq1: %d", oper_ch,
 			ch_params->ch_width, ch_params->center_freq_seg0,
 			ch_params->center_freq_seg1);
 }
@@ -630,6 +629,12 @@ QDF_STATUS cds_get_reg_domain_from_country_code(v_REGDOMAIN_t *reg_domain_ptr,
 						const uint8_t *country_alpha2,
 						enum country_src source)
 {
+	hdd_context_t *hdd_ctx;
+
+	hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
+	if (wlan_hdd_validate_context(hdd_ctx))
+		return false;
+
 	if (NULL == reg_domain_ptr) {
 		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
 			  "Invalid reg domain pointer");
@@ -647,15 +652,23 @@ QDF_STATUS cds_get_reg_domain_from_country_code(v_REGDOMAIN_t *reg_domain_ptr,
 		return QDF_STATUS_E_FAULT;
 	}
 
-	if (cds_is_driver_recovering()) {
+	if (cds_is_driver_recovering() || cds_is_driver_in_bad_state()) {
 		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_ERROR,
 			  "SSR in progress, return");
 		return QDF_STATUS_SUCCESS;
 	}
 
-	if (SOURCE_11D == source || SOURCE_USERSPACE == source)
+	if (SOURCE_11D == source || SOURCE_USERSPACE == source) {
+		if (SOURCE_USERSPACE == source)
+			pld_set_cc_source(hdd_ctx->parent_dev,
+					PLD_SOURCE_USER);
+		else
+			pld_set_cc_source(hdd_ctx->parent_dev,
+					PLD_SOURCE_11D);
+
 		regulatory_hint_user(country_alpha2,
 				     NL80211_USER_REG_HINT_USER);
+	}
 
 	return QDF_STATUS_SUCCESS;
 }

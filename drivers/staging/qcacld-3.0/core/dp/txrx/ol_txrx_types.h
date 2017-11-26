@@ -152,6 +152,7 @@ enum tx_peer_level {
 	TXRX_IEEE11_A_G,
 	TXRX_IEEE11_N,
 	TXRX_IEEE11_AC,
+	TXRX_IEEE11_AX,
 	TXRX_IEEE11_MAX,
 };
 
@@ -198,8 +199,10 @@ struct ol_tx_desc_t {
 	void *txq;
 
 #ifdef QCA_SUPPORT_SW_TXRX_ENCAP
-	/* used by tx encap, to restore the os buf start offset
-	   after tx complete */
+	/*
+	 * used by tx encap, to restore the os buf start offset
+	 * after tx complete
+	 */
 	uint8_t orig_l2_hdr_bytes;
 #endif
 
@@ -257,6 +260,23 @@ enum {
 
 	OL_TX_SCHED_WRR_ADV_NUM_CATEGORIES /* must be last */
 };
+
+A_COMPILE_TIME_ASSERT(ol_tx_sched_htt_ac_values,
+	/* check that regular WMM AC enum values match */
+	((int)OL_TX_SCHED_WRR_ADV_CAT_VO == (int)HTT_AC_WMM_VO) &&
+	((int)OL_TX_SCHED_WRR_ADV_CAT_VI == (int)HTT_AC_WMM_VI) &&
+	((int)OL_TX_SCHED_WRR_ADV_CAT_BK == (int)HTT_AC_WMM_BK) &&
+	((int)OL_TX_SCHED_WRR_ADV_CAT_BE == (int)HTT_AC_WMM_BE) &&
+
+	/* check that extension AC enum values match */
+	((int)OL_TX_SCHED_WRR_ADV_CAT_NON_QOS_DATA
+		== (int)HTT_AC_EXT_NON_QOS) &&
+	((int)OL_TX_SCHED_WRR_ADV_CAT_UCAST_MGMT
+		== (int)HTT_AC_EXT_UCAST_MGMT) &&
+	((int)OL_TX_SCHED_WRR_ADV_CAT_MCAST_DATA
+		== (int)HTT_AC_EXT_MCAST_DATA) &&
+	((int)OL_TX_SCHED_WRR_ADV_CAT_MCAST_MGMT
+		== (int)HTT_AC_EXT_MCAST_MGMT));
 
 struct ol_tx_reorder_cat_timeout_t {
 	TAILQ_HEAD(, ol_rx_reorder_timeout_list_elem_t) virtual_timer_list;
@@ -410,6 +430,14 @@ enum throttle_phase {
 
 #define THROTTLE_TX_THRESHOLD (100)
 
+/*
+ * Threshold to stop priority queue in percentage. When no
+ * of available descriptors falls below TX_STOP_PRIORITY_TH,
+ * priority queue will be paused.
+ */
+#define TX_STOP_PRIORITY_TH   (80)
+
+
 typedef void (*ipa_uc_op_cb_type)(uint8_t *op_msg, void *osif_ctxt);
 
 struct ol_tx_queue_group_t {
@@ -476,6 +504,7 @@ struct ol_txrx_pool_stats {
  * @freelist: tx descriptor freelist
  * @pkt_drop_no_desc: drop due to no descriptors
  * @ref_cnt: pool's ref count
+ * @stop_priority_th: Threshold to stop priority queue
  */
 struct ol_tx_flow_pool_t {
 	TAILQ_ENTRY(ol_tx_flow_pool_t) flow_pool_list_elem;
@@ -492,6 +521,7 @@ struct ol_tx_flow_pool_t {
 	union ol_tx_desc_list_elem_t *freelist;
 	uint16_t pkt_drop_no_desc;
 	qdf_atomic_t ref_cnt;
+	uint16_t stop_priority_th;
 };
 
 #endif
@@ -509,6 +539,17 @@ struct ol_txrx_peer_id_map {
 	struct ol_txrx_peer_t *peer;
 	qdf_atomic_t peer_id_ref_cnt;
 	qdf_atomic_t del_peer_id_ref_cnt;
+};
+
+/**
+ * ol_txrx_stats_req_internal - specifications of the requested
+ * statistics internally
+ */
+struct ol_txrx_stats_req_internal {
+    struct ol_txrx_stats_req base;
+    TAILQ_ENTRY(ol_txrx_stats_req_internal) req_list_elem;
+    int serviced; /* state of this request */
+    int offset;
 };
 
 /*
@@ -628,12 +669,17 @@ struct ol_txrx_pdev_t {
 	/* ol_txrx_vdev list */
 	TAILQ_HEAD(, ol_txrx_vdev_t) vdev_list;
 
+	TAILQ_HEAD(, ol_txrx_stats_req_internal) req_list;
+	int req_list_depth;
+	qdf_spinlock_t req_list_spinlock;
+
 	/* peer ID to peer object map (array of pointers to peer objects) */
 	struct ol_txrx_peer_id_map *peer_id_to_obj_map;
 
 	struct {
-		unsigned mask;
-		unsigned idx_bits;
+		unsigned int mask;
+		unsigned int idx_bits;
+
 		TAILQ_HEAD(, ol_txrx_peer_t) * bins;
 	} peer_hash;
 
@@ -658,7 +704,7 @@ struct ol_txrx_pdev_t {
 	/* rx proc function */
 	void (*rx_opt_proc)(struct ol_txrx_vdev_t *vdev,
 			    struct ol_txrx_peer_t *peer,
-			    unsigned tid, qdf_nbuf_t msdu_list);
+			    unsigned int tid, qdf_nbuf_t msdu_list);
 
 	/* tx data delivery notification callback function */
 	struct {
@@ -675,9 +721,14 @@ struct ol_txrx_pdev_t {
 		} callbacks[OL_TXRX_MGMT_NUM_TYPES];
 	} tx_mgmt;
 
+	data_stall_detect_cb data_stall_detect_callback;
 	/* packetdump callback functions */
 	tp_ol_packetdump_cb ol_tx_packetdump_cb;
 	tp_ol_packetdump_cb ol_rx_packetdump_cb;
+
+#ifdef WLAN_FEATURE_TSF_PLUS
+	tp_ol_timestamp_cb ol_tx_timestamp_cb;
+#endif
 
 	struct {
 		uint16_t pool_size;
@@ -830,8 +881,10 @@ struct ol_txrx_pdev_t {
 		qdf_atomic_t rsrc_cnt;
 		/* threshold_lo - when to start tx desc margin replenishment */
 		uint16_t rsrc_threshold_lo;
-		/* threshold_hi - where to stop during tx desc margin
-		   replenishment */
+		/*
+		 * threshold_hi - where to stop during tx desc margin
+		 * replenishment
+		 */
 		uint16_t rsrc_threshold_hi;
 	} tx_queue;
 
@@ -892,15 +945,18 @@ struct ol_txrx_pdev_t {
 	struct {
 		qdf_spinlock_t mutex;
 		/* timer used to monitor the throttle "on" phase and
-		   "off" phase */
+		 * "off" phase
+		 */
 		qdf_timer_t phase_timer;
 		/* timer used to send tx frames */
 		qdf_timer_t tx_timer;
 		/* This is the time in ms of the throttling window, it will
-		 * include an "on" phase and an "off" phase */
+		 * include an "on" phase and an "off" phase
+		 */
 		uint32_t throttle_period_ms;
 		/* Current throttle level set by the client ex. level 0,
-		   level 1, etc */
+		 * level 1, etc
+		 */
 		enum throttle_level current_throttle_level;
 		/* Index that points to the phase within the throttle period */
 		enum throttle_phase current_throttle_phase;
@@ -947,7 +1003,8 @@ struct ol_txrx_pdev_t {
 		/*This is the state of the peer balance timer */
 		enum ol_tx_peer_bal_timer_state peer_bal_timer_state;
 		/*This is the counter about active peers which are under
-		 *tx flow control */
+		 *tx flow control
+		 */
 		u_int32_t peer_num;
 		/*This is peer list which are under tx flow control */
 		struct ol_tx_limit_peer_t limit_list[MAX_NO_PEERS_IN_LIMIT];
@@ -979,18 +1036,22 @@ struct ol_txrx_ocb_chan_info {
 
 struct ol_txrx_vdev_t {
 	struct ol_txrx_pdev_t *pdev; /* pdev - the physical device that is
-					the parent of this virtual device */
+				      * the parent of this virtual device
+				      */
 	uint8_t vdev_id;             /* ID used to specify a particular vdev
-					to the target */
+				      * to the target
+				      */
 	void *osif_dev;
 	union ol_txrx_align_mac_addr_t mac_addr; /* MAC address */
 	/* tx paused - NO LONGER NEEDED? */
 	TAILQ_ENTRY(ol_txrx_vdev_t) vdev_list_elem; /* node in the pdev's list
-						       of vdevs */
+						     * of vdevs
+						     */
 	TAILQ_HEAD(peer_list_t, ol_txrx_peer_t) peer_list;
 	struct ol_txrx_peer_t *last_real_peer; /* last real peer created for
-						  this vdev (not "self"
-						  pseudo-peer) */
+						* this vdev (not "self"
+						* pseudo-peer)
+						*/
 	ol_txrx_rx_fp rx; /* receive function used by this vdev */
 
 	struct {
@@ -1118,7 +1179,8 @@ struct ol_rx_reorder_t {
 	TAILQ_ENTRY(ol_rx_reorder_t) defrag_waitlist_elem;
 	uint32_t defrag_timeout_ms;
 	/* get back to parent ol_txrx_peer_t when ol_rx_reorder_t is in a
-	 * waitlist */
+	 * waitlist
+	 */
 	uint16_t tid;
 };
 
@@ -1217,7 +1279,7 @@ struct ol_txrx_peer_t {
 	 */
 	void (*rx_opt_proc)(struct ol_txrx_vdev_t *vdev,
 			    struct ol_txrx_peer_t *peer,
-			    unsigned tid, qdf_nbuf_t msdu_list);
+			    unsigned int tid, qdf_nbuf_t msdu_list);
 
 #if defined(CONFIG_HL_SUPPORT)
 	struct ol_tx_frms_queue_t txqs[OL_TX_NUM_TIDS];
@@ -1267,7 +1329,7 @@ struct ol_txrx_peer_t {
 	qdf_time_t last_disassoc_rcvd;
 	qdf_time_t last_deauth_rcvd;
 	qdf_atomic_t fw_create_pending;
-	qdf_mc_timer_t peer_unmap_timer;
+	qdf_timer_t peer_unmap_timer;
 };
 
 enum ol_rx_err_type {
@@ -1321,5 +1383,7 @@ struct ol_rx_remote_data {
 	qdf_nbuf_t msdu;
 	uint8_t mac_id;
 };
+
+#define INVALID_REORDER_INDEX 0xFFFF
 
 #endif /* _OL_TXRX_TYPES__H_ */

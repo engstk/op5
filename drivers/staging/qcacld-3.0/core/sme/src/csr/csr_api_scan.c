@@ -25,20 +25,17 @@
  * to the Linux Foundation.
  */
 
-/** ------------------------------------------------------------------------- *
-    ------------------------------------------------------------------------- *
-
-    \file csr_api_scan.c
-
-    Implementation for the Common Scan interfaces.
-   ========================================================================== */
+/*
+ * DOC: csr_api_scan.c
+ *
+ * Implementation for the Common Scan interfaces.
+ */
 
 #include "ani_global.h"
 
 #include "cds_mq.h"
 #include "csr_inside_api.h"
 #include "sme_inside.h"
-#include "sms_debug.h"
 
 #include "csr_support.h"
 
@@ -61,16 +58,20 @@
 #define DIRECT_SSID_LEN 7
 
 /* Purpose of HIDDEN_TIMER
-** When we remove hidden ssid from the profile i.e., forget the SSID via GUI that SSID shouldn't see in the profile
-** For above requirement we used timer limit, logic is explained below
-** Timer value is initialsed to current time  when it receives corresponding probe response of hidden SSID (The probe request is
-** received regularly till SSID in the profile. Once it is removed from profile probe request is not sent.) when we receive probe response
-** for broadcast probe request, during update SSID with saved SSID we will diff current time with saved SSID time if it is greater than 1 min
-** then we are not updating with old one
-*/
+ * When we remove hidden ssid from the profile i.e., forget the SSID via GUI
+ * that SSID shouldn't see in the profile For above requirement we used timer
+ * limit, logic is explained below Timer value is initialsed to current time
+ * when it receives corresponding probe response of hidden SSID (The probe
+ * request is received regularly till SSID in the profile. Once it is removed
+ * from profile probe request is not sent.) when we receive probe response for
+ * broadcast probe request, during update SSID with saved SSID we will diff
+ * current time with saved SSID time if it is greater than 1 min then we are
+ * not updating with old one
+ */
 
 #define HIDDEN_TIMER (1*60*1000)
-#define CSR_SCAN_RESULT_RSSI_WEIGHT     80      /* must be less than 100, represent the persentage of new RSSI */
+/* must be less than 100, represent the persentage of new RSSI */
+#define CSR_SCAN_RESULT_RSSI_WEIGHT     80
 #define CSR_PURGE_RSSI_THRESHOLD     -70
 
 #define MAX_ACTIVE_SCAN_FOR_ONE_CHANNEL 140
@@ -79,33 +80,31 @@
 #define MAX_ACTIVE_SCAN_FOR_ONE_CHANNEL_FASTREASSOC 30
 #define MIN_ACTIVE_SCAN_FOR_ONE_CHANNEL_FASTREASSOC 20
 
-#define PCL_ADVANTAGE 30
+#define PCL_ADVANTAGE 20
 #define PCL_RSSI_THRESHOLD -75
 
 #define CSR_SCAN_IS_OVER_BSS_LIMIT(pMac)  \
 	((pMac)->scan.nBssLimit <= (csr_ll_count(&(pMac)->scan.scanResultList)))
 
-void csr_scan_get_result_timer_handler(void *);
-static void csr_set_default_scan_timing(tpAniSirGlobal pMac, tSirScanType scanType,
+#define MIN_11D_AP_COUNT 3
+
+static void csr_set_default_scan_timing(tpAniSirGlobal pMac,
+					tSirScanType scanType,
 					tCsrScanRequest *pScanRequest);
-#ifdef WLAN_AP_STA_CONCURRENCY
-static void csr_sta_ap_conc_timer_handler(void *);
-#endif
-bool csr_is_supported_channel(tpAniSirGlobal pMac, uint8_t channelId);
-QDF_STATUS csr_scan_channels(tpAniSirGlobal pMac, tSmeCmd *pCommand);
-void csr_set_cfg_valid_channel_list(tpAniSirGlobal pMac, uint8_t *pChannelList,
-				    uint8_t NumChannels);
-void csr_save_tx_power_to_cfg(tpAniSirGlobal pMac, tDblLinkList *pList,
+static QDF_STATUS csr_scan_channels(tpAniSirGlobal pMac, tSmeCmd *pCommand);
+static void csr_set_cfg_valid_channel_list(tpAniSirGlobal pMac, uint8_t
+					*pChannelList, uint8_t NumChannels);
+static void csr_save_tx_power_to_cfg(tpAniSirGlobal pMac, tDblLinkList *pList,
 			      uint32_t cfgId);
-void csr_set_cfg_country_code(tpAniSirGlobal pMac, uint8_t *countryCode);
-void csr_purge_channel_power(tpAniSirGlobal pMac, tDblLinkList *pChannelList);
-void csr_release_scan_command(tpAniSirGlobal pMac, tSmeCmd *pCommand,
-			      eCsrScanStatus scanStatus);
-static bool csr_scan_validate_scan_result(tpAniSirGlobal pMac, uint8_t *pChannels,
+static void csr_set_cfg_country_code(tpAniSirGlobal pMac, uint8_t *countryCode);
+static void csr_purge_channel_power(tpAniSirGlobal pMac, tDblLinkList
+							*pChannelList);
+static bool csr_scan_validate_scan_result(tpAniSirGlobal pMac,
+					uint8_t *pChannels,
 					  uint8_t numChn,
 					  tSirBssDescription *pBssDesc,
 					  tDot11fBeaconIEs **ppIes);
-bool csr_roam_is_valid_channel(tpAniSirGlobal pMac, uint8_t channel);
+static bool csr_roam_is_valid_channel(tpAniSirGlobal pMac, uint8_t channel);
 static void csr_purge_scan_result_by_age(void *pv);
 
 #define CSR_IS_SOCIAL_CHANNEL(channel) \
@@ -120,21 +119,20 @@ static void csr_release_scan_cmd_pending_list(tpAniSirGlobal pMac)
 			csr_ll_remove_head(&pMac->scan.scanCmdPendingList,
 					   LL_ACCESS_LOCK)) != NULL) {
 		pCommand = GET_BASE_ADDR(pEntry, tSmeCmd, Link);
-		if (eSmeCsrCommandMask & pCommand->command) {
+		if (eSmeCsrCommandMask & pCommand->command)
 			csr_abort_command(pMac, pCommand, true);
-		} else {
-			sms_log(pMac, LOGE, FL("Error: Received command : %d"),
-				pCommand->command);
-		}
+		else
+			sme_err("Received command: %d", pCommand->command);
 	}
 }
 
 /* pResult is invalid calling this function. */
-void csr_free_scan_result_entry(tpAniSirGlobal pMac, tCsrScanResult *pResult)
+void csr_free_scan_result_entry(tpAniSirGlobal pMac, struct tag_csrscan_result
+				*pResult)
 {
-	if (NULL != pResult->Result.pvIes) {
+	if (NULL != pResult->Result.pvIes)
 		qdf_mem_free(pResult->Result.pvIes);
-	}
+
 	qdf_mem_free(pResult);
 }
 
@@ -143,12 +141,13 @@ static QDF_STATUS csr_ll_scan_purge_result(tpAniSirGlobal pMac,
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	tListElem *pEntry;
-	tCsrScanResult *pBssDesc;
+	struct tag_csrscan_result *pBssDesc;
 
 	csr_ll_lock(pList);
 
 	while ((pEntry = csr_ll_remove_head(pList, LL_ACCESS_NOLOCK)) != NULL) {
-		pBssDesc = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		pBssDesc = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		csr_free_scan_result_entry(pMac, pBssDesc);
 	}
 
@@ -159,8 +158,6 @@ static QDF_STATUS csr_ll_scan_purge_result(tpAniSirGlobal pMac,
 
 QDF_STATUS csr_scan_open(tpAniSirGlobal mac_ctx)
 {
-	QDF_STATUS status;
-
 	csr_ll_open(mac_ctx->hHdd, &mac_ctx->scan.scanResultList);
 	csr_ll_open(mac_ctx->hHdd, &mac_ctx->scan.tempScanResults);
 	csr_ll_open(mac_ctx->hHdd, &mac_ctx->scan.channelPowerInfoList24);
@@ -170,18 +167,7 @@ QDF_STATUS csr_scan_open(tpAniSirGlobal mac_ctx)
 #endif
 	mac_ctx->scan.fFullScanIssued = false;
 	mac_ctx->scan.nBssLimit = CSR_MAX_BSS_SUPPORT;
-#ifdef WLAN_AP_STA_CONCURRENCY
-	status = qdf_mc_timer_init(&mac_ctx->scan.hTimerStaApConcTimer,
-				   QDF_TIMER_TYPE_SW,
-				   csr_sta_ap_conc_timer_handler,
-				   mac_ctx);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGE,
-			FL("Mem Alloc failed for hTimerStaApConcTimer timer"));
-		return status;
-	}
-#endif
-	return status;
+	return QDF_STATUS_SUCCESS;
 }
 
 QDF_STATUS csr_scan_close(tpAniSirGlobal pMac)
@@ -201,9 +187,6 @@ QDF_STATUS csr_scan_close(tpAniSirGlobal pMac)
 	csr_ll_close(&pMac->scan.channelPowerInfoList24);
 	csr_ll_close(&pMac->scan.channelPowerInfoList5G);
 	csr_scan_disable(pMac);
-#ifdef WLAN_AP_STA_CONCURRENCY
-	qdf_mc_timer_destroy(&pMac->scan.hTimerStaApConcTimer);
-#endif
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -224,7 +207,8 @@ QDF_STATUS csr_scan_disable(tpAniSirGlobal pMac)
 
 /* Set scan timing parameters according to state of other driver sessions */
 /* No validation of the parameters is performed. */
-static void csr_set_default_scan_timing(tpAniSirGlobal pMac, tSirScanType scanType,
+static void csr_set_default_scan_timing(tpAniSirGlobal pMac,
+					tSirScanType scanType,
 					tCsrScanRequest *pScanRequest)
 {
 #ifdef WLAN_AP_STA_CONCURRENCY
@@ -248,6 +232,10 @@ static void csr_set_default_scan_timing(tpAniSirGlobal pMac, tSirScanType scanTy
 
 		pScanRequest->min_rest_time =
 			pMac->roam.configParam.min_rest_time_conc;
+		/* IF AP is active set min rest time same as max rest time */
+		if (csr_is_infra_ap_started(pMac))
+			pScanRequest->min_rest_time = pScanRequest->restTime;
+
 		pScanRequest->idle_time =
 			pMac->roam.configParam.idle_time_conc;
 
@@ -304,23 +292,21 @@ csr_scan_2g_only_request(tpAniSirGlobal mac_ctx,
 	QDF_ASSERT(scan_cmd && scan_req);
 	/* To silence the KW tool null check is added */
 	if ((scan_cmd == NULL) || (scan_req == NULL)) {
-		sms_log(mac_ctx, LOGE,
-			FL(" Scan Cmd or Scan Request is NULL "));
+		sme_err("Scan Cmd or Scan Request is NULL");
 		return QDF_STATUS_E_INVAL;
 	}
 
 	if (eCSR_SCAN_REQUEST_FULL_SCAN != scan_req->requestType)
 		return QDF_STATUS_SUCCESS;
 
-	sms_log(mac_ctx, LOG1,
-		FL("Scanning only 2G Channels during first scan"));
+	sme_debug("Scanning only 2G Channels during first scan");
 
 	/* Contsruct valid Supported 2.4 GHz Channel List */
 	if (NULL == scan_req->ChannelInfo.ChannelList) {
 		scan_req->ChannelInfo.ChannelList =
 			qdf_mem_malloc(NUM_24GHZ_CHANNELS);
 		if (NULL == scan_req->ChannelInfo.ChannelList) {
-			sms_log(mac_ctx, LOGE, FL("Memory allocation failed."));
+			sme_err("Memory allocation failed");
 			return QDF_STATUS_E_NOMEM;
 		}
 		for (idx = 1; idx <= NUM_24GHZ_CHANNELS; idx++) {
@@ -359,6 +345,7 @@ csr_set_scan_reason(tSmeCmd *scan_cmd, eCsrRequestType req_type)
 #endif
 	case eCSR_SCAN_REQUEST_FULL_SCAN:
 	case eCSR_SCAN_P2P_DISCOVERY:
+	case eCSR_SCAN_RRM:
 		scan_cmd->u.scanCmd.reason = eCsrScanUserRequest;
 		break;
 	case eCSR_SCAN_HO_PROBE_SCAN:
@@ -384,15 +371,13 @@ csr_issue_11d_scan(tpAniSirGlobal mac_ctx, tSmeCmd *scan_cmd,
 	tCsrRoamSession *csr_session = CSR_GET_SESSION(mac_ctx, session_id);
 
 	if (csr_session == NULL) {
-		sms_log(mac_ctx, LOGE, FL("session %d not found"),
-			session_id);
+		sme_err("session %d not found", session_id);
 		QDF_ASSERT(0);
 		return QDF_STATUS_E_FAILURE;
 	}
 
 	if (num_chn > WNI_CFG_VALID_CHANNEL_LIST_LEN) {
-		sms_log(mac_ctx, LOGE, FL("invalid number of channels: %d"),
-			num_chn);
+		sme_err("invalid number of channels: %d", num_chn);
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -407,14 +392,14 @@ csr_issue_11d_scan(tpAniSirGlobal mac_ctx, tSmeCmd *scan_cmd,
 	qdf_mem_set(&tmp_rq, sizeof(tCsrScanRequest), 0);
 	scan_11d_cmd = csr_get_command_buffer(mac_ctx);
 	if (!scan_11d_cmd) {
-		sms_log(mac_ctx, LOGE, FL("scan_11d_cmd failed"));
+		sme_err("scan_11d_cmd failed");
 		return QDF_STATUS_E_FAILURE;
 	}
 
 	qdf_mem_set(&scan_11d_cmd->u.scanCmd, sizeof(tScanCmd), 0);
 	chn_info->ChannelList = qdf_mem_malloc(num_chn);
 	if (NULL == chn_info->ChannelList) {
-		sms_log(mac_ctx, LOGE, FL("Failed to allocate memory"));
+		sme_err("Failed to allocate memory");
 		return QDF_STATUS_E_NOMEM;
 	}
 	qdf_mem_copy(chn_info->ChannelList,
@@ -458,7 +443,7 @@ csr_issue_11d_scan(tpAniSirGlobal mac_ctx, tSmeCmd *scan_cmd,
 	}
 	if (mac_ctx->roam.configParam.nInitialDwellTime) {
 		tmp_rq.maxChnTime = mac_ctx->roam.configParam.nInitialDwellTime;
-		sms_log(mac_ctx, LOG1, FL("11d scan, updating dwell time for first scan %u"),
+		sme_debug("11d scan, updating dwell time for first scan %u",
 			tmp_rq.maxChnTime);
 	}
 
@@ -468,7 +453,7 @@ csr_issue_11d_scan(tpAniSirGlobal mac_ctx, tSmeCmd *scan_cmd,
 	qdf_mem_free(chn_info->ChannelList);
 	chn_info->ChannelList = NULL;
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGE, FL("csr_scan_copy_request failed"));
+		sme_err("csr_scan_copy_request failed");
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -478,7 +463,7 @@ csr_issue_11d_scan(tpAniSirGlobal mac_ctx, tSmeCmd *scan_cmd,
 
 	status = csr_queue_sme_command(mac_ctx, scan_11d_cmd, false);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGE, FL("Failed to send message status = %d"),
+		sme_err("Failed to send message status = %d",
 			status);
 		return QDF_STATUS_E_FAILURE;
 	}
@@ -495,7 +480,7 @@ QDF_STATUS csr_scan_request(tpAniSirGlobal pMac, uint16_t sessionId,
 	tCsrConfig *cfg_prm = &pMac->roam.configParam;
 
 	if (scan_req == NULL) {
-		sms_log(pMac, LOGE, FL("scan_req is NULL"));
+		sme_err("scan_req is NULL");
 		QDF_ASSERT(0);
 		return status;
 	}
@@ -513,7 +498,7 @@ QDF_STATUS csr_scan_request(tpAniSirGlobal pMac, uint16_t sessionId,
 	    && scan_req->SSIDs.numOfSSIDs
 	    && (NULL != scan_req->SSIDs.SSIDList)
 	    && (scan_req->SSIDs.SSIDList->SSID.length > DIRECT_SSID_LEN)) {
-		sms_log(pMac, LOG1, FL("P2P: Increasing the min and max Dwell time to %d for specific SSID scan %.*s"),
+		sme_debug("P2P: Increasing the min and max Dwell time to %d for specific SSID scan %.*s",
 			MAX_CHN_TIME_TO_FIND_GO,
 			scan_req->SSIDs.SSIDList->SSID.length,
 			scan_req->SSIDs.SSIDList->SSID.ssId);
@@ -522,7 +507,7 @@ QDF_STATUS csr_scan_request(tpAniSirGlobal pMac, uint16_t sessionId,
 	}
 
 	if (!pMac->scan.fScanEnable) {
-		sms_log(pMac, LOGE, FL("SId: %d Scanning not enabled Scan type=%u, numOfSSIDs=%d P2P search=%d"),
+		sme_err("SId: %d Scanning not enabled Scan type=%u, numOfSSIDs=%d P2P search=%d",
 			sessionId, scan_req->requestType,
 			scan_req->SSIDs.numOfSSIDs,
 			scan_req->p2pSearch);
@@ -531,7 +516,7 @@ QDF_STATUS csr_scan_request(tpAniSirGlobal pMac, uint16_t sessionId,
 
 	scan_cmd = csr_get_command_buffer(pMac);
 	if (!scan_cmd) {
-		sms_log(pMac, LOGE, FL("scan_cmd is NULL"));
+		sme_err("scan_cmd is NULL");
 		goto release_cmd;
 	}
 
@@ -539,15 +524,14 @@ QDF_STATUS csr_scan_request(tpAniSirGlobal pMac, uint16_t sessionId,
 	scan_cmd->command = eSmeCommandScan;
 	scan_cmd->sessionId = sessionId;
 	if (scan_cmd->sessionId >= CSR_ROAM_SESSION_MAX)
-		sms_log(pMac, LOGE, FL("Invalid Sme SessionID: %d"), sessionId);
+		sme_err("Invalid Sme SessionID: %d", sessionId);
 	scan_cmd->u.scanCmd.callback = callback;
 	scan_cmd->u.scanCmd.pContext = pContext;
 	csr_set_scan_reason(scan_cmd, scan_req->requestType);
 	if (scan_req->minChnTime == 0 && scan_req->maxChnTime == 0) {
 		/* The caller doesn't set the time correctly. Set it here */
 		csr_set_default_scan_timing(pMac, scan_req->scanType, scan_req);
-		sms_log(pMac, LOG1,
-			FL("Setting default min %d and max %d ChnTime"),
+		sme_debug("Setting default min %d and max %d ChnTime",
 			scan_req->minChnTime, scan_req->maxChnTime);
 	}
 #ifdef WLAN_AP_STA_CONCURRENCY
@@ -558,6 +542,9 @@ QDF_STATUS csr_scan_request(tpAniSirGlobal pMac, uint16_t sessionId,
 	if (scan_req->restTime == 0 && csr_is_any_session_connected(pMac)) {
 		scan_req->restTime = cfg_prm->nRestTimeConc;
 		scan_req->min_rest_time = cfg_prm->min_rest_time_conc;
+		/* IF AP is active set min rest time same as max rest time */
+		if (csr_is_infra_ap_started(pMac))
+			scan_req->min_rest_time = scan_req->restTime;
 		scan_req->idle_time = cfg_prm->idle_time_conc;
 		if (scan_req->scanType == eSIR_ACTIVE_SCAN) {
 			scan_req->maxChnTime = cfg_prm->nActiveMaxChnTimeConc;
@@ -597,10 +584,17 @@ QDF_STATUS csr_scan_request(tpAniSirGlobal pMac, uint16_t sessionId,
 	if (cfg_prm->nInitialDwellTime) {
 		scan_req->maxChnTime = cfg_prm->nInitialDwellTime;
 		cfg_prm->nInitialDwellTime = 0;
-		sms_log(pMac, LOG1, FL("updating dwell time for first scan %u"),
+		sme_debug("updating dwell time for first scan %u",
 			scan_req->maxChnTime);
 	}
-	scan_req->scan_adaptive_dwell_mode = cfg_prm->scan_adaptive_dwell_mode;
+	/*
+	 * RRM is an internally triggered scan and to
+	 * achieve reliable results, Adaptive dwell scan is
+	 * disabled using the dwell_mode.
+	 */
+	if (scan_req->requestType != eCSR_SCAN_RRM)
+		scan_req->scan_adaptive_dwell_mode =
+			cfg_prm->scan_adaptive_dwell_mode;
 
 	status = csr_scan_copy_request(pMac, &scan_cmd->u.scanCmd.u.scanRequest,
 				       scan_req);
@@ -612,8 +606,7 @@ QDF_STATUS csr_scan_request(tpAniSirGlobal pMac, uint16_t sessionId,
 	 */
 	cfg_prm->initial_scan_no_dfs_chnl = 0;
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(pMac, LOGE,
-			FL("fail to copy request status = %d"), status);
+		sme_err("fail to copy request status: %d", status);
 		goto release_cmd;
 	}
 
@@ -623,8 +616,8 @@ QDF_STATUS csr_scan_request(tpAniSirGlobal pMac, uint16_t sessionId,
 	status = qdf_mc_timer_init(&scan_cmd->u.scanCmd.csr_scan_timer,
 				QDF_TIMER_TYPE_SW,
 				csr_scan_active_list_timeout_handle, scan_cmd);
-	sms_log(pMac, LOG1,
-		FL("SId=%d scanId=%d Scan reason=%u numSSIDs=%d numChan=%d P2P search=%d minCT=%d maxCT=%d uIEFieldLen=%d BSSID: " MAC_ADDRESS_STR),
+	sme_debug(
+		"SId=%d scanId=%d Scan reason=%u numSSIDs=%d numChan=%d P2P search=%d minCT=%d maxCT=%d uIEFieldLen=%d BSSID: " MAC_ADDRESS_STR,
 		sessionId, scan_cmd->u.scanCmd.scanID,
 		scan_cmd->u.scanCmd.reason, pTempScanReq->SSIDs.numOfSSIDs,
 		pTempScanReq->ChannelInfo.numOfChannels,
@@ -633,16 +626,12 @@ QDF_STATUS csr_scan_request(tpAniSirGlobal pMac, uint16_t sessionId,
 		MAC_ADDR_ARRAY(scan_cmd->u.scanCmd.u.scanRequest.bssid.bytes));
 
 	status = csr_queue_sme_command(pMac, scan_cmd, false);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(pMac, LOGE,
-			FL("fail to send message status = %d"), status);
-	}
+	if (!QDF_IS_STATUS_SUCCESS(status))
+		sme_err("fail to send message status: %d", status);
 
 release_cmd:
 	if (!QDF_IS_STATUS_SUCCESS(status) && scan_cmd) {
-		sms_log(pMac, LOGE, FL(" SId: %d Failed with status=%d"
-				       " Scan reason=%u numOfSSIDs=%d"
-				       " P2P search=%d scanId=%d"),
+		sme_err(" SId: %d Failed with status=%d Scan reason=%u numOfSSIDs=%d P2P search=%d scanId=%d",
 			sessionId, status, scan_cmd->u.scanCmd.reason,
 			scan_req->SSIDs.numOfSSIDs, scan_req->p2pSearch,
 			scan_cmd->u.scanCmd.scanID);
@@ -664,13 +653,12 @@ static QDF_STATUS csr_issue_roam_after_lostlink_scan(tpAniSirGlobal pMac,
 	tCsrRoamSession *pSession = CSR_GET_SESSION(pMac, sessionId);
 
 	if (!pSession) {
-		sms_log(pMac, LOGE, FL("session %d not found"), sessionId);
+		sme_err("session %d not found", sessionId);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	sms_log(pMac, LOG1, FL("Entry"));
 	if (pSession->fCancelRoaming) {
-		sms_log(pMac, LOGW, FL("lost link roaming canceled"));
+		sme_debug("lost link roaming canceled");
 		status = QDF_STATUS_SUCCESS;
 		goto free_filter;
 	}
@@ -716,9 +704,8 @@ static QDF_STATUS csr_issue_roam_after_lostlink_scan(tpAniSirGlobal pMac,
 	}
 	status = csr_roam_issue_connect(pMac, sessionId, pProfile, hBSSList,
 					reason, roamId, true, true);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
+	if (!QDF_IS_STATUS_SUCCESS(status))
 		csr_scan_result_purge(pMac, hBSSList);
-	}
 
 free_filter:
 	if (pScanFilter) {
@@ -739,10 +726,10 @@ QDF_STATUS csr_scan_handle_failed_lostlink1(tpAniSirGlobal pMac,
 	tCsrRoamSession *pSession = CSR_GET_SESSION(pMac, sessionId);
 
 	if (!pSession) {
-		sms_log(pMac, LOGE, FL("session %d not found"), sessionId);
+		sme_err("session %d not found", sessionId);
 		return QDF_STATUS_E_FAILURE;
 	}
-	sms_log(pMac, LOGW, "Lost link scan 1 failed");
+	sme_debug("Lost link scan 1 failed");
 	if (pSession->fCancelRoaming)
 		return QDF_STATUS_E_FAILURE;
 	if (!pSession->pCurRoamProfile)
@@ -756,10 +743,10 @@ QDF_STATUS csr_scan_handle_failed_lostlink1(tpAniSirGlobal pMac,
 		/* try lostlink scan2 */
 		return csr_scan_request_lost_link2(pMac, sessionId);
 	if (!pSession->pCurRoamProfile->ChannelInfo.ChannelList
-	    || pSession->pCurRoamProfile->ChannelInfo.ChannelList[0] == 0) {
+	    || pSession->pCurRoamProfile->ChannelInfo.ChannelList[0] == 0)
 		/* go straight to lostlink scan3 */
 		return csr_scan_request_lost_link3(pMac, sessionId);
-	}
+
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -769,27 +756,27 @@ QDF_STATUS csr_scan_handle_failed_lostlink2(tpAniSirGlobal pMac,
 	tCsrRoamSession *pSession = CSR_GET_SESSION(pMac, sessionId);
 
 	if (!pSession) {
-		sms_log(pMac, LOGE, FL("session %d not found"), sessionId);
+		sme_err("session %d not found", sessionId);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	sms_log(pMac, LOGW, "Lost link scan 2 failed");
+	sme_debug("Lost link scan 2 failed");
 	if (pSession->fCancelRoaming)
 		return QDF_STATUS_E_FAILURE;
 
 	if (!pSession->pCurRoamProfile
 	    || !pSession->pCurRoamProfile->ChannelInfo.ChannelList
-	    || pSession->pCurRoamProfile->ChannelInfo.ChannelList[0] == 0) {
+	    || pSession->pCurRoamProfile->ChannelInfo.ChannelList[0] == 0)
 		/* try lostlink scan3 */
 		return csr_scan_request_lost_link3(pMac, sessionId);
-	}
+
 	return QDF_STATUS_E_FAILURE;
 }
 
 QDF_STATUS csr_scan_handle_failed_lostlink3(tpAniSirGlobal pMac,
 					    uint32_t sessionId)
 {
-	sms_log(pMac, LOGW, "Lost link scan 3 failed");
+	sme_debug("Lost link scan 3 failed");
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -834,9 +821,8 @@ csr_update_lost_link1_cmd(tpAniSirGlobal mac_ctx, tSmeCmd *cmd,
 		qdf_mem_copy(&ssid_list->SSIDList[0].SSID,
 			     &pSession->connectedProfile.SSID,
 			     sizeof(tSirMacSSid));
-	} else {
+	} else
 		ssid_list->numOfSSIDs = 0;
-	}
 
 	if (!pSession->pCurRoamProfile)
 		return QDF_STATUS_SUCCESS;
@@ -929,11 +915,10 @@ csr_scan_request_lost_link1(tpAniSirGlobal mac_ctx, uint32_t session_id)
 	tCsrRoamSession *session = CSR_GET_SESSION(mac_ctx, session_id);
 
 	if (!session) {
-		sms_log(mac_ctx, LOGE, FL("session %d not found"), session_id);
+		sme_err("session %d not found", session_id);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	sms_log(mac_ctx, LOGW, FL("Entry"));
 	cmd = csr_get_command_buffer(mac_ctx);
 	if (!cmd) {
 		status = QDF_STATUS_E_RESOURCES;
@@ -947,14 +932,12 @@ csr_scan_request_lost_link1(tpAniSirGlobal mac_ctx, uint32_t session_id)
 	qdf_mem_set(&cmd->u.scanCmd.u.scanRequest.bssid,
 		    sizeof(struct qdf_mac_addr), 0xFF);
 	status = csr_queue_sme_command(mac_ctx, cmd, false);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGE,
-			FL("fail to send message status = %d"), status);
-	}
+	if (!QDF_IS_STATUS_SUCCESS(status))
+		sme_err("fail to send message status: %d", status);
 
 release_lost_link1_cmd:
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGW, FL("failed with status %d"), status);
+		sme_warn("failed with status %d", status);
 		if (cmd)
 			csr_release_command_scan(mac_ctx, cmd);
 		status = csr_scan_handle_failed_lostlink1(mac_ctx, session_id);
@@ -1056,11 +1039,10 @@ csr_scan_request_lost_link2(tpAniSirGlobal mac_ctx, uint32_t session_id)
 	tCsrRoamSession *session = CSR_GET_SESSION(mac_ctx, session_id);
 
 	if (!session) {
-		sms_log(mac_ctx, LOGE, FL("session %d not found"), session_id);
+		sme_err("session %d not found", session_id);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	sms_log(mac_ctx, LOGW, FL(" called"));
 	cmd = csr_get_command_buffer(mac_ctx);
 	if (!cmd) {
 		status = QDF_STATUS_E_RESOURCES;
@@ -1076,14 +1058,13 @@ csr_scan_request_lost_link2(tpAniSirGlobal mac_ctx, uint32_t session_id)
 	/* Put to the head in pending queue */
 	status = csr_queue_sme_command(mac_ctx, cmd, true);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGE,
-			FL("fail to send message status = %d"), status);
+		sme_err("fail to send message status: %d", status);
 		goto release_lost_link2_cmd;
 	}
 
 release_lost_link2_cmd:
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGW, FL("failed with status %d"), status);
+		sme_warn("failed with status %d", status);
 		if (cmd)
 			csr_release_command_scan(mac_ctx, cmd);
 		status = csr_scan_handle_failed_lostlink2(mac_ctx, session_id);
@@ -1104,7 +1085,6 @@ csr_scan_request_lost_link3(tpAniSirGlobal mac_ctx, uint32_t session_id)
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	tSmeCmd *cmd;
 
-	sms_log(mac_ctx, LOGW, FL(" called"));
 	do {
 		cmd = csr_get_command_buffer(mac_ctx);
 		if (!cmd) {
@@ -1132,13 +1112,12 @@ csr_scan_request_lost_link3(tpAniSirGlobal mac_ctx, uint32_t session_id)
 		/* Put to the head of pending queue */
 		status = csr_queue_sme_command(mac_ctx, cmd, true);
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
-			sms_log(mac_ctx, LOGE,
-				FL("fail to send message status = %d"), status);
+			sme_err("fail to send message status: %d", status);
 			break;
 		}
 	} while (0);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGW, FL("failed with status %d"), status);
+		sme_warn("failed with status %d", status);
 		if (cmd)
 			csr_release_command_scan(mac_ctx, cmd);
 	}
@@ -1157,7 +1136,8 @@ QDF_STATUS csr_scan_handle_search_for_ssid(tpAniSirGlobal pMac,
 
 	do {
 		/* If this scan is for LFR */
-		if (pMac->roam.neighborRoamInfo[sessionId].uOsRequestedHandoff) {
+		if (pMac->roam.neighborRoamInfo[sessionId].
+					uOsRequestedHandoff) {
 			/* notify LFR state m/c */
 			status = csr_neighbor_roam_sssid_scan_done(pMac,
 						sessionId, QDF_STATUS_SUCCESS);
@@ -1172,8 +1152,7 @@ QDF_STATUS csr_scan_handle_search_for_ssid(tpAniSirGlobal pMac,
 		 * the newer roam command is the one to execute
 		 */
 		if (csr_is_roam_command_waiting_for_session(pMac, sessionId)) {
-			sms_log(pMac, LOGW,
-				FL("aborts because roam command waiting"));
+			sme_warn("aborts because roam command waiting");
 			break;
 		}
 		if (pProfile == NULL)
@@ -1192,8 +1171,7 @@ QDF_STATUS csr_scan_handle_search_for_ssid(tpAniSirGlobal pMac,
 			break;
 		if (pMac->roam.roamSession[sessionId].connectState ==
 				eCSR_ASSOC_STATE_TYPE_INFRA_DISCONNECTING) {
-			sms_log(pMac, LOGE,
-				FL("upper layer issued disconnetion"));
+			sme_err("upper layer issued disconnetion");
 			status = QDF_STATUS_E_FAILURE;
 			break;
 		}
@@ -1204,9 +1182,8 @@ QDF_STATUS csr_scan_handle_search_for_ssid(tpAniSirGlobal pMac,
 	} while (0);
 
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		if (CSR_INVALID_SCANRESULT_HANDLE != hBSSList) {
+		if (CSR_INVALID_SCANRESULT_HANDLE != hBSSList)
 			csr_scan_result_purge(pMac, hBSSList);
-		}
 		/* We haven't done anything to this profile */
 		csr_roam_call_callback(pMac, sessionId, NULL,
 				       pCommand->u.scanCmd.roamId,
@@ -1230,7 +1207,7 @@ QDF_STATUS csr_scan_handle_search_for_ssid_failure(tpAniSirGlobal pMac,
 	eCsrRoamResult roam_result;
 
 	if (!pSession) {
-		sms_log(pMac, LOGE, FL("session %d not found"), sessionId);
+		sme_err("session %d not found", sessionId);
 		return QDF_STATUS_E_FAILURE;
 	}
 	/* If this scan is for LFR */
@@ -1249,7 +1226,7 @@ QDF_STATUS csr_scan_handle_search_for_ssid_failure(tpAniSirGlobal pMac,
 		&pCommand->u.scanCmd.u.scanRequest.SSIDs.SSIDList[0].SSID;
 		qdf_mem_copy(str, ptr_ssid->ssId, ptr_ssid->length);
 		str[ptr_ssid->length] = 0;
-		sms_log(pMac, LOGW, FL("SSID = %s"), str);
+		sme_debug("SSID: %s", str);
 	}
 #endif
 	/*
@@ -1261,8 +1238,8 @@ QDF_STATUS csr_scan_handle_search_for_ssid_failure(tpAniSirGlobal pMac,
 				eCsrHddIssued, pCommand->u.scanCmd.roamId,
 				true, true);
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
-			sms_log(pMac, LOGE,
-				FL("failed to issue startIBSS, status: 0x%08X"),
+			sme_err(
+				"failed to issue startIBSS, status: 0x%08X",
 				status);
 			csr_roam_call_callback(pMac, sessionId, NULL,
 				pCommand->u.scanCmd.roamId, eCSR_ROAM_FAILED,
@@ -1282,9 +1259,9 @@ QDF_STATUS csr_scan_handle_search_for_ssid_failure(tpAniSirGlobal pMac,
 		qdf_mem_set(&roamInfo, sizeof(tCsrRoamInfo), 0);
 		pRoamInfo = &roamInfo;
 		if (pCommand->u.roamCmd.pRoamBssEntry) {
-			tCsrScanResult *pScanResult = GET_BASE_ADDR(
+			struct tag_csrscan_result *pScanResult = GET_BASE_ADDR(
 				pCommand->u.roamCmd.pRoamBssEntry,
-				tCsrScanResult, Link);
+				struct tag_csrscan_result, Link);
 			roamInfo.pBssDesc = &pScanResult->Result.BssDescriptor;
 		}
 		roamInfo.statusCode = pSession->joinFailStatusCode.statusCode;
@@ -1310,7 +1287,8 @@ QDF_STATUS csr_scan_result_purge(tpAniSirGlobal pMac,
 				 tScanResultHandle hScanList)
 {
 	QDF_STATUS status = QDF_STATUS_E_INVAL;
-	tScanResultList *pScanList = (tScanResultList *) hScanList;
+	struct scan_result_list *pScanList =
+				(struct scan_result_list *) hScanList;
 
 	if (pScanList) {
 		status = csr_ll_scan_purge_result(pMac, &pScanList->List);
@@ -1334,21 +1312,21 @@ void csr_remove_bssid_from_scan_list(tpAniSirGlobal mac_ctx,
 			tSirMacAddr bssid)
 {
 	tListElem *entry, *free_elem;
-	tCsrScanResult *bss_desc;
+	struct tag_csrscan_result *bss_desc;
 	tDblLinkList *list = &mac_ctx->scan.scanResultList;
 
 	csr_ll_lock(list);
 	entry = csr_ll_peek_head(list, LL_ACCESS_NOLOCK);
 	while (entry != NULL) {
-		bss_desc = GET_BASE_ADDR(entry, tCsrScanResult, Link);
+		bss_desc = GET_BASE_ADDR(entry, struct tag_csrscan_result,
+					Link);
 		if (!qdf_mem_cmp(bss_desc->Result.BssDescriptor.bssId,
 		   bssid, sizeof(tSirMacAddr))) {
 			free_elem = entry;
 			entry = csr_ll_next(list, entry, LL_ACCESS_NOLOCK);
 			csr_ll_remove_entry(list, free_elem, LL_ACCESS_NOLOCK);
 			csr_free_scan_result_entry(mac_ctx, bss_desc);
-			sms_log(mac_ctx, LOGW, FL("Removed BSS entry:%pM"),
-				bssid);
+			sme_warn("Removed BSS entry:%pM", bssid);
 			continue;
 		}
 
@@ -1370,6 +1348,7 @@ void csr_remove_bssid_from_scan_list(tpAniSirGlobal mac_ctx,
 static int csr_derive_prefer_value_from_rssi(tpAniSirGlobal mac_ctx, int rssi)
 {
 	int i = CSR_NUM_RSSI_CAT - 1, pref_val = 0;
+
 	while (i >= 0) {
 		if (rssi >= mac_ctx->roam.configParam.RSSICat[i]) {
 			pref_val = mac_ctx->roam.configParam.BssPreferValue[i];
@@ -1381,17 +1360,21 @@ static int csr_derive_prefer_value_from_rssi(tpAniSirGlobal mac_ctx, int rssi)
 }
 
 /**
- * is_channel_found_in_pcl() - to check if channel is present in pcl
+ * csr_get_pcl_weight_of_channel() - Get PCL weight if channel is present in pcl
  * @mac_ctx: Global MAC Context
  * @channel_id: channel of bss
  * @filter: pointer to filter created through profile
+ * @pcl_chan_weight: Get PCL weight for corresponding channel
+ * @weight_list: Weight list for all the pcl channels.
  *
- * to check if provided channel is present in pcl
+ * Get pcl_chan_weight if provided channel is present in pcl list
  *
  * Return: true or false
  */
-static bool is_channel_found_in_pcl(tpAniSirGlobal mac_ctx, int channel_id,
-		tCsrScanResultFilter *filter)
+static bool csr_get_pcl_weight_of_channel(tpAniSirGlobal mac_ctx,
+		int channel_id,
+		tCsrScanResultFilter *filter, int *pcl_chan_weight,
+		uint8_t *weight_list)
 {
 	int i;
 	bool status = false;
@@ -1401,6 +1384,7 @@ static bool is_channel_found_in_pcl(tpAniSirGlobal mac_ctx, int channel_id,
 
 	for (i = 0; i < filter->pcl_channels.numChannels; i++) {
 		if (filter->pcl_channels.channelList[i] == channel_id) {
+			*pcl_chan_weight = weight_list[i];
 			status = true;
 			break;
 		}
@@ -1459,8 +1443,7 @@ static int csr_get_altered_rssi(tpAniSirGlobal mac_ctx, int rssi,
 			modified_rssi -= CSR_MAX(roam_params->max_drop_rssi_5g,
 						penalty_factor);
 		}
-		sms_log(mac_ctx, LOG2,
-			FL("5G BSSID"MAC_ADDRESS_STR" AR=%d, MR=%d, ch=%d"),
+		sme_debug("5G BSSID"MAC_ADDRESS_STR" AR=%d, MR=%d, ch=%d",
 			MAC_ADDR_ARRAY(local_bssid.bytes),
 			rssi, modified_rssi, channel_id);
 	}
@@ -1477,8 +1460,8 @@ static int csr_get_altered_rssi(tpAniSirGlobal mac_ctx, int rssi,
 			if (!qdf_is_macaddr_equal(&fav_bssid, bssid))
 				continue;
 			modified_rssi += roam_params->bssid_favored_factor[i];
-			sms_log(mac_ctx, LOG2,
-				FL("Pref"MAC_ADDRESS_STR" AR=%d, MR=%d, ch=%d"),
+			sme_debug(
+				"Pref"MAC_ADDRESS_STR" AR=%d, MR=%d, ch=%d",
 				MAC_ADDR_ARRAY(local_bssid.bytes),
 				rssi, modified_rssi, channel_id);
 		}
@@ -1521,10 +1504,10 @@ static uint32_t csr_get_bss_cap_value(tpAniSirGlobal pMac,
 				      tDot11fBeaconIEs *pIes)
 {
 	uint32_t ret = CSR_BSS_CAP_VALUE_NONE;
+
 	if (CSR_IS_ROAM_PREFER_5GHZ(pMac) || CSR_IS_SELECT_5G_PREFERRED(pMac)) {
-		if ((pBssDesc) && CDS_IS_CHANNEL_5GHZ(pBssDesc->channelId)) {
+		if ((pBssDesc) && CDS_IS_CHANNEL_5GHZ(pBssDesc->channelId))
 			ret += CSR_BSS_CAP_VALUE_5GHZ;
-		}
 	}
 	/*
 	 * if strict select 5GHz is non-zero then ignore the capability checking
@@ -1538,66 +1521,20 @@ static uint32_t csr_get_bss_cap_value(tpAniSirGlobal pMac,
 		if (CSR_IS_QOS_BSS(pIes)) {
 			ret += CSR_BSS_CAP_VALUE_WMM;
 			/* Give advantage to UAPSD */
-			if (CSR_IS_UAPSD_BSS(pIes)) {
+			if (CSR_IS_UAPSD_BSS(pIes))
 				ret += CSR_BSS_CAP_VALUE_UAPSD;
-			}
 		}
 	}
 
 	return ret;
 }
-
-/**
- * csr_is_better_rssi() - Is bss1 better than bss2
- * @mac_ctx:             Global MAC Context pointer.
- * @bss1:                Pointer to the first BSS.
- * @bss2:                Pointer to the second BSS.
- *
- * This routine helps in determining the preference value
- * of a particular BSS in the scan result which is further
- * used in the sorting logic of the final candidate AP's.
- *
- * Return:          true, if bss1 is better than bss2
- *                  false, if bss2 is better than bss1.
- */
-static bool csr_is_better_rssi(tpAniSirGlobal mac_ctx,
-		tCsrScanResult *bss1, tCsrScanResult *bss2)
-{
-	bool ret;
-	int rssi1, rssi2;
-	struct qdf_mac_addr local_mac;
-
-	rssi1 = bss1->Result.BssDescriptor.rssi;
-	rssi2 = bss2->Result.BssDescriptor.rssi;
-	/*
-	 * Apply the boost and penlty logic and check
-	 * which is the best RSSI
-	 */
-	qdf_mem_zero(&local_mac.bytes, QDF_MAC_ADDR_SIZE);
-	qdf_mem_copy(&local_mac.bytes,
-			&bss1->Result.BssDescriptor.bssId, QDF_MAC_ADDR_SIZE);
-	rssi1 = csr_get_altered_rssi(mac_ctx, rssi1,
-			bss1->Result.BssDescriptor.channelId,
-			&local_mac);
-	qdf_mem_copy(&local_mac.bytes,
-			&bss2->Result.BssDescriptor.bssId, QDF_MAC_ADDR_SIZE);
-	rssi2 = csr_get_altered_rssi(mac_ctx, rssi2,
-			bss2->Result.BssDescriptor.channelId,
-			&local_mac);
-	if (CSR_IS_BETTER_RSSI(rssi1, rssi2))
-		ret = true;
-	else
-		ret = false;
-	return ret;
-}
-
 /**
  * csr_is_better_bss() - Is bss1 better than bss2
  * @mac_ctx:             Global MAC Context pointer.
  * @bss1:                Pointer to the first BSS.
  * @bss2:                Pointer to the second BSS.
  *
- * This routine helps in determining the preference value
+ * This function helps in determining the preference value
  * of a particular BSS in the scan result which is further
  * used in the sorting logic of the final candidate AP's.
  *
@@ -1605,35 +1542,20 @@ static bool csr_is_better_rssi(tpAniSirGlobal mac_ctx,
  *                  false, if bss2 is better than bss1.
  */
 static bool csr_is_better_bss(tpAniSirGlobal mac_ctx,
-	tCsrScanResult *bss1, tCsrScanResult *bss2)
+	struct tag_csrscan_result *bss1, struct tag_csrscan_result *bss2)
 {
 	bool ret;
-
-	if (CSR_IS_BETTER_PREFER_VALUE(bss1->preferValue, bss2->preferValue)) {
+	if (CSR_IS_BETTER_PREFER_VALUE(bss1->bss_score,
+				bss2->bss_score))
 		ret = true;
-	} else if (CSR_IS_EQUAL_PREFER_VALUE
-			(bss1->preferValue, bss2->preferValue)) {
-		if (CSR_IS_BETTER_CAP_VALUE(bss1->capValue, bss2->capValue))
-			ret = true;
-		else if (CSR_IS_EQUAL_CAP_VALUE
-				(bss1->capValue, bss2->capValue)) {
-			if (csr_is_better_rssi(mac_ctx, bss1, bss2))
-				ret = true;
-			else
-				ret = false;
-		} else {
-			ret = false;
-		}
-	} else {
+	else
 		ret = false;
-	}
-
 	return ret;
 }
 
 /* Add the channel to the occupiedChannels array */
 static void csr_scan_add_to_occupied_channels(tpAniSirGlobal pMac,
-					tCsrScanResult *pResult,
+					struct tag_csrscan_result *pResult,
 					uint8_t sessionId,
 					tCsrChannel *occupied_ch,
 					tDot11fBeaconIEs *pIes,
@@ -1660,8 +1582,7 @@ static void csr_scan_add_to_occupied_channels(tpAniSirGlobal pMac,
 					       num_occupied_ch, ch);
 	if (QDF_IS_STATUS_SUCCESS(status)) {
 		occupied_ch->numChannels++;
-		sms_log(pMac, LOG2,
-			FL("Added channel %d to the list (count=%d)"),
+		sme_debug("Added channel %d to the list (count=%d)",
 			ch, occupied_ch->numChannels);
 		if (occupied_ch->numChannels >
 		    CSR_BG_SCAN_OCCUPIED_CHANNEL_LIST_LEN)
@@ -1672,7 +1593,8 @@ static void csr_scan_add_to_occupied_channels(tpAniSirGlobal pMac,
 
 /* Put the BSS into the scan result list */
 /* pIes can not be NULL */
-static void csr_scan_add_result(tpAniSirGlobal pMac, tCsrScanResult *pResult,
+static void csr_scan_add_result(tpAniSirGlobal pMac, struct tag_csrscan_result
+				*pResult,
 				tDot11fBeaconIEs *pIes, uint32_t sessionId)
 {
 	tpCsrNeighborRoamControlInfo pNeighborRoamInfo =
@@ -1680,6 +1602,7 @@ static void csr_scan_add_result(tpAniSirGlobal pMac, tCsrScanResult *pResult,
 
 	struct qdf_mac_addr bssid;
 	uint8_t channel_id = pResult->Result.BssDescriptor.channelId;
+
 	qdf_mem_zero(&bssid.bytes, QDF_MAC_ADDR_SIZE);
 	qdf_mem_copy(bssid.bytes, &pResult->Result.BssDescriptor.bssId,
 			QDF_MAC_ADDR_SIZE);
@@ -1701,159 +1624,10 @@ static void csr_scan_add_result(tpAniSirGlobal pMac, tCsrScanResult *pResult,
 	}
 }
 
-static void
-csr_parser_scan_result_for_5ghz_preference(tpAniSirGlobal pMac,
-					   tCsrScanResultFilter *pFilter)
-{
-	bool fMatch;
-	QDF_STATUS status;
-	tListElem *pEntry;
-	tDot11fBeaconIEs *pIes;
-	tCsrScanResult *pBssDesc;
-	uint8_t i = 0;
-
-	/* Find out the best AP Rssi going thru the scan results */
-	pEntry = csr_ll_peek_head(&pMac->scan.scanResultList, LL_ACCESS_NOLOCK);
-	while (NULL != pEntry) {
-		pBssDesc = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
-		fMatch = false;
-
-		for (i = 0; pFilter && (i < pFilter->SSIDs.numOfSSIDs); i++) {
-			fMatch = csr_is_ssid_match(pMac,
-					pFilter->SSIDs.SSIDList[i].SSID.ssId,
-					pFilter->SSIDs.SSIDList[i].SSID.length,
-					pBssDesc->Result.ssId.ssId,
-					pBssDesc->Result.ssId.length, true);
-			if (!fMatch)
-				continue;
-
-			pIes = (tDot11fBeaconIEs *)(pBssDesc->Result.pvIes);
-			/* At this time, Result.pvIes may be NULL */
-			if (NULL == pIes) {
-				status = csr_get_parsed_bss_description_ies(
-						pMac,
-						&pBssDesc->Result.BssDescriptor,
-						&pIes);
-				if (!pIes && (!QDF_IS_STATUS_SUCCESS(status)))
-					continue;
-			}
-
-			sms_log(pMac, LOG1, FL("SSID Matched"));
-			if (pFilter->bOSENAssociation) {
-				fMatch = true;
-				sms_log(pMac, LOG1, FL("Security Matched"));
-				if ((pBssDesc->Result.pvIes == NULL) && pIes)
-					qdf_mem_free(pIes);
-				continue;
-			}
-#ifdef WLAN_FEATURE_11W
-			fMatch = csr_is_security_match(pMac, &pFilter->authType,
-					&pFilter->EncryptionType,
-					&pFilter->mcEncryptionType,
-					&pFilter->MFPEnabled,
-					&pFilter->MFPRequired,
-					&pFilter->MFPCapable,
-					&pBssDesc->Result.BssDescriptor,
-					pIes, NULL, NULL, NULL);
-#else
-			fMatch = csr_is_security_match(pMac, &pFilter->authType,
-					&pFilter->EncryptionType,
-					&pFilter->mcEncryptionType,
-					NULL, NULL, NULL,
-					&pBssDesc->Result.BssDescriptor,
-					pIes, NULL, NULL, NULL);
-#endif
-			if ((pBssDesc->Result.pvIes == NULL) && pIes)
-				qdf_mem_free(pIes);
-			if (fMatch)
-				sms_log(pMac, LOG1, FL("Security Matched"));
-		} /* for loop ends */
-
-		if (fMatch
-		    && (pBssDesc->Result.BssDescriptor.rssi >
-			pMac->scan.inScanResultBestAPRssi)) {
-			sms_log(pMac, LOG1,
-				FL("Best AP Rssi changed from %d to %d"),
-				pMac->scan.inScanResultBestAPRssi,
-				pBssDesc->Result.BssDescriptor.rssi);
-			pMac->scan.inScanResultBestAPRssi =
-				pBssDesc->Result.BssDescriptor.rssi;
-		}
-		pEntry = csr_ll_next(&pMac->scan.scanResultList, pEntry,
-				     LL_ACCESS_NOLOCK);
-	}
-}
-
-static void
-csr_prefer_5ghz(tpAniSirGlobal pMac, tCsrScanResultFilter *pFilter)
-{
-	tListElem *pEntry;
-	tCsrScanResult *pBssDesc;
-	struct roam_ext_params *roam_params = NULL;
-
-	if (!pMac->roam.configParam.nSelect5GHzMargin &&
-		!CSR_IS_SELECT_5G_PREFERRED(pMac))
-		return;
-
-	pMac->scan.inScanResultBestAPRssi = -128;
-	roam_params = &pMac->roam.configParam.roam_params;
-#ifdef WLAN_DEBUG_ROAM_OFFLOAD
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
-		  FL("nSelect5GHzMargin"));
-#endif
-	csr_ll_lock(&pMac->scan.scanResultList);
-	/*
-	 * For 5G preference feature, there is no
-	 * need to check the filter match and also re-program the
-	 * RSSI bucket categories, since we use the RSSI values
-	 * while setting the preference value for the BSS.
-	 * There is no need to check the match for roaming since
-	 * it is already done.
-	 */
-	if (!CSR_IS_SELECT_5G_PREFERRED(pMac))
-		csr_parser_scan_result_for_5ghz_preference(pMac, pFilter);
-	if (-128 != pMac->scan.inScanResultBestAPRssi ||
-		CSR_IS_SELECT_5G_PREFERRED(pMac)) {
-		sms_log(pMac, LOG1, FL("Best AP Rssi is %d"),
-			pMac->scan.inScanResultBestAPRssi);
-		/* Modify Rssi category based on best AP Rssi */
-		if (-128 != pMac->scan.inScanResultBestAPRssi)
-			csr_assign_rssi_for_category(pMac,
-					pMac->scan.inScanResultBestAPRssi,
-					pMac->roam.configParam.bCatRssiOffset);
-		pEntry = csr_ll_peek_head(&pMac->scan.scanResultList,
-					  LL_ACCESS_NOLOCK);
-		while (NULL != pEntry) {
-			pBssDesc = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
-			/*
-			 * re-assign preference value based on modified
-			 * rssi bucket (or) 5G Preference feature.
-			 */
-			pBssDesc->preferValue = csr_get_bss_prefer_value(pMac,
-				(int)pBssDesc->Result.BssDescriptor.rssi,
-				(struct qdf_mac_addr *)
-				&pBssDesc->Result.BssDescriptor.bssId,
-				pBssDesc->Result.BssDescriptor.channelId);
-
-			sms_log(pMac, LOG2, FL("BSSID("MAC_ADDRESS_STR") Rssi(%d) Chnl(%d) PrefVal(%u) SSID=%.*s"),
-				MAC_ADDR_ARRAY(
-					pBssDesc->Result.BssDescriptor.bssId),
-				pBssDesc->Result.BssDescriptor.rssi,
-				pBssDesc->Result.BssDescriptor.channelId,
-				pBssDesc->preferValue,
-				pBssDesc->Result.ssId.length,
-				pBssDesc->Result.ssId.ssId);
-			pEntry = csr_ll_next(&pMac->scan.scanResultList, pEntry,
-					     LL_ACCESS_NOLOCK);
-		}
-	}
-	csr_ll_unlock(&pMac->scan.scanResultList);
-}
-
 static QDF_STATUS
 csr_save_ies(tpAniSirGlobal pMac,
 	     tCsrScanResultFilter *pFilter,
-	     tCsrScanResult *pBssDesc,
+	     struct tag_csrscan_result *pBssDesc,
 	     tDot11fBeaconIEs **pNewIes,
 	     bool *fMatch,
 	     eCsrEncryptionType *uc,
@@ -1894,7 +1668,7 @@ csr_save_ies(tpAniSirGlobal pMac,
 	*pNewIes = qdf_mem_malloc(sizeof(tDot11fBeaconIEs));
 	if (NULL == *pNewIes) {
 		status = QDF_STATUS_E_NOMEM;
-		sms_log(pMac, LOGE, FL("fail to allocate memory for IEs"));
+		sme_err("fail to allocate memory for IEs");
 		/* Need to free memory allocated by csr_match_bss */
 		if (!pBssDesc->Result.pvIes)
 			qdf_mem_free(pIes);
@@ -1904,36 +1678,257 @@ csr_save_ies(tpAniSirGlobal pMac,
 	return status;
 }
 
+/**
+ * _csr_calculate_bss_score () - Calculate BSS score based on AP capabilty
+ *                              and channel condition for best candidate
+ *                              selection
+ * @bss_info: bss information
+ * @pcl_chan_weight: pcl weight of BSS channel
+ * @nss: NSS supported by station
+ *
+ * Return : int32_t
+ */
+static int32_t _csr_calculate_bss_score(tSirBssDescription *bss_info,
+		int pcl_chan_weight, int nss)
+{
+	int32_t score = 0;
+	int32_t ap_load = 0;
+	int32_t normalised_width = BEST_CANDIDATE_20MHZ;
+	int32_t pcl_score = 0;
+	int32_t temp_pcl_chan_weight = 0;
+	int8_t  ap_nss = 0;
+	int32_t est_air_time_percentage = 0;
+	int32_t congestion = 0;
+	int32_t rssi_diff = 0;
+	int32_t rssi_weight = 0;
+
+	/*
+	 * Total weight of a BSSID is calculated on basis of 100 in which
+	 * contribution of every factor is considered like this.
+	 * RSSI: RSSI_WEIGHTAGE : 25
+	 * HT_CAPABILITY_WEIGHTAGE: 7
+	 * VHT_CAP_WEIGHTAGE: 5
+	 * BEAMFORMING_CAP_WEIGHTAGE: 2
+	 * CHAN_WIDTH_WEIGHTAGE:10
+	 * CHAN_BAND_WEIGHTAGE: 5
+	 * NSS: 5
+	 * PCL: 10
+	 * CHANNEL_CONGESTION: 5
+	 * Reserved : 31
+	 */
+	/*
+	 * Further bucketization of rssi is also done out of 25 score.
+	 * RSSI > -55=> weight = 2500
+	 * RSSI > -60=> weight = 2250
+	 * RSSI >-65 =>weight = 2000
+	 * RSSI > -70=> weight = 1750
+	 * RSSI > -75=> weight = 1500
+	 * RSSI > -80=> weight = 1250
+	 */
+	if (bss_info->rssi) {
+		/*
+		 * if RSSI of AP is less then -80, driver should ignore that
+		 * candidate.
+		 */
+		if (bss_info->rssi < BAD_RSSI) {
+			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
+			FL("Drop this BSS "MAC_ADDRESS_STR " due to low rssi %d"),
+			MAC_ADDR_ARRAY(bss_info->bssId), bss_info->rssi);
+			score = 0;
+			return score;
+		}
+		if (bss_info->rssi >= EXCELLENT_RSSI) {
+			rssi_weight = EXCELLENT_RSSI_WEIGHT *
+					RSSI_WEIGHTAGE;
+		} else {
+			rssi_diff = EXCELLENT_RSSI -
+				bss_info->rssi;
+			do_div(rssi_diff, 5);
+			rssi_weight = (rssi_diff + 1) * RSSI_WEIGHT_BUCKET;
+			rssi_weight = (EXCELLENT_RSSI_WEIGHT *
+					RSSI_WEIGHTAGE) - rssi_weight;
+
+		}
+		score += rssi_weight;
+	}
+
+	/* If BSS is in PCL list extra pcl Weight is added n % */
+	if (pcl_chan_weight) {
+		temp_pcl_chan_weight =
+			(MAX_WEIGHT_OF_PCL_CHANNELS - pcl_chan_weight);
+		do_div(temp_pcl_chan_weight,
+				PCL_GROUPS_WEIGHT_DIFFERENCE);
+		pcl_score = PCL_WEIGHT - temp_pcl_chan_weight;
+
+		if (pcl_score < 0)
+			pcl_score = 0;
+
+		score += pcl_score * BEST_CANDIDATE_MAX_WEIGHT;
+	}
+	/* If AP supports HT caps, extra 10% score will be added */
+	if (bss_info->ht_caps_present)
+		score += BEST_CANDIDATE_MAX_WEIGHT * HT_CAPABILITY_WEIGHTAGE;
+
+	/* If AP supports VHT caps, Extra 6% score will be added to score */
+	if (bss_info->vht_caps_present)
+		score += BEST_CANDIDATE_MAX_WEIGHT * VHT_CAP_WEIGHTAGE;
+
+	/* If AP supports beam forming, extra 2% score will be added to score.*/
+	if (bss_info->beacomforming_capable)
+		score += BEST_CANDIDATE_MAX_WEIGHT * BEAMFORMING_CAP_WEIGHTAGE;
+
+	/*
+	 * Channel width is again calculated on basis of 100.
+	 * Where if AP is
+	 * 80MHZ = 100
+	 * 40MHZ = 70
+	 * 20MHZ = 30 weightage is given out of 100.
+	 * Channel width weightage is given as CHAN_WIDTH_WEIGHTAGE (10%).
+	 */
+	if (bss_info->chan_width == eHT_CHANNEL_WIDTH_80MHZ)
+		normalised_width = BEST_CANDIDATE_80MHZ;
+	else if (bss_info->chan_width == eHT_CHANNEL_WIDTH_40MHZ)
+		normalised_width = BEST_CANDIDATE_40MHZ;
+	else
+		normalised_width = BEST_CANDIDATE_20MHZ;
+	score += normalised_width * CHAN_WIDTH_WEIGHTAGE;
+
+	/* If AP is on 5Ghz channel , extra score of 5% is added to BSS score.*/
+	if (get_rf_band(bss_info->channelId) == SIR_BAND_5_GHZ &&
+			bss_info->rssi > RSSI_THRESHOLD_5GHZ)
+		score += BEST_CANDIDATE_MAX_WEIGHT * CHAN_BAND_WEIGHTAGE;
+	/*
+	 * If ESP is being transmitted by the AP, use the estimated airtime for
+	 * AC_BE from that, Estimated airtime 0-25% = 120, 25-50% = 250, 50-75%
+	 * = 370, 75-100% = 500.
+	 * Else if QBSSLoad is being transmitted and QBSSLoad < 25% = 500
+	 * else assing default weight of 370
+	 */
+
+	if (bss_info->air_time_fraction) {
+		/* Convert 0-255 range to percentage */
+		est_air_time_percentage =
+			bss_info->air_time_fraction * ROAM_MAX_CHANNEL_WEIGHT;
+		do_div(est_air_time_percentage,
+				MAX_ESTIMATED_AIR_TIME_FRACTION);
+		/*
+		 * Calculate channel congestion from estimated air time
+		 * fraction.
+		 */
+		congestion = MAX_CHANNEL_UTILIZATION - est_air_time_percentage;
+
+		if (congestion >= LOW_CHANNEL_CONGESTION &&
+				congestion < MODERATE_CHANNEL_CONGESTION)
+			score += LOW_CHANNEL_CONGESTION_WEIGHT;
+		else if (congestion >= MODERATE_CHANNEL_CONGESTION &&
+				congestion < CONSIDERABLE_CHANNEL_CONGESTION)
+			score += MODERATE_CHANNEL_CONGESTION_WEIGHT;
+		else if (congestion >= CONSIDERABLE_CHANNEL_CONGESTION &&
+				congestion < HIGH_CHANNEL_CONGESTION)
+			score += CONSIDERABLE_CHANNEL_CONGESTION_WEIGHT;
+		else
+			score += HIGH_CHANNEL_CONGESTION_WEIGHT;
+	} else if (bss_info->QBSSLoad_present) {
+		ap_load = (bss_info->qbss_chan_load *
+				BEST_CANDIDATE_MAX_WEIGHT);
+		/*
+		 * Calculate ap_load in % from qbss channel load from 0-255
+		 * range
+		 */
+		do_div(ap_load, MAX_AP_LOAD);
+		congestion = ap_load;
+		if (congestion < MODERATE_CHANNEL_CONGESTION)
+			score += LOW_CHANNEL_CONGESTION_WEIGHT;
+		else
+			score += HIGH_CHANNEL_CONGESTION_WEIGHT;
+	} else {
+		score += MODERATE_CHANNEL_CONGESTION_WEIGHT;
+	}
+	ap_nss = bss_info->nss;
+	if (wma_is_current_hwmode_dbs())
+		nss--;
+	if (nss == 2 && ap_nss == 1)
+		score += BEST_CANDIDATE_MAX_WEIGHT * NSS_1X1_WEIGHTAGE;
+	else
+		score += BEST_CANDIDATE_MAX_WEIGHT * NSS_WEIGHTAGE;
+
+	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
+		FL("BSSID:"MAC_ADDRESS_STR" rssi=%d htcaps=%d vht=%d bw=%d channel=%d beamforming=%d ap_load=%d est_air_time_percentage=%d pcl_score %d Final Score %d ap_NSS %d  nss %d"),
+		MAC_ADDR_ARRAY(bss_info->bssId),
+		bss_info->rssi, bss_info->ht_caps_present,
+		bss_info->vht_caps_present, bss_info->chan_width,
+		bss_info->channelId,
+		bss_info->beacomforming_capable, ap_load,
+		est_air_time_percentage,
+		pcl_score,
+		score, ap_nss, nss);
+
+	return score;
+}
+/**
+ * csr_calculate_bss_score() - Calculate candidate AP score for Best
+ * candidate selection for connection
+ * @mac_ctx: Pointer to mac context
+ * @bss: BSSID
+ * @pcl_chan_weight: pcl weight for bss channel
+ *
+ * Return: void
+ *
+ * Calculate candidate AP score for Best candidate selection for connection.
+ */
+static void csr_calculate_bss_score(tpAniSirGlobal pMac,
+		struct tag_csrscan_result *pBss,
+		int pcl_chan_weight)
+{
+	int32_t score = 0;
+	int channel_id;
+	int nss = 1;
+	tSirBssDescription *bss_info = &(pBss->Result.BssDescriptor);
+
+	channel_id = cds_get_channel_enum(pBss->Result.BssDescriptor.channelId);
+	if (pMac->roam.configParam.enable2x2)
+		nss = 2;
+
+	if (channel_id < NUM_CHANNELS)
+		score = _csr_calculate_bss_score(bss_info,
+			pcl_chan_weight, nss);
+
+	pBss->bss_score = score;
+	return;
+}
+
 static QDF_STATUS
 csr_save_scan_entry(tpAniSirGlobal pMac,
-		    tCsrScanResultFilter *pFilter,
-		    bool fMatch,
-		    tCsrScanResult *pBssDesc,
-		    tDot11fBeaconIEs *pNewIes,
-		    tScanResultList *pRetList,
-		    uint32_t *count,
-		    eCsrEncryptionType uc,
-		    eCsrEncryptionType mc,
-		    eCsrAuthType *auth)
+		tCsrScanResultFilter *pFilter,
+		bool fMatch,
+		struct tag_csrscan_result *pBssDesc,
+		tDot11fBeaconIEs *pNewIes,
+		struct scan_result_list *pRetList,
+		uint32_t *count,
+		eCsrEncryptionType uc,
+		eCsrEncryptionType mc,
+		eCsrAuthType *auth,
+		uint8_t *weight_list)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
-	tCsrScanResult *pResult;
+	struct tag_csrscan_result *pResult;
 	uint32_t bssLen, allocLen;
 	/* To sort the list */
 	tListElem *pTmpEntry;
-	tCsrScanResult *pTmpResult;
+	struct tag_csrscan_result *pTmpResult;
+	int pcl_chan_weight = 0;
 
 	if (!(NULL == pFilter || fMatch))
 		return status;
 
 	bssLen = pBssDesc->Result.BssDescriptor.length +
 		sizeof(pBssDesc->Result.BssDescriptor.length);
-	allocLen = sizeof(tCsrScanResult) + bssLen;
+	allocLen = sizeof(struct tag_csrscan_result) + bssLen;
 	pResult = qdf_mem_malloc(allocLen);
 	if (NULL == pResult) {
 		status = QDF_STATUS_E_NOMEM;
-		sms_log(pMac, LOGE,
-			FL("fail to allocate memory for scan result, len=%d"),
+		sme_err(
+			"fail to allocate memory for scan result, len: %d",
 			allocLen);
 		if (pNewIes)
 			qdf_mem_free(pNewIes);
@@ -1948,10 +1943,28 @@ csr_save_scan_entry(tpAniSirGlobal pMac,
 	pResult->Result.timer = pBssDesc->Result.timer;
 	/* save the pIes for later use */
 	pResult->Result.pvIes = pNewIes;
+	pResult->bss_score = 0;
 	/* save bss description */
 	qdf_mem_copy(&pResult->Result.BssDescriptor,
 		     &pBssDesc->Result.BssDescriptor,
 		     bssLen);
+	/*
+	 * calculate pcl_chan_weight from weight list to honor PCL list
+	 */
+	if (pFilter  && pFilter->pcl_channels.numChannels > 0 &&
+		(pBssDesc->Result.BssDescriptor.rssi > PCL_RSSI_THRESHOLD)) {
+		if (csr_get_pcl_weight_of_channel(pMac,
+				pBssDesc->Result.BssDescriptor.channelId,
+				pFilter, &pcl_chan_weight, weight_list)) {
+			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
+				FL(" pcl channel %d pcl_chan_weight %d"),
+				pBssDesc->Result.BssDescriptor.channelId,
+				pcl_chan_weight);
+		}
+	}
+	if (pFilter)
+		csr_calculate_bss_score(pMac, pResult, pcl_chan_weight);
+
 	/*
 	 * No need to lock pRetList because it is locally allocated and no
 	 * outside can access it at this time
@@ -1964,26 +1977,20 @@ csr_save_scan_entry(tpAniSirGlobal pMac,
 	}
 	if (pFilter &&
 	   !qdf_mem_cmp(pResult->Result.BssDescriptor.bssId,
-	   pFilter->bssid_hint.bytes, QDF_MAC_ADDR_SIZE)) {
+	   pFilter->bssid_hint.bytes, QDF_MAC_ADDR_SIZE) &&
+	   pMac->roam.configParam.is_bssid_hint_priority) {
 		/* bssid hint AP should be on head */
 		csr_ll_insert_head(&pRetList->List,
 			&pResult->Link, LL_ACCESS_NOLOCK);
 		(*count)++;
+		pResult->bss_score = BEST_CANDIDATE_MAX_BSS_SCORE;
 		return status;
 	}
-
 	pTmpEntry = csr_ll_peek_head(&pRetList->List, LL_ACCESS_NOLOCK);
 	while (pTmpEntry) {
-		pTmpResult = GET_BASE_ADDR(pTmpEntry, tCsrScanResult, Link);
+		pTmpResult = GET_BASE_ADDR(pTmpEntry, struct tag_csrscan_result,
+					Link);
 
-		/* Skip the bssid hint AP, as it should be on head */
-		if (pFilter &&
-		   !qdf_mem_cmp(pTmpResult->Result.BssDescriptor.bssId,
-		   pFilter->bssid_hint.bytes, QDF_MAC_ADDR_SIZE)) {
-			pTmpEntry = csr_ll_next(&pRetList->List,
-					pTmpEntry, LL_ACCESS_NOLOCK);
-			continue;
-		}
 		if (csr_is_better_bss(pMac, pResult, pTmpResult)) {
 			csr_ll_insert_entry(&pRetList->List, pTmpEntry,
 					    &pResult->Link, LL_ACCESS_NOLOCK);
@@ -2003,70 +2010,16 @@ csr_save_scan_entry(tpAniSirGlobal pMac,
 	return status;
 }
 
-/**
- * csr_calc_pref_val_by_pcl() - to calculate preferred value
- * @mac_ctx: mac context
- * @filter: filter to find match from scan result
- * @bss_descr: pointer to bss descriptor
- *
- * this routine calculates the new preferred value to be given to
- * provided bss if its channel falls under preferred channel list.
- * Thump rule is higer the RSSI better the boost.
- *
- * Return: success or failure
- */
-static QDF_STATUS csr_calc_pref_val_by_pcl(tpAniSirGlobal mac_ctx,
-			tCsrScanResultFilter *filter,
-			tCsrScanResult *bss_descr)
-{
-	int temp_rssi = 0, new_pref_val = 0;
-	int orig_pref_val = 0;
-
-	if (NULL == mac_ctx || NULL == bss_descr)
-		return QDF_STATUS_E_FAILURE;
-	if (filter && (0 != filter->BSSIDs.numOfBSSIDs)) {
-		sms_log(mac_ctx, LOGW,
-			FL("filter has specific bssid, no point of boosting"));
-		return QDF_STATUS_SUCCESS;
-	}
-
-	if (is_channel_found_in_pcl(mac_ctx,
-			bss_descr->Result.BssDescriptor.channelId, filter) &&
-		(bss_descr->Result.BssDescriptor.rssi > PCL_RSSI_THRESHOLD)) {
-		orig_pref_val = csr_derive_prefer_value_from_rssi(mac_ctx,
-					bss_descr->Result.BssDescriptor.rssi);
-		temp_rssi = bss_descr->Result.BssDescriptor.rssi +
-				(PCL_ADVANTAGE/(CSR_NUM_RSSI_CAT -
-							orig_pref_val));
-		if (temp_rssi > 0)
-			temp_rssi = 0;
-		new_pref_val = csr_derive_prefer_value_from_rssi(mac_ctx,
-					temp_rssi);
-
-		sms_log(mac_ctx, LOG1,
-			FL("%pM: rssi:%d org pref=%d temp rssi:%d new pref=%d pref=%d updated pref=%d"),
-			bss_descr->Result.BssDescriptor.bssId,
-			bss_descr->Result.BssDescriptor.rssi,
-			orig_pref_val, temp_rssi, new_pref_val,
-			bss_descr->preferValue,
-			CSR_MAX(new_pref_val, bss_descr->preferValue));
-
-		bss_descr->preferValue =
-			CSR_MAX(new_pref_val, bss_descr->preferValue);
-	}
-	return QDF_STATUS_SUCCESS;
-}
-
 static QDF_STATUS
 csr_parse_scan_results(tpAniSirGlobal pMac,
 		       tCsrScanResultFilter *pFilter,
-		       tScanResultList *pRetList,
+		       struct scan_result_list *pRetList,
 		       uint32_t *count)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	tListElem *pEntry;
 	bool fMatch = false;
-	tCsrScanResult *pBssDesc = NULL;
+	struct tag_csrscan_result *pBssDesc = NULL;
 	tDot11fBeaconIEs *pIes, *pNewIes = NULL;
 	eCsrEncryptionType uc, mc;
 	eCsrAuthType auth = eCSR_AUTH_TYPE_OPEN_SYSTEM;
@@ -2088,11 +2041,12 @@ csr_parse_scan_results(tpAniSirGlobal pMac,
 	}
 
 	if (QDF_STATUS_E_FAILURE == status)
-		sms_log(pMac, QDF_TRACE_LEVEL_ERROR,
-			FL("Retrieving pcl failed from HDD"));
+		sme_err("Retrieving pcl failed from HDD");
+
 	pEntry = csr_ll_peek_head(&pMac->scan.scanResultList, LL_ACCESS_NOLOCK);
 	while (pEntry) {
-		pBssDesc = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		pBssDesc = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		pIes = (tDot11fBeaconIEs *) (pBssDesc->Result.pvIes);
 		/*
 		 * if pBssDesc->Result.pvIes is NULL, we need to free any memory
@@ -2104,21 +2058,14 @@ csr_parse_scan_results(tpAniSirGlobal pMac,
 		status = csr_save_ies(pMac, pFilter, pBssDesc, &pNewIes,
 				      &fMatch, &uc, &mc, &auth);
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
-			sms_log(pMac, LOG1, FL("save ies fail %d"),
-				status);
+			sme_debug("save ies fail %d", status);
 			break;
 		}
-		/*
-		 * Modify the prefer value to honor PCL list
-		 */
-		if (pFilter && pFilter->pcl_channels.numChannels > 0)
-			csr_calc_pref_val_by_pcl(pMac, pFilter, pBssDesc);
 		status = csr_save_scan_entry(pMac, pFilter, fMatch, pBssDesc,
 					     pNewIes, pRetList, count, uc, mc,
-					     &auth);
+					     &auth, weight_list);
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
-			sms_log(pMac, LOG1, FL("save entry fail %d"),
-				status);
+			sme_debug("save entry fail %d",	status);
 			break;
 		}
 		pEntry = csr_ll_next(&pMac->scan.scanResultList, pEntry,
@@ -2128,35 +2075,160 @@ csr_parse_scan_results(tpAniSirGlobal pMac,
 	return status;
 }
 
+/**
+ * csr_remove_ap_due_to_rssi() - check if bss is present in
+ * list of BSSID which rejected Assoc due to RSSI
+ * @list: rssi based rejected BSS list
+ * @bss_descr: pointer to bss description
+ *
+ * Check if the time interval indicated in last Assoc reject
+ * has expired OR rssi has improved by margin indicated
+ * in last Assoc reject. If any of the condition match remove
+ * the AP from the avoid list, else do not try to conenct
+ * to the AP
+ *
+ * Return: true if connection cannot be tried with AP else false
+ */
+static bool csr_remove_ap_due_to_rssi(qdf_list_t *list,
+	tSirBssDescription *bss_descr)
+{
+	QDF_STATUS status;
+	struct sir_rssi_disallow_lst *cur_node = NULL;
+	qdf_list_node_t *cur_lst = NULL, *next_lst = NULL;
+	qdf_time_t cur_time;
+	uint32_t time_diff;
+
+	if (!qdf_list_size(list))
+		return false;
+
+	cur_time = qdf_do_div(qdf_get_monotonic_boottime(),
+		QDF_MC_TIMER_TO_MS_UNIT);
+
+	qdf_list_peek_front(list, &cur_lst);
+	while (cur_lst) {
+		cur_node = qdf_container_of(cur_lst,
+				struct sir_rssi_disallow_lst, node);
+
+		qdf_list_peek_next(list, cur_lst, &next_lst);
+
+		time_diff = cur_time - cur_node->time_during_rejection;
+		if ((time_diff > cur_node->retry_delay)) {
+			sme_debug("Remove %pM as time diff %d is greater retry delay %d",
+				cur_node->bssid.bytes, time_diff,
+				cur_node->retry_delay);
+			status = qdf_list_remove_node(list, cur_lst);
+			if (QDF_IS_STATUS_SUCCESS(status))
+				qdf_mem_free(cur_node);
+			cur_lst = next_lst;
+			next_lst = NULL;
+			cur_node = NULL;
+			continue;
+		}
+
+		if (!qdf_mem_cmp(cur_node->bssid.bytes,
+		    bss_descr->bssId, QDF_MAC_ADDR_SIZE))
+			break;
+		cur_lst = next_lst;
+		next_lst = NULL;
+		cur_node = NULL;
+	}
+
+	if (cur_node) {
+		time_diff = cur_time - cur_node->time_during_rejection;
+		if (!(time_diff > cur_node->retry_delay ||
+		   bss_descr->rssi_raw >= cur_node->expected_rssi)) {
+			sme_err("Don't Attempt to connect %pM (time diff %d retry delay %d rssi %d expected rssi %d)",
+				cur_node->bssid.bytes, time_diff,
+				cur_node->retry_delay, bss_descr->rssi_raw,
+				cur_node->expected_rssi);
+			return true;
+		}
+		sme_debug("Remove %pM as time diff %d is greater retry delay %d or RSSI %d is greater than expected %d",
+				cur_node->bssid.bytes, time_diff,
+				cur_node->retry_delay,
+				bss_descr->rssi_raw,
+				cur_node->expected_rssi);
+		status = qdf_list_remove_node(list, cur_lst);
+		if (QDF_IS_STATUS_SUCCESS(status))
+			qdf_mem_free(cur_node);
+	}
+
+	return false;
+}
+
+/**
+ * csr_filter_ap_due_to_rssi_reject() - filter the AP who has sent
+ * assoc reject due to RSSI if condition has not improved
+ * @mac_ctx: mac context
+ * @scan_list: candidate list for the connection
+ *
+ * Return: void
+ */
+static void csr_filter_ap_due_to_rssi_reject(tpAniSirGlobal mac_ctx,
+	struct scan_result_list *scan_list)
+{
+	tListElem *cur_entry;
+	tListElem *next_entry;
+	struct tag_csrscan_result *scan_res;
+	bool remove;
+
+	if (!scan_list ||
+	   !qdf_list_size(&mac_ctx->roam.rssi_disallow_bssid))
+		return;
+
+	csr_ll_lock(&scan_list->List);
+
+	cur_entry = csr_ll_peek_head(&scan_list->List, LL_ACCESS_NOLOCK);
+	while (cur_entry) {
+		scan_res = GET_BASE_ADDR(cur_entry, struct tag_csrscan_result,
+					Link);
+		next_entry = csr_ll_next(&scan_list->List,
+						cur_entry, LL_ACCESS_NOLOCK);
+		remove = csr_remove_ap_due_to_rssi(
+			&mac_ctx->roam.rssi_disallow_bssid,
+			&scan_res->Result.BssDescriptor);
+		if (remove) {
+			csr_ll_remove_entry(&scan_list->List,
+				cur_entry, LL_ACCESS_NOLOCK);
+			csr_free_scan_result_entry(mac_ctx, scan_res);
+		}
+		cur_entry = next_entry;
+		next_entry = NULL;
+	}
+	csr_ll_unlock(&scan_list->List);
+
+}
+
 QDF_STATUS csr_scan_get_result(tpAniSirGlobal pMac,
 			       tCsrScanResultFilter *pFilter,
 			       tScanResultHandle *phResult)
 {
 	QDF_STATUS status;
-	tScanResultList *pRetList;
+	struct scan_result_list *pRetList;
 	uint32_t count = 0;
 
 	if (phResult)
 		*phResult = CSR_INVALID_SCANRESULT_HANDLE;
 
-	csr_prefer_5ghz(pMac, pFilter);
-
-	pRetList = qdf_mem_malloc(sizeof(tScanResultList));
+	pRetList = qdf_mem_malloc(sizeof(struct scan_result_list));
 	if (NULL == pRetList) {
-		sms_log(pMac, LOGE, FL("pRetList is NULL"));
+		sme_err("pRetList is NULL");
 		return QDF_STATUS_E_NOMEM;
 	}
 
 	csr_ll_open(pMac->hHdd, &pRetList->List);
 	pRetList->pCurEntry = NULL;
 	status = csr_parse_scan_results(pMac, pFilter, pRetList, &count);
-	sms_log(pMac, LOG1, FL("return %d BSS %d"),
-		csr_ll_count(&pRetList->List), status);
+	sme_debug("return %d BSS %d",
+		status, csr_ll_count(&pRetList->List));
 	if (!QDF_IS_STATUS_SUCCESS(status) || (phResult == NULL)) {
 		/* Fail or No one wants the result. */
 		csr_scan_result_purge(pMac, (tScanResultHandle) pRetList);
 	} else {
-		if (0 == count) {
+		if (pFilter)
+			csr_filter_ap_due_to_rssi_reject(pMac, pRetList);
+		if (0 == count ||
+		   !csr_ll_count(&pRetList->List)) {
 			/* We are here meaning the there is no match */
 			csr_ll_close(&pRetList->List);
 			qdf_mem_free(pRetList);
@@ -2166,6 +2238,57 @@ QDF_STATUS csr_scan_get_result(tpAniSirGlobal pMac,
 		}
 	}
 	return status;
+}
+
+tCsrScanResultInfo *csr_scan_get_result_for_bssid(tpAniSirGlobal mac_ctx,
+						  struct qdf_mac_addr *bssid)
+{
+	tDblLinkList *list = &mac_ctx->scan.scanResultList;
+	tListElem *entry;
+	tCsrScanResultInfo *scan_info = NULL;
+	struct tag_csrscan_result *scan_res;
+	size_t bss_len, len;
+	tDot11fBeaconIEs *ies = NULL;
+	QDF_STATUS status;
+
+	csr_ll_lock(list);
+	entry = csr_ll_peek_head(list, LL_ACCESS_NOLOCK);
+	while (entry) {
+		scan_res = GET_BASE_ADDR(entry, struct tag_csrscan_result,
+					Link);
+		if (qdf_mem_cmp(scan_res->Result.BssDescriptor.bssId,
+				bssid->bytes, QDF_MAC_ADDR_SIZE) == 0) {
+			/* Found matching scan resut for this bssid */
+			bss_len = scan_res->Result.BssDescriptor.length +
+				  sizeof(scan_res->Result.BssDescriptor.length);
+			len = sizeof(*scan_info) + bss_len;
+			scan_info = qdf_mem_malloc(len);
+			if (!scan_info) {
+				sme_err("Failed to allocate memory for scan info, len = %zu",
+					len);
+				break;
+			}
+			scan_info->ssId = scan_res->Result.ssId;
+			scan_info->timer = scan_res->Result.timer;
+			qdf_mem_copy(&scan_info->BssDescriptor,
+				     &scan_res->Result.BssDescriptor, bss_len);
+			status = csr_get_parsed_bss_description_ies(
+						mac_ctx,
+						&scan_info->BssDescriptor,
+						&ies);
+			if (QDF_IS_STATUS_ERROR(status)) {
+				qdf_mem_free(scan_info);
+				scan_info = NULL;
+			} else {
+				scan_info->pvIes = ies;
+			}
+			break;
+		}
+		entry = csr_ll_next(list, entry, LL_ACCESS_NOLOCK);
+	}
+	csr_ll_unlock(list);
+
+	return scan_info;
 }
 
 /*
@@ -2198,12 +2321,11 @@ QDF_STATUS csr_scan_flush_result(tpAniSirGlobal pMac)
 	bool isFlushDenied = csr_scan_flush_denied(pMac);
 
 	if (isFlushDenied) {
-		sms_log(pMac, LOGW, "%s: scan flush denied in roam state %d",
-			__func__, isFlushDenied);
+		sme_warn("scan flush denied in roam state %d", isFlushDenied);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	sms_log(pMac, LOG4, "%s: Flushing all scan results", __func__);
+	sme_debug("Flushing all scan results");
 	csr_ll_scan_purge_result(pMac, &pMac->scan.tempScanResults);
 	csr_ll_scan_purge_result(pMac, &pMac->scan.scanResultList);
 	return QDF_STATUS_SUCCESS;
@@ -2213,14 +2335,15 @@ QDF_STATUS csr_scan_flush_selective_result(tpAniSirGlobal pMac, bool flushP2P)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	tListElem *pEntry, *pFreeElem;
-	tCsrScanResult *pBssDesc;
+	struct tag_csrscan_result *pBssDesc;
 	tDblLinkList *pList = &pMac->scan.scanResultList;
 
 	csr_ll_lock(pList);
 
 	pEntry = csr_ll_peek_head(pList, LL_ACCESS_NOLOCK);
 	while (pEntry != NULL) {
-		pBssDesc = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		pBssDesc = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		if (flushP2P && !qdf_mem_cmp(pBssDesc->Result.ssId.ssId,
 						"DIRECT-", 7)) {
 			pFreeElem = pEntry;
@@ -2241,21 +2364,22 @@ void csr_scan_flush_bss_entry(tpAniSirGlobal pMac,
 			      tpSmeCsaOffloadInd pCsaOffloadInd)
 {
 	tListElem *pEntry, *pFreeElem;
-	tCsrScanResult *pBssDesc;
+	struct tag_csrscan_result *pBssDesc;
 	tDblLinkList *pList = &pMac->scan.scanResultList;
 
 	csr_ll_lock(pList);
 
 	pEntry = csr_ll_peek_head(pList, LL_ACCESS_NOLOCK);
 	while (pEntry != NULL) {
-		pBssDesc = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		pBssDesc = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		if (!qdf_mem_cmp(pBssDesc->Result.BssDescriptor.bssId,
 			pCsaOffloadInd->bssid.bytes, QDF_MAC_ADDR_SIZE)) {
 			pFreeElem = pEntry;
 			pEntry = csr_ll_next(pList, pEntry, LL_ACCESS_NOLOCK);
 			csr_ll_remove_entry(pList, pFreeElem, LL_ACCESS_NOLOCK);
 			csr_free_scan_result_entry(pMac, pBssDesc);
-			sms_log(pMac, LOG1, FL("Removed BSS entry:%pM"),
+			sme_debug("Removed BSS entry:%pM",
 				pCsaOffloadInd->bssid.bytes);
 			continue;
 		}
@@ -2329,7 +2453,7 @@ QDF_STATUS csr_scan_filter_results(tpAniSirGlobal pMac)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	tListElem *pEntry, *pTempEntry;
-	tCsrScanResult *pBssDesc;
+	struct tag_csrscan_result *pBssDesc;
 	uint32_t len = sizeof(pMac->roam.validChannelList);
 
 	/* Get valid channels list from CFG */
@@ -2337,26 +2461,25 @@ QDF_STATUS csr_scan_filter_results(tpAniSirGlobal pMac)
 							      pMac->roam.
 							      validChannelList,
 							      &len))) {
-		sms_log(pMac, LOGE, "Failed to get Channel list from CFG");
+		sme_err("Failed to get Channel list from CFG");
 	}
 
 	csr_ll_lock(&pMac->scan.scanResultList);
 	pEntry = csr_ll_peek_head(&pMac->scan.scanResultList, LL_ACCESS_NOLOCK);
 	while (pEntry) {
-		pBssDesc = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		pBssDesc = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		pTempEntry = csr_ll_next(&pMac->scan.scanResultList, pEntry,
 					 LL_ACCESS_NOLOCK);
-		if (csr_check11d_channel(pBssDesc->Result.BssDescriptor.channelId,
-					 pMac->roam.validChannelList, len)) {
+		if (csr_check11d_channel(pBssDesc->Result.BssDescriptor.
+				channelId, pMac->roam.validChannelList, len)) {
 			/* Remove Scan result which does not have 11d channel */
 			if (csr_ll_remove_entry(&pMac->scan.scanResultList,
-				 pEntry, LL_ACCESS_NOLOCK)) {
+				 pEntry, LL_ACCESS_NOLOCK))
 				csr_free_scan_result_entry(pMac, pBssDesc);
-			}
-		} else {
-			sms_log(pMac, LOG1, FL("%d is a Valid channel"),
+		} else
+			sme_debug("%d is a Valid channel",
 				pBssDesc->Result.BssDescriptor.channelId);
-		}
 		pEntry = pTempEntry;
 	}
 
@@ -2366,7 +2489,8 @@ QDF_STATUS csr_scan_filter_results(tpAniSirGlobal pMac)
 	pEntry = csr_ll_peek_head(&pMac->scan.tempScanResults,
 					 LL_ACCESS_NOLOCK);
 	while (pEntry) {
-		pBssDesc = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		pBssDesc = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		pTempEntry = csr_ll_next(&pMac->scan.tempScanResults, pEntry,
 					 LL_ACCESS_NOLOCK);
 		if (csr_check11d_channel(pBssDesc->Result.BssDescriptor.channelId,
@@ -2374,13 +2498,11 @@ QDF_STATUS csr_scan_filter_results(tpAniSirGlobal pMac)
 			/* Remove Scan result which does not have 11d channel */
 			if (csr_ll_remove_entry
 				    (&pMac->scan.tempScanResults, pEntry,
-				    LL_ACCESS_NOLOCK)) {
+				    LL_ACCESS_NOLOCK))
 				csr_free_scan_result_entry(pMac, pBssDesc);
-			}
-		} else {
-			sms_log(pMac, LOG1, FL("%d is a Valid channel"),
+		} else
+			sme_debug("%d is a Valid channel",
 				pBssDesc->Result.BssDescriptor.channelId);
-		}
 		pEntry = pTempEntry;
 	}
 
@@ -2392,16 +2514,17 @@ QDF_STATUS csr_scan_copy_result_list(tpAniSirGlobal pMac, tScanResultHandle hIn,
 				     tScanResultHandle *phResult)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
-	tScanResultList *pRetList, *pInList = (tScanResultList *) hIn;
-	tCsrScanResult *pResult, *pScanResult;
+	struct scan_result_list *pRetList, *pInList =
+						(struct scan_result_list *) hIn;
+	struct tag_csrscan_result *pResult, *pScanResult;
 	uint32_t count = 0;
 	tListElem *pEntry;
 	uint32_t bssLen, allocLen;
 
-	if (phResult) {
+	if (phResult)
 		*phResult = CSR_INVALID_SCANRESULT_HANDLE;
-	}
-	pRetList = qdf_mem_malloc(sizeof(tScanResultList));
+
+	pRetList = qdf_mem_malloc(sizeof(struct scan_result_list));
 	if (NULL == pRetList)
 		status = QDF_STATUS_E_NOMEM;
 	else {
@@ -2413,11 +2536,11 @@ QDF_STATUS csr_scan_copy_result_list(tpAniSirGlobal pMac, tScanResultHandle hIn,
 		pEntry = csr_ll_peek_head(&pInList->List, LL_ACCESS_NOLOCK);
 		while (pEntry) {
 			pScanResult =
-				GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
-			bssLen =
-				pScanResult->Result.BssDescriptor.length +
-				sizeof(pScanResult->Result.BssDescriptor.length);
-			allocLen = sizeof(tCsrScanResult) + bssLen;
+				GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+						Link);
+			bssLen = pScanResult->Result.BssDescriptor.length +
+			sizeof(pScanResult->Result.BssDescriptor.length);
+			allocLen = sizeof(struct tag_csrscan_result) + bssLen;
 			pResult = qdf_mem_malloc(allocLen);
 			if (NULL == pResult)
 				status = QDF_STATUS_E_NOMEM;
@@ -2436,16 +2559,16 @@ QDF_STATUS csr_scan_copy_result_list(tpAniSirGlobal pMac, tScanResultHandle hIn,
 				     bssLen);
 			if (pScanResult->Result.pvIes) {
 				pResult->Result.pvIes =
-					qdf_mem_malloc(sizeof(tDot11fBeaconIEs));
+				qdf_mem_malloc(sizeof(tDot11fBeaconIEs));
 				if (NULL == pResult->Result.pvIes)
 					status = QDF_STATUS_E_NOMEM;
 				else
 					status = QDF_STATUS_SUCCESS;
 				if (!QDF_IS_STATUS_SUCCESS(status)) {
-					/* Free the memory we allocate above first */
+					/* Free the memory we allocate above */
 					qdf_mem_free(pResult);
 					csr_scan_result_purge(pMac,
-							      (tScanResultHandle *)
+							   (tScanResultHandle *)
 							      pRetList);
 					count = 0;
 					break;
@@ -2457,8 +2580,8 @@ QDF_STATUS csr_scan_copy_result_list(tpAniSirGlobal pMac, tScanResultHandle hIn,
 			csr_ll_insert_tail(&pRetList->List, &pResult->Link,
 					   LL_ACCESS_LOCK);
 			count++;
-			pEntry =
-				csr_ll_next(&pInList->List, pEntry, LL_ACCESS_NOLOCK);
+			pEntry = csr_ll_next(&pInList->List, pEntry,
+						LL_ACCESS_NOLOCK);
 		} /* while */
 		csr_ll_unlock(&pInList->List);
 		csr_ll_unlock(&pMac->scan.scanResultList);
@@ -2501,24 +2624,23 @@ QDF_STATUS csr_scanning_state_msg_processor(tpAniSirGlobal pMac,
 			csr_roam_check_for_link_status_change(pMac,
 						(tSirSmeRsp *) pMsgBuf);
 		} else {
-			sms_log(pMac, LOGW,
-				FL("Message [0x%04x] received in wrong state"),
+			sme_warn("Message [0x%04x] received in wrong state",
 				pMsg->type);
 		}
 		return status;
 	}
 
-	sms_log(pMac, LOG1,
-		FL("Scanning: ASSOC cnf can be given to upper layer"));
+	sme_debug("Scanning: ASSOC cnf can be given to upper layer");
 	qdf_mem_set(&roamInfo, sizeof(tCsrRoamInfo), 0);
 	pRoamInfo = &roamInfo;
 	pUpperLayerAssocCnf = (tSirSmeAssocIndToUpperLayerCnf *) pMsgBuf;
 	status = csr_roam_get_session_id_from_bssid(pMac,
-			(struct qdf_mac_addr *)pUpperLayerAssocCnf->bssId, &sessionId);
+			(struct qdf_mac_addr *)pUpperLayerAssocCnf->bssId,
+			&sessionId);
 	pSession = CSR_GET_SESSION(pMac, sessionId);
 
 	if (!pSession) {
-		sms_log(pMac, LOGE, FL("session %d not found"), sessionId);
+		sme_err("session %d not found", sessionId);
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -2584,15 +2706,71 @@ static void csr_check_n_save_wsc_ie(tpAniSirGlobal pMac,
 	}
 }
 
+
+/**
+ * csr_check_hidden_ssid_entry() - Used for checking if probersp entry for
+ * hidden ssid ap has existed or not.
+ * @mac_ctx: pointer to Global MAC structure
+ * @bssdesc_old:  bss desc has existed in the list
+ * @bssdesc_new:  bss desc will be added to the list
+ *
+ * This function will return true if new desc's ssid is null and the existed
+ * bss desc's ssid is not null.
+ *
+ * Return:
+ *        true   - probersp entry has existed
+ *        false  - probersp entry doesn't exist
+ */
+static bool csr_check_hidden_ssid_entry(tpAniSirGlobal mac_ctx,
+				      tSirBssDescription *bssdesc_old,
+				      tSirBssDescription *bssdesc_new)
+{
+	bool is_hiddenap_probersp_entry_present = false;
+	tDot11fBeaconIEs *p_ies_old = NULL;
+	tDot11fBeaconIEs *p_ies_new = NULL;
+	QDF_STATUS status;
+
+	status = csr_get_parsed_bss_description_ies(mac_ctx, bssdesc_old,
+							&p_ies_old);
+	if (!QDF_IS_STATUS_SUCCESS(status))
+		goto free_ies;
+
+	status = csr_get_parsed_bss_description_ies(mac_ctx, bssdesc_new,
+							&p_ies_new);
+	if (!QDF_IS_STATUS_SUCCESS(status))
+		goto free_ies;
+
+
+	if (p_ies_old->SSID.present && p_ies_new->SSID.present
+		&& csr_is_nullssid(
+			p_ies_new->SSID.ssid, p_ies_new->SSID.num_ssid)
+		&& !csr_is_nullssid(
+			p_ies_old->SSID.ssid, p_ies_old->SSID.num_ssid)) {
+		/*
+		 * This is for hidden ssid. When beacon(null ssid) receives late
+		 * than probersp(non-null ssid), it should not duplicate the
+		 * non-null ssid scan entry. otherwise, it can't get match AP by
+		 * csr_scan_get_result when connection happens.
+		 */
+		is_hiddenap_probersp_entry_present = true;
+	}
+
+free_ies:
+	if (p_ies_old)
+		qdf_mem_free(p_ies_old);
+	if (p_ies_new)
+		qdf_mem_free(p_ies_new);
+	return is_hiddenap_probersp_entry_present;
+}
+
 /* pIes may be NULL */
 static bool csr_remove_dup_bss_description(tpAniSirGlobal pMac,
 					   tSirBssDescription *bss_dscp,
-					   tDot11fBeaconIEs *pIes,
 					   tAniSSID *pSsid,
 					   unsigned long *timer)
 {
 	tListElem *pEntry;
-	tCsrScanResult *scan_entry;
+	struct tag_csrscan_result *scan_entry;
 	bool fRC = false;
 
 	/*
@@ -2605,14 +2783,15 @@ static bool csr_remove_dup_bss_description(tpAniSirGlobal pMac,
 	pEntry = csr_ll_peek_head(&pMac->scan.scanResultList, LL_ACCESS_NOLOCK);
 
 	while (pEntry) {
-		scan_entry = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		scan_entry = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		/*
 		 * we have a duplicate scan results only when BSSID, SSID,
 		 * Channel and NetworkType matches
 		 */
 		if (csr_is_duplicate_bss_description(pMac,
 			&scan_entry->Result.BssDescriptor,
-			bss_dscp, pIes)) {
+			bss_dscp)) {
 			if (bss_dscp->rx_channel == bss_dscp->channelId) {
 				/*
 				 * Update rssi values only if beacon is
@@ -2654,7 +2833,7 @@ static bool csr_remove_dup_bss_description(tpAniSirGlobal pMac,
 							BssDescriptor);
 				csr_free_scan_result_entry(pMac, scan_entry);
 			} else {
-				sms_log(pMac, LOGW, FL("fail to remove entry"));
+				sme_warn("fail to remove entry");
 			}
 			fRC = true;
 			/*
@@ -2684,12 +2863,11 @@ static QDF_STATUS csr_add_pmkid_candidate_list(tpAniSirGlobal pMac,
 				 host_event_wlan_security_payload_type);
 #endif /* FEATURE_WLAN_DIAG_SUPPORT_CSR */
 	if (!pSession) {
-		sms_log(pMac, LOGE, FL("  session %d not found "), sessionId);
+		sme_err("session %d not found", sessionId);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	sms_log(pMac, LOGW, FL("NumPmkidCandidate = %d"),
-		pSession->NumPmkidCandidate);
+	sme_debug("NumPmkidCandidate: %d", pSession->NumPmkidCandidate);
 	if (!pIes)
 		return status;
 		/* check if this is a RSN BSS */
@@ -2764,8 +2942,7 @@ static QDF_STATUS csr_process_bss_desc_for_pmkid_list(tpAniSirGlobal pMac,
 		status = csr_add_pmkid_candidate_list(pMac, sessionId,
 						      pBssDesc, pIesLocal);
 		if (!QDF_IS_STATUS_SUCCESS(status))
-			sms_log(pMac, LOGE,
-				FL("csr_add_pmkid_candidate_list failed"));
+			sme_err("csr_add_pmkid_candidate_list failed");
 		else
 			status = QDF_STATUS_SUCCESS;
 	}
@@ -2786,38 +2963,38 @@ static QDF_STATUS csr_add_bkid_candidate_list(tpAniSirGlobal pMac,
 	tCsrRoamSession *pSession = CSR_GET_SESSION(pMac, sessionId);
 
 	if (!pSession) {
-		sms_log(pMac, LOGE, FL("  session %d not found "), sessionId);
+		sme_err("session %d not found", sessionId);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	sms_log(pMac, LOGW,
-		"csr_add_bkid_candidate_list called pMac->scan.NumBkidCandidate = %d",
+	sme_debug("csr_add_bkid_candidate_list called pMac->scan.NumBkidCandidate: %d",
 		pSession->NumBkidCandidate);
 	if (pIes) {
 		/* check if this is a WAPI BSS */
 		if (pIes->WAPI.present) {
-			/* Check if the BSS is capable of doing pre-authentication */
+			/* Check if the BSS is capable of doing
+			 * pre-authentication
+			 */
 			if (pSession->NumBkidCandidate < CSR_MAX_BKID_ALLOWED) {
 
 				/* if yes, then add to BKIDCandidateList */
 				qdf_mem_copy(pSession->
 					     BkidCandidateInfo[pSession->
-							       NumBkidCandidate].
+							      NumBkidCandidate].
 					     BSSID.bytes, pBssDesc->bssId,
 					     QDF_MAC_ADDR_SIZE);
 				if (pIes->WAPI.preauth) {
 					pSession->BkidCandidateInfo[pSession->
-								    NumBkidCandidate].
+							NumBkidCandidate].
 					preAuthSupported = true;
 				} else {
 					pSession->BkidCandidateInfo[pSession->
-								    NumBkidCandidate].
+							NumBkidCandidate].
 					preAuthSupported = false;
 				}
 				pSession->NumBkidCandidate++;
-			} else {
+			} else
 				status = QDF_STATUS_E_FAILURE;
-			}
 		}
 	}
 
@@ -2882,7 +3059,8 @@ static bool csr_process_bss_desc_for_bkid_list(tpAniSirGlobal pMac,
 static void csr_purge_scan_results(tpAniSirGlobal mac_ctx)
 {
 	tListElem *pentry, *tmp_entry;
-	tCsrScanResult *presult, *oldest_bss = NULL, *weakest_bss = NULL;
+	struct tag_csrscan_result *presult, *oldest_bss = NULL,
+					*weakest_bss = NULL;
 	uint64_t oldest_entry = 0;
 	uint64_t curr_time = (uint64_t)qdf_mc_timer_get_system_time();
 	int8_t weakest_rssi = 0;
@@ -2893,7 +3071,8 @@ static void csr_purge_scan_results(tpAniSirGlobal mac_ctx)
 	while (pentry) {
 		tmp_entry = csr_ll_next(&mac_ctx->scan.scanResultList, pentry,
 			LL_ACCESS_NOLOCK);
-		presult = GET_BASE_ADDR(pentry, tCsrScanResult, Link);
+		presult = GET_BASE_ADDR(pentry, struct tag_csrscan_result,
+					Link);
 		if ((curr_time - presult->Result.BssDescriptor.received_time) >
 		     oldest_entry) {
 			oldest_entry = curr_time -
@@ -2907,7 +3086,7 @@ static void csr_purge_scan_results(tpAniSirGlobal mac_ctx)
 		pentry = tmp_entry;
 	}
 	if (oldest_bss) {
-		tCsrScanResult *bss_to_remove;
+		struct tag_csrscan_result *bss_to_remove;
 
 		if (weakest_rssi < CSR_PURGE_RSSI_THRESHOLD)
 			bss_to_remove = weakest_bss;
@@ -2916,12 +3095,12 @@ static void csr_purge_scan_results(tpAniSirGlobal mac_ctx)
 		/* Free the old BSS Entries */
 		if (csr_ll_remove_entry(&mac_ctx->scan.scanResultList,
 		    &bss_to_remove->Link, LL_ACCESS_NOLOCK)) {
-			sms_log(mac_ctx, LOG1,
-				FL("BSSID: "MAC_ADDRESS_STR" Removed, time delta (%llu) RSSI %d"),
+			sme_debug("BSSID: "MAC_ADDRESS_STR" Removed, time delta (%llu) RSSI %d",
 				MAC_ADDR_ARRAY(
 				bss_to_remove->Result.BssDescriptor.bssId),
 				(curr_time -
-				bss_to_remove->Result.BssDescriptor.received_time),
+				bss_to_remove->
+				Result.BssDescriptor.received_time),
 				bss_to_remove->Result.BssDescriptor.rssi);
 			csr_free_scan_result_entry(mac_ctx, bss_to_remove);
 		}
@@ -2936,7 +3115,7 @@ csr_remove_from_tmp_list(tpAniSirGlobal mac_ctx,
 {
 	QDF_STATUS status;
 	tListElem *entry;
-	tCsrScanResult *bss_dscp;
+	struct tag_csrscan_result *bss_dscp;
 	tDot11fBeaconIEs *local_ie = NULL;
 	bool dup_bss;
 	tAniSSID tmpSsid;
@@ -2945,9 +3124,10 @@ csr_remove_from_tmp_list(tpAniSirGlobal mac_ctx,
 	tmpSsid.length = 0;
 	while ((entry = csr_ll_remove_tail(&mac_ctx->scan.tempScanResults,
 					   LL_ACCESS_LOCK)) != NULL) {
-		bss_dscp = GET_BASE_ADDR(entry, tCsrScanResult, Link);
-		sms_log(mac_ctx, LOG2,
-			FL("...Bssid= "MAC_ADDRESS_STR" chan= %d, rssi = -%d"),
+		bss_dscp = GET_BASE_ADDR(entry, struct tag_csrscan_result,
+					Link);
+		sme_debug(
+			"...Bssid= "MAC_ADDRESS_STR" chan= %d, rssi = -%d",
 			MAC_ADDR_ARRAY(bss_dscp->Result.BssDescriptor.
 				       bssId),
 			bss_dscp->Result.BssDescriptor.channelId,
@@ -2959,20 +3139,20 @@ csr_remove_from_tmp_list(tpAniSirGlobal mac_ctx,
 			status = csr_get_parsed_bss_description_ies(mac_ctx,
 				&bss_dscp->Result.BssDescriptor, &local_ie);
 			if (!local_ie || !QDF_IS_STATUS_SUCCESS(status)) {
-				sms_log(mac_ctx, LOGE, FL("Cannot pared IEs"));
+				sme_err("Cannot pared IEs");
 				csr_free_scan_result_entry(mac_ctx, bss_dscp);
 				continue;
 			}
 		}
 		dup_bss = csr_remove_dup_bss_description(mac_ctx,
 				&bss_dscp->Result.BssDescriptor,
-				local_ie, &tmpSsid, &timer);
+				&tmpSsid, &timer);
 		/*
 		 * Check whether we have reach out limit, but don't lose the
 		 * LFR candidates came from FW
 		 */
 		if (CSR_SCAN_IS_OVER_BSS_LIMIT(mac_ctx)) {
-			sms_log(mac_ctx, LOG1, FL("BSS Limit reached"));
+			sme_debug("BSS Limit reached");
 			csr_purge_scan_results(mac_ctx);
 		}
 		/* check for duplicate scan results */
@@ -3015,9 +3195,9 @@ csr_remove_from_tmp_list(tpAniSirGlobal mac_ctx,
 		    && local_ie->Country.present) {
 			csr_add_vote_for_country_info(mac_ctx,
 						local_ie->Country.country);
-			sms_log(mac_ctx, LOGW,
-				FL("11d AP Bssid "MAC_ADDRESS_STR
-				   " chan= %d, rssi = -%d, countryCode %c%c"),
+			sme_debug(
+				"11d AP Bssid "MAC_ADDRESS_STR
+				   " chan= %d, rssi = -%d, countryCode %c%c",
 				MAC_ADDR_ARRAY(
 					bss_dscp->Result.BssDescriptor.bssId),
 				bss_dscp->Result.BssDescriptor.channelId,
@@ -3032,12 +3212,90 @@ csr_remove_from_tmp_list(tpAniSirGlobal mac_ctx,
 	} /* end of loop */
 }
 
+
+static bool is_us_country(uint8_t *country_code)
+{
+	if ((country_code[0] == 'U') &&
+	    (country_code[1] == 'S'))
+		return true;
+
+	return false;
+}
+
+static bool is_world_mode(uint8_t *country_code)
+{
+	if ((country_code[0] == '0') &&
+	    (country_code[1] == '0'))
+		return true;
+
+	return false;
+}
+
+static bool csr_elected_country_algo_fcc(tpAniSirGlobal mac_ctx)
+{
+	bool ctry_11d_found = false;
+	uint8_t max_votes = 0;
+	uint8_t i = 0;
+	uint8_t ctry_index;
+
+	if (!mac_ctx->scan.countryCodeCount) {
+		sme_warn("No AP with 11d Country code is present in scan list");
+		return ctry_11d_found;
+	}
+
+	max_votes = mac_ctx->scan.votes11d[0].votes;
+	if (is_us_country(mac_ctx->scan.votes11d[0].countryCode)) {
+		ctry_11d_found = true;
+		ctry_index = 0;
+		goto algo_done;
+	} else if (max_votes >= MIN_11D_AP_COUNT) {
+		ctry_11d_found = true;
+		ctry_index = 0;
+	}
+
+	for (i = 1; i < mac_ctx->scan.countryCodeCount; i++) {
+		if (is_us_country(mac_ctx->scan.votes11d[i].countryCode)) {
+			ctry_11d_found = true;
+			ctry_index = i;
+			goto algo_done;
+		}
+
+		if ((max_votes < mac_ctx->scan.votes11d[i].votes) &&
+		    (mac_ctx->scan.votes11d[i].votes >= MIN_11D_AP_COUNT)) {
+			sme_debug(" Votes for Country %c%c : %d",
+				  mac_ctx->scan.votes11d[i].countryCode[0],
+				  mac_ctx->scan.votes11d[i].countryCode[1],
+				  mac_ctx->scan.votes11d[i].votes);
+			max_votes = mac_ctx->scan.votes11d[i].votes;
+			ctry_index = i;
+			ctry_11d_found = true;
+		}
+	}
+
+algo_done:
+
+	if (ctry_11d_found) {
+		qdf_mem_copy(mac_ctx->scan.countryCodeElected,
+			     mac_ctx->scan.votes11d[ctry_index].countryCode,
+			     WNI_CFG_COUNTRY_CODE_LEN);
+
+		sme_debug("Selected Country is %c%c With count %d",
+			  mac_ctx->scan.votes11d[ctry_index].countryCode[0],
+			  mac_ctx->scan.votes11d[ctry_index].countryCode[1],
+			  mac_ctx->scan.votes11d[ctry_index].votes);
+	}
+
+	return ctry_11d_found;
+}
+
+
 static void csr_move_temp_scan_results_to_main_list(tpAniSirGlobal pMac,
 						    uint8_t reason,
 						    uint8_t sessionId)
 {
 	tCsrRoamSession *pSession;
 	uint32_t i;
+	bool found_11d_ctry = false;
 
 	/* remove the BSS descriptions from temporary list */
 	csr_remove_from_tmp_list(pMac, reason, sessionId);
@@ -3053,37 +3311,45 @@ static void csr_move_temp_scan_results_to_main_list(tpAniSirGlobal pMac,
 			continue;
 		pSession = CSR_GET_SESSION(pMac, i);
 		if (csr_is_conn_state_connected(pMac, i)) {
-			sms_log(pMac, LOGW,
-				FL("No need to update CC in connected state"));
+			sme_debug("No need to update CC in connected state");
 			return;
 		}
 	}
-	if (csr_elected_country_info(pMac))
+
+	if (is_us_country(pMac->scan.countryCodeCurrent) ||
+	    is_world_mode(pMac->scan.countryCodeCurrent))
+		found_11d_ctry = csr_elected_country_algo_fcc(pMac);
+	else
+		found_11d_ctry = csr_elected_country_info(pMac);
+
+	if (found_11d_ctry)
 		csr_learn_11dcountry_information(pMac, NULL, NULL, true);
 }
 
-static tCsrScanResult *csr_scan_save_bss_description(tpAniSirGlobal pMac,
+static struct tag_csrscan_result *csr_scan_save_bss_description(tpAniSirGlobal
+							pMac,
 						     tSirBssDescription *
 						     pBSSDescription,
 						     tDot11fBeaconIEs *pIes,
 						     uint8_t sessionId)
 {
-	tCsrScanResult *pCsrBssDescription = NULL;
+	struct tag_csrscan_result *pCsrBssDescription = NULL;
 	uint32_t cbBSSDesc;
 	uint32_t cbAllocated;
 
-	/* figure out how big the BSS description is (the BSSDesc->length does NOT */
-	/* include the size of the length field itself). */
+	/* figure out how big the BSS description is (the BSSDesc->length does
+	 * NOT include the size of the length field itself).
+	 */
 	cbBSSDesc = pBSSDescription->length + sizeof(pBSSDescription->length);
 
-	cbAllocated = sizeof(tCsrScanResult) + cbBSSDesc;
+	cbAllocated = sizeof(struct tag_csrscan_result) + cbBSSDesc;
 
 	pCsrBssDescription = qdf_mem_malloc(cbAllocated);
 	if (NULL != pCsrBssDescription) {
 		pCsrBssDescription->AgingCount =
 			(int32_t) pMac->roam.configParam.agingCount;
-		sms_log(pMac, LOGW,
-			FL(" Set Aging Count = %d for BSS " MAC_ADDRESS_STR " "),
+		sme_debug(
+			"Set Aging Count = %d for BSS " MAC_ADDRESS_STR " ",
 			pCsrBssDescription->AgingCount,
 			MAC_ADDR_ARRAY(pCsrBssDescription->Result.BssDescriptor.
 				       bssId));
@@ -3102,27 +3368,28 @@ static tCsrScanResult *csr_scan_save_bss_description(tpAniSirGlobal pMac,
 }
 
 /* Append a Bss Description... */
-tCsrScanResult *csr_scan_append_bss_description(tpAniSirGlobal pMac,
+struct tag_csrscan_result *csr_scan_append_bss_description(tpAniSirGlobal pMac,
 						tSirBssDescription *
 						pSirBssDescription,
 						tDot11fBeaconIEs *pIes,
 						uint8_t sessionId)
 {
-	tCsrScanResult *pCsrBssDescription = NULL;
+	struct tag_csrscan_result *pCsrBssDescription = NULL;
 	tAniSSID tmpSsid;
 	unsigned long timer = 0;
 	int result;
 
 	tmpSsid.length = 0;
 	result = csr_remove_dup_bss_description(pMac, pSirBssDescription,
-						pIes, &tmpSsid, &timer);
+						&tmpSsid, &timer);
+
 	pCsrBssDescription = csr_scan_save_bss_description(pMac,
 					pSirBssDescription, pIes, sessionId);
 	if (result && (pCsrBssDescription != NULL)) {
 		/*
-		* Check if the new one has SSID it it, if not, use the older
-		* SSID if it exists.
-		*/
+		 * Check if the new one has SSID it it, if not, use the older
+		 * SSID if it exists.
+		 */
 		if ((0 == pCsrBssDescription->Result.ssId.length)
 		    && tmpSsid.length) {
 			/*
@@ -3135,8 +3402,8 @@ tCsrScanResult *csr_scan_append_bss_description(tpAniSirGlobal pMac,
 			 * hidden ssid from the profile i.e., forget the SSID
 			 * via GUI that SSID shouldn't see in the profile
 			 */
-			if (((uint64_t)qdf_mc_timer_get_system_time() - timer) <=
-			    HIDDEN_TIMER) {
+			if (((uint64_t)qdf_mc_timer_get_system_time() - timer)
+				<= HIDDEN_TIMER) {
 				pCsrBssDescription->Result.ssId = tmpSsid;
 				pCsrBssDescription->Result.timer = timer;
 			}
@@ -3146,16 +3413,17 @@ tCsrScanResult *csr_scan_append_bss_description(tpAniSirGlobal pMac,
 	return pCsrBssDescription;
 }
 
-void csr_purge_channel_power(tpAniSirGlobal pMac, tDblLinkList *pChannelList)
+static void csr_purge_channel_power(tpAniSirGlobal pMac, tDblLinkList
+					*pChannelList)
 {
 	tCsrChannelPowerInfo *pChannelSet;
 	tListElem *pEntry;
 
 	csr_ll_lock(pChannelList);
 	/*
-	* Remove the channel sets from the learned list and put them
-	* in the free list
-	*/
+	 * Remove the channel sets from the learned list and put them
+	 * in the free list
+	 */
 	while ((pEntry = csr_ll_remove_head(pChannelList,
 					    LL_ACCESS_NOLOCK)) != NULL) {
 		pChannelSet = GET_BASE_ADDR(pEntry, tCsrChannelPowerInfo, link);
@@ -3163,7 +3431,6 @@ void csr_purge_channel_power(tpAniSirGlobal pMac, tDblLinkList *pChannelList)
 			qdf_mem_free(pChannelSet);
 	}
 	csr_ll_unlock(pChannelList);
-	return;
 }
 
 /*
@@ -3208,8 +3475,7 @@ QDF_STATUS csr_save_to_channel_power2_g_5_g(tpAniSirGlobal pMac,
 			pChannelSet->interChannelOffset = 4;
 			f2GHzInfoFound = false;
 		} else {
-			sms_log(pMac, LOGW,
-				FL("Invalid Channel %d Present in Country IE"),
+			sme_warn("Invalid Channel %d Present in Country IE",
 				pChannelSet->firstChannel);
 			qdf_mem_free(pChannelSet);
 			return QDF_STATUS_E_FAILURE;
@@ -3231,8 +3497,8 @@ QDF_STATUS csr_save_to_channel_power2_g_5_g(tpAniSirGlobal pMac,
 						   &pChannelSet->link,
 						   LL_ACCESS_LOCK);
 			} else {
-				sms_log(pMac, LOGW,
-					FL("Adding 11B/G ch in 11A. 1st ch %d"),
+				sme_debug(
+					"Adding 11B/G ch in 11A. 1st ch %d",
 					pChannelSet->firstChannel);
 				qdf_mem_free(pChannelSet);
 			}
@@ -3252,8 +3518,8 @@ QDF_STATUS csr_save_to_channel_power2_g_5_g(tpAniSirGlobal pMac,
 						   &pChannelSet->link,
 						   LL_ACCESS_LOCK);
 			} else {
-				sms_log(pMac, LOGW,
-					FL("Adding 11A ch in B/G. 1st ch %d"),
+				sme_debug(
+					"Adding 11A ch in B/G. 1st ch %d",
 					pChannelSet->firstChannel);
 				qdf_mem_free(pChannelSet);
 			}
@@ -3279,7 +3545,7 @@ static void csr_clear_dfs_channel_list(tpAniSirGlobal pMac)
 
 void csr_apply_power2_current(tpAniSirGlobal pMac)
 {
-	sms_log(pMac, LOG3, FL(" Updating Cfg with power settings"));
+	sme_debug("Updating Cfg with power settings");
 	csr_save_tx_power_to_cfg(pMac, &pMac->scan.channelPowerInfoList24,
 				 WNI_CFG_MAX_TX_POWER_2_4);
 	csr_save_tx_power_to_cfg(pMac, &pMac->scan.channelPowerInfoList5G,
@@ -3316,7 +3582,7 @@ void csr_apply_channel_power_info_to_fw(tpAniSirGlobal mac_ctx,
 		/* Send msg to Lim to clear DFS channel list */
 		csr_clear_dfs_channel_list(mac_ctx);
 	} else {
-		sms_log(mac_ctx, LOGE, FL("11D channel list is empty"));
+		sme_err("11D channel list is empty");
 	}
 	csr_set_cfg_country_code(mac_ctx, countryCode);
 }
@@ -3327,6 +3593,7 @@ static void csr_diag_reset_country_information(tpAniSirGlobal pMac)
 
 	host_log_802_11d_pkt_type *p11dLog;
 	int Index;
+
 	WLAN_HOST_DIAG_LOG_ALLOC(p11dLog, host_log_802_11d_pkt_type,
 				 LOG_WLAN_80211D_C);
 	if (!p11dLog)
@@ -3395,9 +3662,8 @@ void csr_add_vote_for_country_info(tpAniSirGlobal pMac, uint8_t *pCountryCode)
 	/* convert to UPPER here so we are assured
 	 * the strings are always in upper case.
 	 */
-	for (i = 0; i < 3; i++) {
+	for (i = 0; i < 3; i++)
 		pCountryCode[i] = (uint8_t) csr_to_upper(pCountryCode[i]);
-	}
 
 	/* Some of the 'old' Cisco 350 series AP's advertise NA as the
 	 * country code (for North America ??). NA is not a valid country code
@@ -3420,28 +3686,24 @@ void csr_add_vote_for_country_info(tpAniSirGlobal pMac, uint8_t *pCountryCode)
 	 * 'O' (for outdoor), 'I' for Indoor, or ' ' (space; for either).
 	 * if we see a 0 in this third character, let's change it to a ' '.
 	 */
-	if (0 == pCountryCode[2]) {
+	if (0 == pCountryCode[2])
 		pCountryCode[2] = ' ';
-	}
 
 	for (i = 0; i < pMac->scan.countryCodeCount; i++) {
 		match = (!qdf_mem_cmp(pMac->scan.votes11d[i].countryCode,
 					 pCountryCode, 2));
-		if (match) {
+		if (match)
 			break;
-		}
 	}
 
-	if (match) {
+	if (match)
 		pMac->scan.votes11d[i].votes++;
-	} else {
+	else {
 		qdf_mem_copy(pMac->scan.votes11d[pMac->scan.countryCodeCount].
 			     countryCode, pCountryCode, 3);
 		pMac->scan.votes11d[pMac->scan.countryCodeCount].votes = 1;
 		pMac->scan.countryCodeCount++;
 	}
-
-	return;
 }
 
 bool csr_elected_country_info(tpAniSirGlobal pMac)
@@ -3463,7 +3725,7 @@ bool csr_elected_country_info(tpAniSirGlobal pMac)
 		 * pick random.we can put some more intelligence - TBD
 		 */
 		if (maxVotes < pMac->scan.votes11d[i].votes) {
-			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_INFO,
+			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 				  " Votes for Country %c%c : %d\n",
 				  pMac->scan.votes11d[i].countryCode[0],
 				  pMac->scan.votes11d[i].countryCode[1],
@@ -3479,7 +3741,7 @@ bool csr_elected_country_info(tpAniSirGlobal pMac)
 		qdf_mem_copy(pMac->scan.countryCodeElected,
 		       pMac->scan.votes11d[j].countryCode,
 		       WNI_CFG_COUNTRY_CODE_LEN);
-		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_INFO,
+		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 			  "Selected Country is %c%c With count %d\n",
 			  pMac->scan.votes11d[j].countryCode[0],
 			  pMac->scan.votes11d[j].countryCode[1],
@@ -3503,7 +3765,6 @@ QDF_STATUS csr_set_country_code(tpAniSirGlobal pMac, uint8_t *pCountry)
 	v_REGDOMAIN_t domainId;
 
 	if (pCountry) {
-
 		status = csr_get_regulatory_domain_for_country(pMac, pCountry,
 							     &domainId,
 							     SOURCE_USERSPACE);
@@ -3543,7 +3804,6 @@ static void csr_get_channel_power_info(tpAniSirGlobal pMac, tDblLinkList *list,
 	}
 	*num_ch = chn_idx;
 
-	return;
 }
 
 #ifdef FEATURE_WLAN_DIAG_SUPPORT_CSR
@@ -3625,12 +3885,12 @@ void csr_apply_country_information(tpAniSirGlobal pMac)
 	if (pMac->scan.domainIdCurrent != domainId)
 		return;
 	if (pMac->scan.domainIdCurrent != domainId) {
-		sms_log(pMac, LOGW, FL("Domain Changed Old %d, new %d"),
+		sme_debug("Domain Changed Old %d, new %d",
 			pMac->scan.domainIdCurrent, domainId);
 		status = wma_set_reg_domain(pMac, domainId);
 	}
 	if (status != QDF_STATUS_SUCCESS)
-		sms_log(pMac, LOGE, FL("fail to set regId %d"), domainId);
+		sme_err("fail to set regId %d", domainId);
 	pMac->scan.domainIdCurrent = domainId;
 	/* switch to active scans using this new channel list */
 	pMac->scan.curScanType = eSIR_ACTIVE_SCAN;
@@ -3665,7 +3925,7 @@ void csr_save_channel_power_for_band(tpAniSirGlobal pMac, bool fill_5f)
 			continue;
 
 		if (count >= WNI_CFG_VALID_CHANNEL_LIST_LEN) {
-			sms_log(pMac, LOGW, FL("count(%d) exceeded"), count);
+			sme_warn("count: %d exceeded", count);
 			break;
 		}
 
@@ -3702,7 +3962,8 @@ bool csr_is_supported_channel(tpAniSirGlobal pMac, uint8_t channelId)
 }
 
 /*
- * 802.11D only: Gather 11d IE via beacon or Probe response and store them in pAdapter->channels11d
+ * 802.11D only: Gather 11d IE via beacon or Probe response and store them in
+ * pAdapter->channels11d
  */
 bool csr_learn_11dcountry_information(tpAniSirGlobal pMac,
 				   tSirBssDescription *pSirBssDesc,
@@ -3757,7 +4018,7 @@ bool csr_learn_11dcountry_information(tpAniSirGlobal pMac,
 	status = csr_get_regulatory_domain_for_country(pMac,
 				pCountryCodeSelected, &domainId, SOURCE_11D);
 	if (status != QDF_STATUS_SUCCESS) {
-		sms_log(pMac, LOGE, FL("fail to get regId %d"), domainId);
+		sme_err("fail to get regId %d", domainId);
 		fRet = false;
 		goto free_ie;
 	}
@@ -3774,19 +4035,19 @@ free_ie:
 void csr_save_scan_results(tpAniSirGlobal pMac, uint8_t reason,
 				  uint8_t sessionId)
 {
-	sms_log(pMac, LOG4, "%s: Saving scan results", __func__);
+	sme_debug("Saving scan results");
 
-	/* initialize this to false. profMoveInterimScanResultsToMainList() routine */
-	/* will set this to the channel where an .11d beacon is seen */
+	/* initialize this to false. profMoveInterimScanResultsToMainList()
+	 * routine will set this to the channel where an .11d beacon is seen
+	 */
 	pMac->scan.channelOf11dInfo = 0;
 	/* move the scan results from interim list to the main scan list */
 	csr_move_temp_scan_results_to_main_list(pMac, reason, sessionId);
 
 	/* Now check if we gathered any domain/country specific information */
 	/* If so, we should update channel list and apply Tx power settings */
-	if (csr_is11d_supported(pMac)) {
+	if (csr_is11d_supported(pMac))
 		csr_apply_country_information(pMac);
-	}
 }
 
 void csr_reinit_scan_cmd(tpAniSirGlobal pMac, tSmeCmd *pCommand)
@@ -3804,13 +4065,13 @@ void csr_reinit_scan_cmd(tpAniSirGlobal pMac, tSmeCmd *pCommand)
 	qdf_mem_set(&pCommand->u.scanCmd, sizeof(tScanCmd), 0);
 }
 
-static eCsrScanCompleteNextCommand csr_scan_get_next_command_state(
+static enum csr_scancomplete_nextcommand csr_scan_get_next_command_state(
 							tpAniSirGlobal pMac,
 							tSmeCmd *pCommand,
 							bool fSuccess,
 							uint8_t *chan)
 {
-	eCsrScanCompleteNextCommand NextCommand = eCsrNextScanNothing;
+	enum csr_scancomplete_nextcommand NextCommand = eCsrNextScanNothing;
 	int8_t channel;
 
 	switch (pCommand->u.scanCmd.reason) {
@@ -3848,19 +4109,18 @@ static eCsrScanCompleteNextCommand csr_scan_get_next_command_state(
 		 *   set hw_mode fail -> csr_scan_handle_search_for_ssid_failure
 		 * failure: csr_scan_handle_search_for_ssid_failure
 		 */
-		sms_log(pMac, LOG1, FL("Resp for eCsrScanForSsid"));
+		sme_debug("Resp for eCsrScanForSsid");
 		channel = cds_search_and_check_for_session_conc(
 				pCommand->sessionId,
 				pCommand->u.scanCmd.pToRoamProfile);
 		if ((!channel) || !fSuccess) {
 			NextCommand = eCsrNexteScanForSsidFailure;
-			sms_log(pMac, LOG1,
-				FL("next ScanForSsidFailure %d %d"),
+			sme_debug("next ScanForSsidFailure %d %d",
 				channel, fSuccess);
 		} else {
 			NextCommand = eCsrNextCheckAllowConc;
 			*chan = channel;
-			sms_log(pMac, LOG1, FL("next CheckAllowConc"));
+			sme_debug("next CheckAllowConc");
 		}
 		break;
 	default:
@@ -3878,9 +4138,8 @@ static bool csr_handle_scan11d1_failure(tpAniSirGlobal pMac, tSmeCmd *pCommand)
 	/* Apply back the default setting and passively scan one more time. */
 	csr_apply_channel_power_info_wrapper(pMac);
 	pCommand->u.scanCmd.reason = eCsrScan11d2;
-	if (QDF_IS_STATUS_SUCCESS(csr_scan_channels(pMac, pCommand))) {
+	if (QDF_IS_STATUS_SUCCESS(csr_scan_channels(pMac, pCommand)))
 		fRet = false;
-	}
 
 	return fRet;
 }
@@ -3930,7 +4189,7 @@ csr_diag_scan_complete(tpAniSirGlobal pMac,
 			status = csr_get_parsed_bss_description_ies(pMac,
 					&pScanResult->BssDescriptor, &pIes);
 			if (!QDF_IS_STATUS_SUCCESS(status)) {
-				sms_log(pMac, LOGE, FL("fail to parse IEs"));
+				sme_err("fail to parse IEs");
 				break;
 			}
 			qdf_mem_copy(pScanLog->bssid[n],
@@ -3952,11 +4211,6 @@ csr_diag_scan_complete(tpAniSirGlobal pMac,
 	csr_scan_result_purge(pMac, hScanResult);
 	WLAN_HOST_DIAG_LOG_REPORT(pScanLog);
 
-	csr_diag_event_report(pMac, eCSR_EVENT_SCAN_COMPLETE, eSIR_SUCCESS,
-			      eSIR_SUCCESS);
-	if (c > 0)
-		csr_diag_event_report(pMac, eCSR_EVENT_SCAN_RES_FOUND,
-				      eSIR_SUCCESS, eSIR_SUCCESS);
 }
 #endif /* #ifdef FEATURE_WLAN_DIAG_SUPPORT_CSR */
 
@@ -4004,15 +4258,15 @@ static void csr_saved_scan_cmd_free_fields(tpAniSirGlobal mac_ctx,
 static QDF_STATUS csr_save_profile(tpAniSirGlobal mac_ctx,
 				   tSmeCmd *save_cmd, tSmeCmd *command)
 {
-	tCsrScanResult *scan_result;
-	tCsrScanResult *temp;
+	struct tag_csrscan_result *scan_result;
+	struct tag_csrscan_result *temp;
 	uint32_t bss_len;
 	QDF_STATUS status;
 
 	save_cmd->u.scanCmd.pToRoamProfile =
 		qdf_mem_malloc(sizeof(tCsrRoamProfile));
 	if (!save_cmd->u.scanCmd.pToRoamProfile) {
-		sms_log(mac_ctx, LOGE, FL("pToRoamProfile mem fail"));
+		sme_err("pToRoamProfile mem fail");
 		goto error;
 	}
 
@@ -4020,7 +4274,7 @@ static QDF_STATUS csr_save_profile(tpAniSirGlobal mac_ctx,
 			save_cmd->u.scanCmd.pToRoamProfile,
 			command->u.scanCmd.pToRoamProfile);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGE, FL("csr_roam_copy_profile fail"));
+		sme_err("csr_roam_copy_profile fail");
 		goto error;
 	}
 
@@ -4033,7 +4287,7 @@ static QDF_STATUS csr_save_profile(tpAniSirGlobal mac_ctx,
 			save_cmd->u.scanCmd.u.scanRequest.SSIDs.numOfSSIDs *
 			sizeof(tCsrSSIDInfo));
 	if (!save_cmd->u.scanCmd.u.scanRequest.SSIDs.SSIDList) {
-		sms_log(mac_ctx, LOGE, FL("SSIDList mem fail"));
+		sme_err("SSIDList mem fail");
 		goto error;
 	}
 
@@ -4046,14 +4300,14 @@ static QDF_STATUS csr_save_profile(tpAniSirGlobal mac_ctx,
 		return QDF_STATUS_SUCCESS;
 
 	scan_result = GET_BASE_ADDR(command->u.roamCmd.pRoamBssEntry,
-			tCsrScanResult, Link);
+			struct tag_csrscan_result, Link);
 
 	bss_len = scan_result->Result.BssDescriptor.length +
 		sizeof(scan_result->Result.BssDescriptor.length);
 
-	temp = qdf_mem_malloc(sizeof(tCsrScanResult) + bss_len);
+	temp = qdf_mem_malloc(sizeof(struct tag_csrscan_result) + bss_len);
 	if (!temp) {
-		sms_log(mac_ctx, LOGE, FL("bss mem fail"));
+		sme_err("bss mem fail");
 		goto error;
 	}
 
@@ -4091,7 +4345,7 @@ error:
 
 static void
 csr_handle_nxt_cmd(tpAniSirGlobal mac_ctx, tSmeCmd *pCommand,
-		   eCsrScanCompleteNextCommand *nxt_cmd,
+		   enum csr_scancomplete_nextcommand *nxt_cmd,
 		   bool *remove_cmd, uint32_t session_id,
 		   uint8_t chan)
 {
@@ -4102,8 +4356,8 @@ csr_handle_nxt_cmd(tpAniSirGlobal mac_ctx, tSmeCmd *pCommand,
 	switch (*nxt_cmd) {
 	case eCsrNext11dScan1Success:
 	case eCsrNext11dScan2Success:
-		sms_log(mac_ctx, LOG2,
-			FL("11dScan1/3 produced results. Reissue Active scan"));
+		sme_debug(
+			"11dScan1/3 produced results. Reissue Active scan");
 		/*
 		 * if we found country information, no need to continue scanning
 		 * further, bail out
@@ -4160,7 +4414,7 @@ csr_handle_nxt_cmd(tpAniSirGlobal mac_ctx, tSmeCmd *pCommand,
 		ret = cds_current_connections_update(pCommand->sessionId,
 					chan,
 					SIR_UPDATE_REASON_HIDDEN_STA);
-		sms_log(mac_ctx, LOG1, FL("chan: %d session: %d status: %d"),
+		sme_debug("chan: %d session: %d status: %d",
 					chan, pCommand->sessionId, ret);
 		saved_scan_cmd = (tSmeCmd *)mac_ctx->sme.saved_scan_cmd;
 		if (saved_scan_cmd) {
@@ -4168,21 +4422,17 @@ csr_handle_nxt_cmd(tpAniSirGlobal mac_ctx, tSmeCmd *pCommand,
 						       saved_scan_cmd);
 			qdf_mem_free(saved_scan_cmd);
 			saved_scan_cmd = NULL;
-			sms_log(mac_ctx, LOGE,
-				FL("memory should have been free. Check!"));
 		}
 
 		save_cmd = (tSmeCmd *) qdf_mem_malloc(sizeof(*pCommand));
 		if (!save_cmd) {
-			sms_log(mac_ctx, LOGE, FL("save_cmd mem fail"));
+			sme_err("save_cmd mem fail");
 			goto error;
 		}
 
 		status = csr_save_profile(mac_ctx, save_cmd, pCommand);
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
-			/* csr_save_profile should report error */
-			sms_log(mac_ctx, LOGE, FL("profile save failed %d"),
-					status);
+			sme_err("profile save failed %d", status);
 			qdf_mem_free(save_cmd);
 			return;
 		}
@@ -4191,7 +4441,7 @@ csr_handle_nxt_cmd(tpAniSirGlobal mac_ctx, tSmeCmd *pCommand,
 
 		if (QDF_STATUS_E_FAILURE == ret) {
 error:
-			sms_log(mac_ctx, LOGE, FL("conn update fail %d"), chan);
+			sme_err("conn update fail %d", chan);
 			csr_scan_handle_search_for_ssid_failure(mac_ctx,
 								pCommand);
 			if (mac_ctx->sme.saved_scan_cmd) {
@@ -4202,7 +4452,7 @@ error:
 			}
 		} else if ((QDF_STATUS_E_NOSUPPORT == ret) ||
 			(QDF_STATUS_E_ALREADY == ret)) {
-			sms_log(mac_ctx, LOGE, FL("conn update ret %d"), ret);
+			sme_err("conn update ret %d", ret);
 			csr_scan_handle_search_for_ssid(mac_ctx, pCommand);
 			if (mac_ctx->sme.saved_scan_cmd) {
 				csr_saved_scan_cmd_free_fields(mac_ctx,
@@ -4244,22 +4494,20 @@ QDF_STATUS csr_get_active_scan_entry(tpAniSirGlobal mac_ctx,
 
 	if (csr_ll_is_list_empty(&mac_ctx->sme.smeScanCmdActiveList,
 			LL_ACCESS_NOLOCK)) {
-		sms_log(mac_ctx, LOGE,
-			FL(" Active list Empty scanId: %d"), scan_id);
+		sme_err("Active list Empty scanId: %d", scan_id);
 		csr_ll_unlock(&mac_ctx->sme.smeScanCmdActiveList);
 		return QDF_STATUS_SUCCESS;
 	}
 	localentry = csr_ll_peek_head(&mac_ctx->sme.smeScanCmdActiveList,
 			LL_ACCESS_NOLOCK);
-	 while (localentry) {
+	while (localentry) {
 		cmd = GET_BASE_ADDR(localentry, tSmeCmd, Link);
 		if (cmd->command == eSmeCommandScan)
 			cmd_scan_id = cmd->u.scanCmd.u.scanRequest.scan_id;
 		else if (cmd->command == eSmeCommandRemainOnChannel)
 			cmd_scan_id = cmd->u.remainChlCmd.scan_id;
 		if (cmd_scan_id == scan_id) {
-			sms_log(mac_ctx, LOG1, FL(" scanId Matched %d"),
-					scan_id);
+			sme_debug("scanId Matched %d", scan_id);
 			*entry = localentry;
 			csr_ll_unlock(&mac_ctx->sme.smeScanCmdActiveList);
 			return QDF_STATUS_SUCCESS;
@@ -4274,7 +4522,7 @@ QDF_STATUS csr_get_active_scan_entry(tpAniSirGlobal mac_ctx,
 /* Return whether the command should be removed */
 bool csr_scan_complete(tpAniSirGlobal pMac, tSirSmeScanRsp *pScanRsp)
 {
-	eCsrScanCompleteNextCommand NextCommand = eCsrNextScanNothing;
+	enum csr_scancomplete_nextcommand NextCommand = eCsrNextScanNothing;
 	tListElem *pEntry = NULL;
 	tSmeCmd *pCommand;
 	bool fRemoveCommand = true;
@@ -4284,8 +4532,7 @@ bool csr_scan_complete(tpAniSirGlobal pMac, tSirSmeScanRsp *pScanRsp)
 
 	csr_get_active_scan_entry(pMac, pScanRsp->scan_id, &pEntry);
 	if (!pEntry) {
-		sms_log(pMac, LOGE,
-			FL("Scan Completion called but NO cmd ACTIVE ..."));
+		sme_err("Scan Completion called but NO cmd ACTIVE");
 		return false;
 	}
 
@@ -4295,8 +4542,7 @@ bool csr_scan_complete(tpAniSirGlobal pMac, tSirSmeScanRsp *pScanRsp)
 	 * and put this on the Free queue.
 	 */
 	if (eSmeCommandScan != pCommand->command) {
-		sms_log(pMac, LOGW,
-			FL("Scan Completion called, but active SCAN cmd"));
+		sme_warn("Scan Completion called, but active SCAN cmd");
 		return false;
 	}
 
@@ -4320,11 +4566,10 @@ bool csr_scan_complete(tpAniSirGlobal pMac, tSirSmeScanRsp *pScanRsp)
 		 */
 		if (pCommand->u.scanCmd.callback
 		    != pMac->scan.callback11dScanDone) {
-			sms_log(pMac, LOG1, FL("Filtering the scan results"));
+			sme_debug("Filtering the scan results");
 			csr_scan_filter_results(pMac);
 		} else {
-			sms_log(pMac, LOG1,
-				FL("11d_scan_done, flushing the scan results"));
+			sme_debug("11d_scan_done, flushing the scan results");
 		}
 	}
 	csr_save_scan_results(pMac, pCommand->u.scanCmd.reason, sessionId);
@@ -4340,45 +4585,100 @@ bool csr_scan_complete(tpAniSirGlobal pMac, tSirSmeScanRsp *pScanRsp)
 	return fRemoveCommand;
 }
 
+/**
+ * csr_scan_remove_dup_bss_description_from_interim_list() - To remove duplicate
+ * entry in interim scan list
+ *
+ * @mac_ctx - MAC context
+ * @bss_dscp - new bss_dscp will be added to list
+ * @flags - flag to indicate if rssi update is needed
+ * @is_hiddenap_probersp_entry_present - value return to indicate if probersp
+ * entry for hidden ssid ap has existed
+ *
+ * To check and remove if duplicate entry existed in interim list.
+ *
+ * Return: none.
+ */
 static void
 csr_scan_remove_dup_bss_description_from_interim_list(tpAniSirGlobal mac_ctx,
-					tSirBssDescription *bss_dscp,
-					tDot11fBeaconIEs *pIes)
+				tSirBssDescription *bss_dscp,
+				uint32_t flags,
+				bool *is_hiddenap_probersp_entry_present)
 {
 	tListElem *pEntry;
-	tCsrScanResult *scan_bss_dscp;
+	struct tag_csrscan_result *scan_bss_dscp;
 	int8_t scan_entry_rssi = 0;
+	int8_t scan_entry_rssi_raw = 0;
 	/*
 	 * Walk through all the chained BssDescriptions. If we find a chained
 	 * BssDescription that matches the BssID of the BssDescription passed
 	 * in, then these must be duplicate scan results for this Bss. In that
 	 * case, remove the 'old' Bss description from the linked list.
 	 */
-	sms_log(mac_ctx, LOG4, FL(" for BSS " MAC_ADDRESS_STR " "),
+	sme_debug("for BSS " MAC_ADDRESS_STR " ",
 		MAC_ADDR_ARRAY(bss_dscp->bssId));
 	csr_ll_lock(&mac_ctx->scan.tempScanResults);
 	pEntry = csr_ll_peek_head(&mac_ctx->scan.tempScanResults,
 				 LL_ACCESS_NOLOCK);
 	while (pEntry) {
-		scan_bss_dscp = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		scan_bss_dscp = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		/*
 		 * we have a duplicate scan results only when BSSID, SSID,
 		 * Channel and NetworkType matches
 		 */
 		scan_entry_rssi = scan_bss_dscp->Result.BssDescriptor.rssi;
+		scan_entry_rssi_raw =
+				scan_bss_dscp->Result.BssDescriptor.rssi_raw;
+
 		if (csr_is_duplicate_bss_description(mac_ctx,
-			&scan_bss_dscp->Result.BssDescriptor, bss_dscp,
-			pIes)) {
-			/*
-			 * Following is mathematically a = (aX + b(100-X))/100
-			 * where:
-			 * a = bss_dscp->rssi, b = scan_entry_rssi
-			 * and X = CSR_SCAN_RESULT_RSSI_WEIGHT
-			 */
-			bss_dscp->rssi = (int8_t) ((((int32_t) bss_dscp->rssi *
-				CSR_SCAN_RESULT_RSSI_WEIGHT) +
-				((int32_t) scan_entry_rssi *
-				 (100 - CSR_SCAN_RESULT_RSSI_WEIGHT))) / 100);
+			&scan_bss_dscp->Result.BssDescriptor, bss_dscp)) {
+
+			/* Do not update RSSI id skip RSSI Update flag is set */
+			if (flags & WLAN_SKIP_RSSI_UPDATE) {
+				bss_dscp->rssi =
+				   scan_bss_dscp->Result.BssDescriptor.rssi;
+				bss_dscp->rssi_raw =
+				   scan_bss_dscp->Result.BssDescriptor.rssi_raw;
+			} else {
+				/*
+				 * Following is mathematically
+				 * a = (aX + b(100-X))/100 where:
+				 * a = bss_dscp->rssi, b = scan_entry_rssi
+				 * and X = CSR_SCAN_RESULT_RSSI_WEIGHT
+				 */
+				bss_dscp->rssi = (int8_t)
+					((((int32_t) bss_dscp->rssi *
+					CSR_SCAN_RESULT_RSSI_WEIGHT) +
+					((int32_t) scan_entry_rssi *
+					(100 - CSR_SCAN_RESULT_RSSI_WEIGHT)))
+					/ 100);
+				bss_dscp->rssi_raw = (int8_t)
+					((((int32_t) bss_dscp->rssi_raw *
+					CSR_SCAN_RESULT_RSSI_WEIGHT) +
+					((int32_t) scan_entry_rssi_raw *
+					(100 - CSR_SCAN_RESULT_RSSI_WEIGHT)))
+					/ 100);
+			}
+
+			*is_hiddenap_probersp_entry_present =
+				csr_check_hidden_ssid_entry(mac_ctx,
+					&scan_bss_dscp->Result.BssDescriptor,
+					bss_dscp);
+			if (*is_hiddenap_probersp_entry_present) {
+				/*
+				 * In the temp list we have a probe resp and we
+				 * don't want to overwrite this with beacon in
+				 * case of hidden AP scenario.
+				 * but rssi must be updated.
+				 */
+				scan_bss_dscp->Result.BssDescriptor.rssi =
+							bss_dscp->rssi;
+				scan_bss_dscp->Result.BssDescriptor.rssi_raw =
+							bss_dscp->rssi_raw;
+				break;
+			}
+
 			/* Remove the 'old' entry from the list */
 			if (csr_ll_remove_entry(&mac_ctx->scan.tempScanResults,
 				pEntry, LL_ACCESS_NOLOCK)) {
@@ -4405,24 +4705,26 @@ csr_scan_remove_dup_bss_description_from_interim_list(tpAniSirGlobal mac_ctx,
 	csr_ll_unlock(&mac_ctx->scan.tempScanResults);
 }
 
-/* Caller allocated memory pfNewBssForConn to return whether new candidate for */
-/* current connection is found. Cannot be NULL */
-static tCsrScanResult *csr_scan_save_bss_description_to_interim_list(
+/* Caller allocated memory pfNewBssForConn to return whether
+ * new candidate for current connection is found. Cannot be NULL
+ */
+static struct tag_csrscan_result *csr_scan_save_bss_description_to_interim_list(
 					tpAniSirGlobal pMac,
 					tSirBssDescription *pBSSDescription,
 					tDot11fBeaconIEs *pIes)
 {
-	tCsrScanResult *pCsrBssDescription = NULL;
+	struct tag_csrscan_result *pCsrBssDescription = NULL;
 	uint32_t cbBSSDesc;
 	uint32_t cbAllocated;
 
-	/* figure out how big the BSS description is (the BSSDesc->length does NOT */
-	/* include the size of the length field itself). */
+	/* figure out how big the BSS description is (the BSSDesc->length does
+	 * NOT include the size of the length field itself).
+	 */
 	cbBSSDesc = pBSSDescription->length + sizeof(pBSSDescription->length);
 
-	cbAllocated = sizeof(tCsrScanResult) + cbBSSDesc;
+	cbAllocated = sizeof(struct tag_csrscan_result) + cbBSSDesc;
 
-	sms_log(pMac, LOG4, FL("new BSS description, length %d, cbBSSDesc %d"),
+	sme_debug("new BSS description, length %d, cbBSSDesc %d",
 		cbAllocated, cbBSSDesc);
 	pCsrBssDescription = qdf_mem_malloc(cbAllocated);
 	if (NULL != pCsrBssDescription) {
@@ -4430,8 +4732,8 @@ static tCsrScanResult *csr_scan_save_bss_description_to_interim_list(
 			     pBSSDescription, cbBSSDesc);
 		pCsrBssDescription->AgingCount =
 			(int32_t) pMac->roam.configParam.agingCount;
-		sms_log(pMac, LOG4,
-			FL(" Set Aging Count = %d for BSS " MAC_ADDRESS_STR " "),
+		sme_debug(
+			"Set Aging Count = %d for BSS " MAC_ADDRESS_STR " ",
 			pCsrBssDescription->AgingCount,
 			MAC_ADDR_ARRAY(pCsrBssDescription->Result.BssDescriptor.
 				       bssId));
@@ -4440,6 +4742,7 @@ static tCsrScanResult *csr_scan_save_bss_description_to_interim_list(
 		    && !csr_is_nullssid(pIes->SSID.ssid, pIes->SSID.num_ssid)) {
 			/* SSID not hidden */
 			uint32_t len = pIes->SSID.num_ssid;
+
 			if (len > SIR_MAC_MAX_SSID_LENGTH) {
 				/* truncate to fit in our struct */
 				len = SIR_MAC_MAX_SSID_LENGTH;
@@ -4459,14 +4762,10 @@ static tCsrScanResult *csr_scan_save_bss_description_to_interim_list(
 
 bool csr_is_duplicate_bss_description(tpAniSirGlobal pMac,
 				      tSirBssDescription *pSirBssDesc1,
-				      tSirBssDescription *pSirBssDesc2,
-				      tDot11fBeaconIEs *pIes2)
+				      tSirBssDescription *pSirBssDesc2)
 {
 	bool fMatch = false;
 	tSirMacCapabilityInfo *pCap1, *pCap2;
-	tDot11fBeaconIEs *pIes1 = NULL;
-	tDot11fBeaconIEs *pIesTemp = pIes2;
-	QDF_STATUS status;
 
 	pCap1 = (tSirMacCapabilityInfo *) &pSirBssDesc1->capabilityInfo;
 	pCap2 = (tSirMacCapabilityInfo *) &pSirBssDesc2->capabilityInfo;
@@ -4475,42 +4774,15 @@ bool csr_is_duplicate_bss_description(tpAniSirGlobal pMac,
 		if (qdf_is_macaddr_equal(
 			(struct qdf_mac_addr *) pSirBssDesc1->bssId,
 			(struct qdf_mac_addr *) pSirBssDesc2->bssId))
-			sms_log(pMac, LOGE,
-			   FL("ess mismatch for same BSSID "MAC_ADDRESS_STR""),
-			   MAC_ADDR_ARRAY(pSirBssDesc1->bssId));
-
-		goto free_ies;
+			sme_err("ess mismatch for same BSSID "MAC_ADDRESS_STR"",
+				MAC_ADDR_ARRAY(pSirBssDesc1->bssId));
+		return fMatch;
 	}
 
 	if (pCap1->ess &&
 	    qdf_is_macaddr_equal((struct qdf_mac_addr *) pSirBssDesc1->bssId,
 				 (struct qdf_mac_addr *) pSirBssDesc2->bssId)) {
 		fMatch = true;
-		/* Check for SSID match, if exists */
-		status = csr_get_parsed_bss_description_ies(pMac, pSirBssDesc1,
-							    &pIes1);
-		if (!QDF_IS_STATUS_SUCCESS(status))
-			goto free_ies;
-
-		if (NULL == pIesTemp) {
-			status = csr_get_parsed_bss_description_ies(pMac,
-						pSirBssDesc2, &pIesTemp);
-			if (!QDF_IS_STATUS_SUCCESS(status))
-				goto free_ies;
-		}
-	} else if (pCap1->ibss && (pSirBssDesc1->channelId ==
-					pSirBssDesc2->channelId)) {
-		status = csr_get_parsed_bss_description_ies(pMac, pSirBssDesc1,
-							    &pIes1);
-		if (!QDF_IS_STATUS_SUCCESS(status))
-			goto free_ies;
-
-		if (NULL == pIesTemp) {
-			status = csr_get_parsed_bss_description_ies(pMac,
-						pSirBssDesc2, &pIesTemp);
-			if (!QDF_IS_STATUS_SUCCESS(status))
-				goto free_ies;
-		}
 	}
 	/* In case of P2P devices, ess and ibss will be set to zero */
 	else if (!pCap1->ess &&
@@ -4520,12 +4792,6 @@ bool csr_is_duplicate_bss_description(tpAniSirGlobal pMac,
 		fMatch = true;
 	}
 
-free_ies:
-	if (pIes1)
-		qdf_mem_free(pIes1);
-	if ((NULL == pIes2) && pIesTemp)
-		/* locally allocated */
-		qdf_mem_free(pIesTemp);
 	return fMatch;
 }
 
@@ -4543,8 +4809,8 @@ static bool csr_scan_is_bss_allowed(tpAniSirGlobal pMac,
 	bool fAllowed = false;
 	eCsrPhyMode phyMode;
 
-	if (QDF_IS_STATUS_SUCCESS
-		    (csr_get_phy_mode_from_bss(pMac, pBssDesc, &phyMode, pIes))) {
+	if (QDF_IS_STATUS_SUCCESS(csr_get_phy_mode_from_bss(pMac, pBssDesc,
+				&phyMode, pIes))) {
 		switch (pMac->roam.configParam.phyMode) {
 		case eCSR_DOT11_MODE_11b:
 			fAllowed = (bool) (eCSR_DOT11_MODE_11a != phyMode);
@@ -4646,20 +4912,19 @@ static void csr_update_scantype(tpAniSirGlobal pMac, tDot11fBeaconIEs *pIes,
 }
 
 /* Return whether last scan result is received */
-static bool csr_scan_process_scan_results(tpAniSirGlobal pMac, tSmeCmd *pCommand,
-					  tSirSmeScanRsp *pScanRsp,
+static bool csr_scan_process_scan_results(tpAniSirGlobal pMac, tSmeCmd
+					*pCommand, tSirSmeScanRsp *pScanRsp,
 					  bool *pfRemoveCommand)
 {
 	bool fRet = false, fRemoveCommand = false;
 	QDF_STATUS status;
 
-	sms_log(pMac, LOG1, FL("scan reason = %d, response status code = %d"),
+	sme_debug("scan reason = %d, response status code = %d",
 		pCommand->u.scanCmd.reason, pScanRsp->statusCode);
 	fRemoveCommand = csr_scan_complete(pMac, pScanRsp);
 	fRet = true;
-	if (pfRemoveCommand) {
+	if (pfRemoveCommand)
 		*pfRemoveCommand = fRemoveCommand;
-	}
 
 	/*
 	 * Currently SET_FCC_CHANNEL issues updated channel list to fw.
@@ -4672,8 +4937,7 @@ static bool csr_scan_process_scan_results(tpAniSirGlobal pMac, tSmeCmd *pCommand
 	if (pMac->scan.defer_update_channel_list) {
 		status = csr_update_channel_list(pMac);
 		if (!QDF_IS_STATUS_SUCCESS(status))
-			sms_log(pMac, LOGE,
-			    FL("failed to update the supported channel list"));
+			sme_err("failed to update the supported channel list");
 		pMac->scan.defer_update_channel_list = false;
 	}
 
@@ -4727,8 +4991,10 @@ QDF_STATUS csr_scan_process_single_bssdescr(tpAniSirGlobal mac_ctx,
 	uint32_t len = sizeof(mac_ctx->roam.validChannelList);
 	tCsrRoamInfo *roam_info;
 	uint8_t session_id;
+	bool is_hiddenap_probersp_entry_present = false;
 
-	sms_log(mac_ctx, LOG4, "CSR: Processing single bssdescr");
+	session_id = csr_scan_get_session_id(mac_ctx);
+	sme_debug("CSR: Processing single bssdescr");
 	if (QDF_IS_STATUS_SUCCESS(
 		csr_get_cfg_valid_channels(mac_ctx,
 			(uint8_t *) mac_ctx->roam.validChannelList,
@@ -4736,20 +5002,27 @@ QDF_STATUS csr_scan_process_single_bssdescr(tpAniSirGlobal mac_ctx,
 		chanlist = mac_ctx->roam.validChannelList;
 		cnt_channels = (uint8_t) len;
 	} else {
-		/* Cannot continue */
-		sms_log(mac_ctx, LOGW,
-			FL("Received results on invalid channel"));
+		sme_warn("Received results on invalid channel");
 		return QDF_STATUS_E_INVAL;
 	}
 
 	if (csr_scan_validate_scan_result(mac_ctx, chanlist,
 			cnt_channels, bssdescr, &ies)) {
+
+		csr_scan_remove_dup_bss_description_from_interim_list
+			(mac_ctx, bssdescr, flags,
+			&is_hiddenap_probersp_entry_present);
+
+		if (is_hiddenap_probersp_entry_present)
+			goto exit;
+
+		csr_scan_save_bss_description_to_interim_list
+			(mac_ctx, bssdescr, ies);
 		roam_info = qdf_mem_malloc(sizeof(*roam_info));
 		if (roam_info) {
 			qdf_mem_zero(roam_info, sizeof(*roam_info));
 			roam_info->pBssDesc = bssdescr;
 
-			session_id = csr_scan_get_session_id(mac_ctx);
 			if (session_id == CSR_SESSION_ID_INVALID) {
 				if (ies != NULL)
 					qdf_mem_free(ies);
@@ -4762,17 +5035,30 @@ QDF_STATUS csr_scan_process_single_bssdescr(tpAniSirGlobal mac_ctx,
 					       eCSR_ROAM_RESULT_NONE);
 			qdf_mem_free(roam_info);
 		} else {
-			sms_log(mac_ctx, LOG1, "qdf_mem_malloc failed");
+			sme_err("qdf_mem_malloc failed");
 		}
-		csr_scan_remove_dup_bss_description_from_interim_list
-			(mac_ctx, bssdescr, ies);
-		csr_scan_save_bss_description_to_interim_list
-			(mac_ctx, bssdescr, ies);
+		/*
+		 * If scan is not in progress and interim list
+		 * reach threashold, move scan results from temp
+		 * to main list and age out old results.
+		 */
+		if (csr_ll_is_list_empty(&mac_ctx->sme.smeScanCmdActiveList,
+		   LL_ACCESS_LOCK) &&
+		   csr_ll_count(&mac_ctx->scan.tempScanResults) >=
+				CSR_MAX_BSS_SUPPORT / 10) {
+			csr_remove_from_tmp_list(mac_ctx, eCsrScanOther,
+				session_id);
+			/* Purge the scan results based on Aging */
+			if (mac_ctx->scan.scanResultCfgAgingTime)
+				csr_purge_scan_result_by_age(mac_ctx);
+		}
 		csr_update_scantype(mac_ctx, ies, bssdescr->channelId);
-		/* Free the resource */
-		if (ies != NULL)
-			qdf_mem_free(ies);
 	}
+
+exit:
+	/* Free the resource */
+	if (ies != NULL)
+		qdf_mem_free(ies);
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -4805,16 +5091,13 @@ QDF_STATUS csr_scan_sme_scan_response(tpAniSirGlobal pMac,
 	if (!pEntry)
 		goto error_handling;
 
-	sms_log(pMac, LOG1, FL("Scan completion called:scan_id %d, entry = %p"),
+	sme_debug("Scan completion called:scan_id %d, entry = %pK",
 		pScanRsp->scan_id, pEntry);
 
 	pCommand = GET_BASE_ADDR(pEntry, tSmeCmd, Link);
 	if (eSmeCommandScan != pCommand->command)
 		goto error_handling;
 
-	 /* Purge the scan results based on Aging */
-	if (pEntry && pMac->scan.scanResultCfgAgingTime)
-		csr_purge_scan_result_by_age(pMac);
 	scanStatus = (eSIR_SME_SUCCESS == pScanRsp->statusCode) ?
 			eCSR_SCAN_SUCCESS : eCSR_SCAN_FAILURE;
 	reason = pCommand->u.scanCmd.reason;
@@ -4836,6 +5119,9 @@ QDF_STATUS csr_scan_sme_scan_response(tpAniSirGlobal pMac,
 		}
 		break;
 	}
+	/* Purge the scan results based on Aging */
+	if (pMac->scan.scanResultCfgAgingTime)
+		csr_purge_scan_result_by_age(pMac);
 	if (fRemoveCommand)
 		csr_release_scan_command(pMac, pCommand, scanStatus);
 	sme_process_pending_queue(pMac);
@@ -4844,21 +5130,16 @@ QDF_STATUS csr_scan_sme_scan_response(tpAniSirGlobal pMac,
 error_handling:
 #ifdef FEATURE_WLAN_SCAN_PNO
 	if (pMac->pnoOffload && pScanRsp->statusCode == eSIR_PNO_SCAN_SUCCESS) {
-		sms_log(pMac, LOG1, FL("PNO Scan completion called"));
+		sme_debug("PNO Scan completion called");
 		csr_save_scan_results(pMac, eCsrScanCandidateFound,
 				      pScanRsp->sessionId);
+		if (pMac->scan.scanResultCfgAgingTime)
+			csr_purge_scan_result_by_age(pMac);
 		return QDF_STATUS_SUCCESS;
-	} else {
-		/*
-		 * Scan completion was called, PNO is active, but scan
-		 * response was not PNO
-		 */
-		sms_log(pMac, LOGE,
-			FL("Scan completion called, scan rsp was not PNO."));
-		return QDF_STATUS_E_FAILURE;
 	}
+
 #endif
-	sms_log(pMac, LOGE, FL("Scan completion called, but no active SCAN command."));
+	sme_err("Scan completion called, but no active SCAN command");
 	return QDF_STATUS_E_FAILURE;
 }
 
@@ -4866,15 +5147,17 @@ tCsrScanResultInfo *csr_scan_result_get_first(tpAniSirGlobal pMac,
 					      tScanResultHandle hScanResult)
 {
 	tListElem *pEntry;
-	tCsrScanResult *pResult;
+	struct tag_csrscan_result *pResult;
 	tCsrScanResultInfo *pRet = NULL;
-	tScanResultList *pResultList = (tScanResultList *) hScanResult;
+	struct scan_result_list *pResultList =
+				(struct scan_result_list *) hScanResult;
 
 	if (pResultList) {
 		csr_ll_lock(&pResultList->List);
 		pEntry = csr_ll_peek_head(&pResultList->List, LL_ACCESS_NOLOCK);
 		if (pEntry) {
-			pResult = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+			pResult = GET_BASE_ADDR(pEntry, struct
+						tag_csrscan_result, Link);
 			pRet = &pResult->Result;
 		}
 		pResultList->pCurEntry = pEntry;
@@ -4888,22 +5171,24 @@ tCsrScanResultInfo *csr_scan_result_get_next(tpAniSirGlobal pMac,
 					     tScanResultHandle hScanResult)
 {
 	tListElem *pEntry = NULL;
-	tCsrScanResult *pResult = NULL;
+	struct tag_csrscan_result *pResult = NULL;
 	tCsrScanResultInfo *pRet = NULL;
-	tScanResultList *pResultList = (tScanResultList *) hScanResult;
+	struct scan_result_list *pResultList =
+				(struct scan_result_list *) hScanResult;
 
 	if (!pResultList)
 		return NULL;
 
 	csr_ll_lock(&pResultList->List);
-	if (NULL == pResultList->pCurEntry) {
+	if (NULL == pResultList->pCurEntry)
 		pEntry = csr_ll_peek_head(&pResultList->List, LL_ACCESS_NOLOCK);
-	} else {
+	else
 		pEntry = csr_ll_next(&pResultList->List, pResultList->pCurEntry,
 				     LL_ACCESS_NOLOCK);
-	}
+
 	if (pEntry) {
-		pResult = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		pResult = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		pRet = &pResult->Result;
 	}
 	pResultList->pCurEntry = pEntry;
@@ -4920,8 +5205,9 @@ QDF_STATUS csr_move_bss_to_head_from_bssid(tpAniSirGlobal pMac,
 					   tScanResultHandle hScanResult)
 {
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
-	tScanResultList *pResultList = (tScanResultList *) hScanResult;
-	tCsrScanResult *pResult = NULL;
+	struct scan_result_list *pResultList =
+				(struct scan_result_list *) hScanResult;
+	struct tag_csrscan_result *pResult = NULL;
 	tListElem *pEntry = NULL;
 
 	if (!(pResultList && bssid))
@@ -4930,7 +5216,8 @@ QDF_STATUS csr_move_bss_to_head_from_bssid(tpAniSirGlobal pMac,
 	csr_ll_lock(&pResultList->List);
 	pEntry = csr_ll_peek_head(&pResultList->List, LL_ACCESS_NOLOCK);
 	while (pEntry) {
-		pResult = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		pResult = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		if (!qdf_mem_cmp(bssid, pResult->Result.BssDescriptor.bssId,
 				    sizeof(struct qdf_mac_addr))) {
 			status = QDF_STATUS_SUCCESS;
@@ -4949,8 +5236,9 @@ QDF_STATUS csr_move_bss_to_head_from_bssid(tpAniSirGlobal pMac,
 
 /* Remove the BSS if possible. */
 /* Return -- true == the BSS is remove. False == Fail to remove it */
-/* This function is called when list lock is held. Be caution what functions it can call. */
-static bool csr_scan_age_out_bss(tpAniSirGlobal pMac, tCsrScanResult *pResult)
+/* This function is called when list lock is held. */
+static bool csr_scan_age_out_bss(tpAniSirGlobal pMac, struct tag_csrscan_result
+				*pResult)
 {
 	bool fRet = false;
 	uint32_t i;
@@ -4966,7 +5254,7 @@ static bool csr_scan_age_out_bss(tpAniSirGlobal pMac, tCsrScanResult *pResult)
 		    && (NULL != pSession->pConnectBssDesc)
 		    && (csr_is_duplicate_bss_description(pMac,
 			&pResult->Result.BssDescriptor,
-			pSession->pConnectBssDesc, NULL))) {
+			pSession->pConnectBssDesc))) {
 			isConnBssfound = true;
 			break;
 		}
@@ -4978,9 +5266,9 @@ static bool csr_scan_age_out_bss(tpAniSirGlobal pMac, tCsrScanResult *pResult)
 		 */
 		pResult->AgingCount =
 			(int32_t) pMac->roam.configParam.agingCount;
-		sms_log(pMac, LOGW,
-			FL("Connected BSS, Set Aging Count=%d for BSS "
-			   MAC_ADDRESS_STR), pResult->AgingCount,
+		sme_debug(
+			"Connected BSS, Set Aging Count=%d for BSS "
+			   MAC_ADDRESS_STR, pResult->AgingCount,
 			MAC_ADDR_ARRAY(pResult->Result.BssDescriptor.bssId));
 		pResult->Result.BssDescriptor.received_time =
 			(uint64_t)qdf_mc_timer_get_system_time();
@@ -4992,11 +5280,11 @@ static bool csr_scan_age_out_bss(tpAniSirGlobal pMac, tCsrScanResult *pResult)
 	 */
 	if (csr_ll_remove_entry(&pMac->scan.scanResultList, &pResult->Link,
 				LL_ACCESS_NOLOCK)) {
-		if (qdf_is_macaddr_equal(
-			(struct qdf_mac_addr *) &pResult->Result.BssDescriptor.bssId,
-			(struct qdf_mac_addr *) &pMac->scan.currentCountryBssid)) {
-			sms_log(pMac, LOGW,
-				FL("Aging out 11d BSS " MAC_ADDRESS_STR),
+		if (qdf_is_macaddr_equal((struct qdf_mac_addr *) &pResult->
+				Result.BssDescriptor.bssId,
+				(struct qdf_mac_addr *)
+				&pMac->scan.currentCountryBssid)) {
+			sme_warn("Aging out 11d BSS " MAC_ADDRESS_STR,
 				MAC_ADDR_ARRAY(
 					pResult->Result.BssDescriptor.bssId));
 			pMac->scan.currentCountryRSSI = -128;
@@ -5012,32 +5300,30 @@ QDF_STATUS csr_scan_age_results(tpAniSirGlobal pMac,
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	tListElem *pEntry, *tmpEntry;
-	tCsrScanResult *pResult;
+	struct tag_csrscan_result *pResult;
 	tLimScanChn *pChnInfo;
 	uint8_t i;
 
 	csr_ll_lock(&pMac->scan.scanResultList);
 	for (i = 0; i < pScanChnInfo->numChn; i++) {
 		pChnInfo = &pScanChnInfo->scanChn[i];
-		pEntry =
-			csr_ll_peek_head(&pMac->scan.scanResultList, LL_ACCESS_NOLOCK);
+		pEntry = csr_ll_peek_head(&pMac->scan.scanResultList,
+						LL_ACCESS_NOLOCK);
 		while (pEntry) {
 			tmpEntry =
 				csr_ll_next(&pMac->scan.scanResultList, pEntry,
 					    LL_ACCESS_NOLOCK);
-			pResult = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+			pResult = GET_BASE_ADDR(pEntry, struct
+						tag_csrscan_result, Link);
 			if (pResult->Result.BssDescriptor.channelId ==
 			    pChnInfo->channelId) {
 				if (pResult->AgingCount <= 0) {
-					sms_log(pMac, LOGW,
-						" age out due to ref count");
+					sme_warn("age out due to ref count");
 					csr_scan_age_out_bss(pMac, pResult);
 				} else {
 					pResult->AgingCount--;
-					sms_log(pMac, LOGW,
-						FL
-							("Decremented AgingCount=%d for BSS "
-							MAC_ADDRESS_STR ""),
+					sme_warn("Decremented AgingCount=%d for BSS "
+						MAC_ADDRESS_STR "",
 						pResult->AgingCount,
 						MAC_ADDR_ARRAY(pResult->Result.
 							       BssDescriptor.
@@ -5052,9 +5338,42 @@ QDF_STATUS csr_scan_age_results(tpAniSirGlobal pMac,
 	return status;
 }
 
+/**
+ * csr_populate_ie_whitelist_attrs() - Populates ie whitelist attrs
+ * @msg: pointer to sme scan req
+ * @scan_req: pointer to csr scan req
+ *
+ * This function populates ie whitelisting attributes of the sme scan req
+ * with corresponding whitelisting attrs in csr scan req
+ *
+ * Return: None
+ */
+static void csr_populate_ie_whitelist_attrs(tSirSmeScanReq *msg,
+					    tCsrScanRequest *scan_req)
+{
+	msg->ie_whitelist = scan_req->ie_whitelist;
+	msg->num_vendor_oui = scan_req->num_vendor_oui;
+
+	if (!msg->ie_whitelist)
+		return;
+
+	qdf_mem_copy(msg->probe_req_ie_bitmap, scan_req->probe_req_ie_bitmap,
+		     PROBE_REQ_BITMAP_LEN * sizeof(uint32_t));
+	msg->oui_field_len = scan_req->num_vendor_oui * sizeof(*scan_req->voui);
+	msg->oui_field_offset = (sizeof(tSirSmeScanReq) -
+				 sizeof(msg->channelList.channelNumber) +
+				 (sizeof(msg->channelList.channelNumber) *
+				 scan_req->ChannelInfo.numOfChannels)) +
+				 scan_req->uIEFieldLen;
+
+	if (scan_req->num_vendor_oui != 0)
+		qdf_mem_copy((uint8_t *)msg + msg->oui_field_offset,
+			     (uint8_t *)(scan_req->voui), msg->oui_field_len);
+}
+
 static QDF_STATUS csr_send_mb_scan_req(tpAniSirGlobal pMac, uint16_t sessionId,
 				       tCsrScanRequest *pScanReq,
-				       tScanReqParam *pScanReqParam)
+				       struct tag_scanreq_param *pScanReqParam)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	tSirSmeScanReq *pMsg;
@@ -5069,19 +5388,17 @@ static QDF_STATUS csr_send_mb_scan_req(tpAniSirGlobal pMac, uint16_t sessionId,
 		 sizeof(pMsg->channelList.channelNumber) +
 		 (sizeof(pMsg->channelList.channelNumber) *
 		 pScanReq->ChannelInfo.numOfChannels)) +
-		 (pScanReq->uIEFieldLen);
+		 (pScanReq->uIEFieldLen) +
+		 pScanReq->num_vendor_oui * sizeof(*pScanReq->voui);
 
 	pMsg = qdf_mem_malloc(msgLen);
 	if (NULL == pMsg) {
-		sms_log(pMac, LOGE, FL("memory allocation failed"));
-		sms_log(pMac, LOG1, FL("Failed: SId: %d FirstMatch = %d"
-				       " UniqueResult = %d freshScan = %d hiddenSsid = %d"),
+		sme_err("memory allocation failed");
+		sme_debug("Failed: SId: %d FirstMatch: %d UniqueResult: %d freshScan: %d hiddenSsid: %d",
 			sessionId, pScanReqParam->bReturnAfter1stMatch,
 			pScanReqParam->fUniqueResult, pScanReqParam->freshScan,
 			pScanReqParam->hiddenSsid);
-		sms_log(pMac, LOG1,
-			FL("scanType = %s (%u) BSSType = %s (%u) numOfSSIDs = %d"
-				" numOfChannels = %d requestType = %s (%d) p2pSearch = %d\n"),
+		sme_debug("scanType: %s (%u) BSSType: %s (%u) numOfSSIDs: %d numOfChannels: %d requestType: %s (%d) p2pSearch: %d",
 			sme_scan_type_to_string(pScanReq->scanType),
 			pScanReq->scanType,
 			sme_bss_type_to_string(pScanReq->BSSType),
@@ -5096,15 +5413,16 @@ static QDF_STATUS csr_send_mb_scan_req(tpAniSirGlobal pMac, uint16_t sessionId,
 	pMsg->messageType = eWNI_SME_SCAN_REQ;
 	pMsg->length = msgLen;
 	/* ToDO: Fill in session info when we need to do scan base on session */
-	if ((sessionId != CSR_SESSION_ID_INVALID)) {
+	if (sessionId != CSR_SESSION_ID_INVALID)
 		pMsg->sessionId = sessionId;
-	} else {
+	else
 		/* if sessionId == CSR_SESSION_ID_INVALID, then send the scan
-		   request on first available session */
+		 * request on first available session
+		 */
 		pMsg->sessionId = 0;
-	}
+
 	if (pMsg->sessionId >= CSR_ROAM_SESSION_MAX)
-		sms_log(pMac, LOGE, FL(" Invalid Sme Session ID = %d"),
+		sme_err("Invalid Sme Session ID: %d",
 			pMsg->sessionId);
 	pMsg->transactionId = 0;
 	pMsg->dot11mode = (uint8_t) csr_translate_to_wni_cfg_dot11_mode(pMac,
@@ -5129,14 +5447,14 @@ static QDF_STATUS csr_send_mb_scan_req(tpAniSirGlobal pMac, uint16_t sessionId,
 		}
 		if (CSR_ROAM_SESSION_MAX == i) {
 			uint32_t len = QDF_MAC_ADDR_SIZE;
-			status = wlan_cfg_get_str(pMac, WNI_CFG_STA_ID,
+			tSirRetStatus sir_status;
+
+			sir_status = wlan_cfg_get_str(pMac, WNI_CFG_STA_ID,
 						  selfmac.bytes, &len);
-			if (!QDF_IS_STATUS_SUCCESS(status)
+			if ((sir_status != eSIR_SUCCESS)
 			    || (len < QDF_MAC_ADDR_SIZE)) {
-				sms_log(pMac, LOGE,
-					FL("Can't get self MAC address = %d"),
-					status);
-				/* Force failed status */
+				sme_err("Can't get self MAC: status:%d len:%d",
+					sir_status, len);
 				status = QDF_STATUS_E_FAILURE;
 				goto send_scan_req;
 			}
@@ -5195,6 +5513,9 @@ static QDF_STATUS csr_send_mb_scan_req(tpAniSirGlobal pMac, uint16_t sessionId,
 
 	pMsg->minChannelTime = minChnTime;
 	pMsg->maxChannelTime = maxChnTime;
+	pMsg->scan_probe_repeat_time =
+		pMac->roam.configParam.scan_probe_repeat_time;
+	pMsg->scan_num_probes = pMac->roam.configParam.scan_num_probes;
 	/* hidden SSID option */
 	pMsg->hiddenSsid = pScanReqParam->hiddenSsid;
 	/* maximum rest time */
@@ -5240,9 +5561,13 @@ static QDF_STATUS csr_send_mb_scan_req(tpAniSirGlobal pMac, uint16_t sessionId,
 			     QDF_MAC_ADDR_SIZE);
 	}
 
+	csr_populate_ie_whitelist_attrs(pMsg, pScanReq);
+
+	pMsg->scan_ctrl_flags_ext = pScanReq->scan_ctrl_flags_ext;
+
 send_scan_req:
-	sms_log(pMac, LOG1,
-		FL("scanId %d domainIdCurrent %d scanType %s (%d) bssType %s (%d) requestType %s (%d) numChannels %d"),
+	sme_debug(
+		"scanId %d domainIdCurrent %d scanType %s (%d) bssType %s (%d) requestType %s (%d) numChannels %d",
 		pMsg->scan_id, pMac->scan.domainIdCurrent,
 		sme_scan_type_to_string(pMsg->scanType), pMsg->scanType,
 		sme_bss_type_to_string(pMsg->bssType), pMsg->bssType,
@@ -5250,15 +5575,15 @@ send_scan_req:
 		pScanReq->requestType, pMsg->channelList.numChannels);
 
 	for (i = 0; i < pMsg->channelList.numChannels; i++) {
-		sms_log(pMac, LOG2, FL("channelNumber[%d]= %d"), i,
+		sme_debug("channelNumber[%d]= %d", i,
 			pMsg->channelList.channelNumber[i]);
 	}
 
 	if (QDF_IS_STATUS_SUCCESS(status)) {
 		status = cds_send_mb_message_to_mac(pMsg);
 	} else {
-		sms_log(pMac, LOGE,
-			FL("failed to send down scan req with status = %d"),
+		sme_err(
+			"failed to send down scan req with status: %d",
 			status);
 		qdf_mem_free(pMsg);
 	}
@@ -5305,10 +5630,10 @@ static void csr_diag_scan_channels(tpAniSirGlobal pMac, tSmeCmd *pCommand)
 #define csr_diag_scan_channels(tpAniSirGlobal pMac, tSmeCmd *pCommand) (void)0;
 #endif /* #ifdef FEATURE_WLAN_DIAG_SUPPORT_CSR */
 
-QDF_STATUS csr_scan_channels(tpAniSirGlobal pMac, tSmeCmd *pCommand)
+static QDF_STATUS csr_scan_channels(tpAniSirGlobal pMac, tSmeCmd *pCommand)
 {
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
-	tScanReqParam scanReq;
+	struct tag_scanreq_param scanReq;
 
 	/*
 	 * Don't delete cached results. Rome rssi based scan candidates may land
@@ -5401,10 +5726,9 @@ QDF_STATUS csr_process_scan_command(tpAniSirGlobal pMac, tSmeCmd *pCommand)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 
-	sms_log(pMac, LOG3,
-			FL("starting SCAN cmd in %d state. reason %d"),
-			pCommand->u.scanCmd.lastRoamState[pCommand->sessionId],
-			pCommand->u.scanCmd.reason);
+	sme_debug("starting SCAN cmd in %d state. reason %d",
+		pCommand->u.scanCmd.lastRoamState[pCommand->sessionId],
+		pCommand->u.scanCmd.reason);
 
 	switch (pCommand->u.scanCmd.reason) {
 	case eCsrScanUserRequest:
@@ -5415,9 +5739,8 @@ QDF_STATUS csr_process_scan_command(tpAniSirGlobal pMac, tSmeCmd *pCommand)
 		break;
 	}
 
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
+	if (!QDF_IS_STATUS_SUCCESS(status))
 		csr_release_scan_command(pMac, pCommand, eCSR_SCAN_FAILURE);
-	}
 
 	return status;
 }
@@ -5476,10 +5799,10 @@ static void csr_scan_copy_request_valid_channels_only(tpAniSirGlobal mac_ctx,
 				cds_get_channel_state(src_req->
 							ChannelInfo.
 							ChannelList
-							[index])))
-			) {
-				sms_log(mac_ctx, LOG2,
-					FL(" reqType= %s (%d), numOfChannels=%d, ignoring DFS channel %d"),
+							[index]))) &&
+				(src_req->ChannelInfo.numOfChannels > 1)) {
+				sme_debug(
+					"reqType= %s (%d), numOfChannels=%d, ignoring DFS channel %d",
 					sme_request_type_to_string(
 						src_req->requestType),
 					src_req->requestType,
@@ -5514,7 +5837,7 @@ static void csr_scan_copy_request_valid_channels_only(tpAniSirGlobal mac_ctx,
 					sta_roam_policy.sap_operating_band ==
 						eCSR_BAND_5G))) {
 					QDF_TRACE(QDF_MODULE_ID_SME,
-						QDF_TRACE_LEVEL_INFO,
+						QDF_TRACE_LEVEL_DEBUG,
 					      FL("ignoring unsafe channel %d"),
 						src_req->ChannelInfo.
 						ChannelList[index]);
@@ -5550,14 +5873,12 @@ static bool csr_scan_filter_given_chnl_band(tpAniSirGlobal mac_ctx,
 	uint32_t valid_chnl_len = WNI_CFG_VALID_CHANNEL_LIST_LEN;
 
 	if (!channel) {
-		sms_log(mac_ctx, LOG1,
-			FL("Nothing to filter as no IBSS session"));
+		sme_debug("Nothing to filter as no IBSS session");
 		return true;
 	}
 
 	if (!dst_req) {
-		sms_log(mac_ctx, LOGE,
-			FL("No valid scan requests"));
+		sme_err("No valid scan requests");
 		return false;
 	}
 	/*
@@ -5566,7 +5887,7 @@ static bool csr_scan_filter_given_chnl_band(tpAniSirGlobal mac_ctx,
 	 * In case if no-concurrent IBSS session exist then scan
 	 * full band
 	 */
-	if ((dst_req->ChannelInfo.numOfChannels == 0)) {
+	if (dst_req->ChannelInfo.numOfChannels == 0) {
 		csr_get_cfg_valid_channels(mac_ctx, valid_chnl_list,
 				&valid_chnl_len);
 	} else {
@@ -5597,8 +5918,7 @@ static bool csr_scan_filter_given_chnl_band(tpAniSirGlobal mac_ctx,
 		}
 	}
 	if (filter_chnl_len == 0) {
-		sms_log(mac_ctx, LOGE,
-			FL("there no channels to scan due to IBSS session"));
+		sme_err("there no channels to scan due to IBSS session");
 		return false;
 	}
 
@@ -5613,13 +5933,48 @@ static bool csr_scan_filter_given_chnl_band(tpAniSirGlobal mac_ctx,
 				sizeof(*dst_req->ChannelInfo.ChannelList));
 	dst_req->ChannelInfo.numOfChannels = filter_chnl_len;
 	if (NULL == dst_req->ChannelInfo.ChannelList) {
-		sms_log(mac_ctx, LOGE,
-			FL("Memory allocation failed"));
+		sme_err("Memory allocation failed");
 		return false;
 	}
 	qdf_mem_copy(dst_req->ChannelInfo.ChannelList, valid_chnl_list,
 			filter_chnl_len);
 	return true;
+}
+
+/**
+ * csr_scan_copy_ie_whitelist_attrs() - Copies ie whitelist attrs
+ * @dst_req: pointer to tCsrScanRequest
+ * @src_req: pointer to tCsrScanRequest
+ *
+ * This function makes a copy of ie whitelist attrs
+ *
+ * Return: QDF_STATUS_SUCCESS - for successful allocation and copy
+ *         QDF_STATUS_E_NOMEM - when failed to allocate memory
+ */
+static QDF_STATUS csr_scan_copy_ie_whitelist_attrs(tCsrScanRequest *dst_req,
+						   tCsrScanRequest *src_req)
+{
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+
+	if (!src_req->num_vendor_oui) {
+		dst_req->num_vendor_oui = 0;
+		dst_req->voui = NULL;
+		return status;
+	}
+
+	dst_req->voui = qdf_mem_malloc(src_req->num_vendor_oui *
+				       sizeof(*dst_req->voui));
+	if (!dst_req->voui) {
+		status = QDF_STATUS_E_NOMEM;
+		dst_req->num_vendor_oui = 0;
+		sme_err("No memory for voui");
+	} else {
+		dst_req->num_vendor_oui = src_req->num_vendor_oui;
+		qdf_mem_copy(dst_req->voui, src_req->voui,
+			     src_req->num_vendor_oui * sizeof(*dst_req->voui));
+	}
+
+	return status;
 }
 
 /**
@@ -5655,14 +6010,15 @@ QDF_STATUS csr_scan_copy_request(tpAniSirGlobal mac_ctx,
 	dst_req->pIEField = NULL;
 	dst_req->ChannelInfo.ChannelList = NULL;
 	dst_req->SSIDs.SSIDList = NULL;
+	dst_req->SSIDs.numOfSSIDs = 0;
+	dst_req->voui = NULL;
 
 	if (src_req->uIEFieldLen) {
 		dst_req->pIEField =
 			qdf_mem_malloc(src_req->uIEFieldLen);
 		if (NULL == dst_req->pIEField) {
 			status = QDF_STATUS_E_NOMEM;
-			sms_log(mac_ctx, LOGE,
-					FL("No memory for scanning IE fields"));
+			sme_err("No memory for scanning IE fields");
 			goto complete;
 		} else {
 			status = QDF_STATUS_SUCCESS;
@@ -5683,8 +6039,7 @@ QDF_STATUS csr_scan_copy_request(tpAniSirGlobal mac_ctx,
 		if (NULL == dst_req->ChannelInfo.ChannelList) {
 			status = QDF_STATUS_E_NOMEM;
 			dst_req->ChannelInfo.numOfChannels = 0;
-			sms_log(mac_ctx, LOGE,
-				FL("No memory for scanning Channel List"));
+			sme_err("No memory for scanning Channel List");
 			goto complete;
 		}
 
@@ -5722,8 +6077,8 @@ QDF_STATUS csr_scan_copy_request(tpAniSirGlobal mac_ctx,
 							dst_req, skip_dfs_chnl,
 							src_req);
 		} else {
-			sms_log(mac_ctx, LOGE,
-				FL("Couldn't get the valid Channel List, keeping requester's list"));
+			sme_err(
+				"Couldn't get the valid Channel List, keeping requester's list");
 			new_index = 0;
 			for (index = 0; index < src_req->ChannelInfo.
 					numOfChannels; index++) {
@@ -5753,8 +6108,7 @@ QDF_STATUS csr_scan_copy_request(tpAniSirGlobal mac_ctx,
 	 * SAP+STA concurrency
 	 */
 	if (cds_is_ibss_conn_exist(&channel)) {
-		sms_log(mac_ctx, LOG1,
-			FL("Conc IBSS exist, channel list will be modified"));
+		sme_debug("Conc IBSS exist, channel list will be modified");
 	} else if (cds_is_any_dfs_beaconing_session_present(&channel)) {
 		/*
 		 * 1) if agile & DFS scans are supported
@@ -5768,14 +6122,13 @@ QDF_STATUS csr_scan_copy_request(tpAniSirGlobal mac_ctx,
 		    wma_get_single_mac_scan_with_dfs_config())
 			channel = 0;
 		else
-			sms_log(mac_ctx, LOG1,
-				FL("Conc DFS SAP/GO exist, channel list will be modified"));
+			sme_debug(
+				"Conc DFS SAP/GO exist, channel list will be modified");
 	}
 
 	if ((channel > 0) &&
 	    (!csr_scan_filter_given_chnl_band(mac_ctx, channel, dst_req))) {
-		sms_log(mac_ctx, LOGE,
-			FL("Can't filter channels due to IBSS/SAP DFS"));
+		sme_err("Can't filter channels due to IBSS/SAP DFS");
 		goto complete;
 	}
 
@@ -5799,8 +6152,7 @@ QDF_STATUS csr_scan_copy_request(tpAniSirGlobal mac_ctx,
 				sizeof(*dst_req->SSIDs.SSIDList));
 		} else {
 			dst_req->SSIDs.numOfSSIDs = 0;
-			sms_log(mac_ctx, LOGE,
-					FL("No memory for scanning SSID List"));
+			sme_err("No memory for scanning SSID List");
 			goto complete;
 		}
 	} /* Allocate memory for SSID List */
@@ -5812,10 +6164,11 @@ QDF_STATUS csr_scan_copy_request(tpAniSirGlobal mac_ctx,
 	dst_req->scan_id = src_req->scan_id;
 	dst_req->timestamp = src_req->timestamp;
 
+	status = csr_scan_copy_ie_whitelist_attrs(dst_req, src_req);
+
 complete:
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
+	if (!QDF_IS_STATUS_SUCCESS(status))
 		csr_scan_free_request(mac_ctx, dst_req);
-	}
 
 	return status;
 }
@@ -5839,6 +6192,12 @@ QDF_STATUS csr_scan_free_request(tpAniSirGlobal pMac, tCsrScanRequest *pReq)
 	}
 	pReq->SSIDs.numOfSSIDs = 0;
 
+	if (pReq->voui) {
+		qdf_mem_free(pReq->voui);
+		pReq->voui = NULL;
+	}
+	pReq->num_vendor_oui = 0;
+
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -5855,8 +6214,7 @@ void csr_scan_call_callback(tpAniSirGlobal pMac, tSmeCmd *pCommand,
 		if (pCommand->u.scanCmd.abort_scan_indication) {
 			if ((pCommand->u.scanCmd.reason != eCsrScanForSsid) ||
 			   (scanStatus != eCSR_SCAN_SUCCESS)) {
-				sms_log(pMac, LOG1,
-				       FL("scanDone due to abort"));
+				sme_debug("scanDone due to abort");
 				scanStatus = eCSR_SCAN_ABORT;
 			}
 		}
@@ -5865,186 +6223,9 @@ void csr_scan_call_callback(tpAniSirGlobal pMac, tSmeCmd *pCommand,
 					     pCommand->u.scanCmd.scanID,
 					     scanStatus);
 	} else {
-		sms_log(pMac, LOG2, "%s:%d - Callback NULL!!!", __func__,
-			__LINE__);
+		sme_debug("Callback NULL!!!");
 	}
 }
-
-#ifdef WLAN_AP_STA_CONCURRENCY
-/**
- * csr_sta_ap_conc_timer_handler - Function to handle STA,AP concurrency timer
- * @pv: pointer variable
- *
- * Function handles STA,AP concurrency timer
- *
- * Return: none
- */
-static void csr_sta_ap_conc_timer_handler(void *pv)
-{
-	tpAniSirGlobal mac_ctx = PMAC_STRUCT(pv);
-	tListElem *entry;
-	tSmeCmd *scan_cmd;
-	uint32_t session_id = CSR_SESSION_ID_INVALID;
-	tCsrScanRequest scan_req;
-	tSmeCmd *send_scancmd = NULL;
-	uint8_t num_chn = 0;
-	uint8_t numchan_combinedconc = 0;
-	uint8_t i, j;
-	tCsrChannelInfo *chn_info = NULL;
-	uint8_t channel_to_scan[WNI_CFG_VALID_CHANNEL_LIST_LEN];
-	QDF_STATUS status;
-
-	csr_ll_lock(&mac_ctx->scan.scanCmdPendingList);
-
-	entry = csr_ll_peek_head(&mac_ctx->scan.scanCmdPendingList,
-			LL_ACCESS_NOLOCK);
-
-	if (NULL == entry) {
-		csr_ll_unlock(&mac_ctx->scan.scanCmdPendingList);
-		return;
-	}
-
-
-	chn_info = &scan_req.ChannelInfo;
-	scan_cmd = GET_BASE_ADDR(entry, tSmeCmd, Link);
-	num_chn =
-		scan_cmd->u.scanCmd.u.scanRequest.ChannelInfo.numOfChannels;
-	session_id = scan_cmd->sessionId;
-
-	/*
-	 * if any session is connected and the number of channels to scan is
-	 * greater than 1 then split the scan into multiple scan operations
-	 * on each individual channel else continue to perform scan on all
-	 * specified channels */
-
-	/*
-	 * split scan if number of channels to scan is greater than 1 and
-	 * any one of the following:
-	 * - STA session is connected and the scan is not a P2P search
-	 * - any P2P session is connected
-	 * Do not split scans if no concurrent infra connections are
-	 * active and if the scan is a BG scan triggered by LFR (OR)
-	 * any scan if LFR is in the middle of a BG scan. Splitting
-	 * the scan is delaying the time it takes for LFR to find
-	 * candidates and resulting in disconnects.
-	 */
-
-	if ((csr_is_sta_session_connected(mac_ctx) &&
-		!csr_is_p2p_session_connected(mac_ctx)))
-		numchan_combinedconc =
-			mac_ctx->roam.configParam.nNumStaChanCombinedConc;
-	else if (csr_is_p2p_session_connected(mac_ctx))
-		numchan_combinedconc =
-			mac_ctx->roam.configParam.nNumP2PChanCombinedConc;
-
-	if ((num_chn > numchan_combinedconc) &&
-		((csr_is_sta_session_connected(mac_ctx) &&
-		(csr_is_concurrent_infra_connected(mac_ctx)) &&
-		(scan_cmd->u.scanCmd.u.scanRequest.p2pSearch != 1)) ||
-		(csr_is_p2p_session_connected(mac_ctx)))) {
-			qdf_mem_set(&scan_req, sizeof(tCsrScanRequest), 0);
-
-		/* optimize this to use 2 command buffer only */
-		send_scancmd = csr_get_command_buffer(mac_ctx);
-		if (!send_scancmd) {
-			sms_log(mac_ctx, LOGE,
-				FL(" Failed to get Queue command buffer"));
-			csr_ll_unlock(&mac_ctx->scan.scanCmdPendingList);
-			return;
-		}
-		send_scancmd->command = scan_cmd->command;
-		send_scancmd->sessionId = scan_cmd->sessionId;
-		send_scancmd->u.scanCmd.callback = NULL;
-		send_scancmd->u.scanCmd.pContext =
-		scan_cmd->u.scanCmd.pContext;
-		send_scancmd->u.scanCmd.reason =
-				scan_cmd->u.scanCmd.reason;
-		/* let it wrap around */
-		wma_get_scan_id(&send_scancmd->u.scanCmd.scanID);
-
-		/*
-		 * First copy all the parameters to local variable of scan
-		 * request
-		 */
-		csr_scan_copy_request(mac_ctx, &scan_req,
-					&scan_cmd->u.scanCmd.u.scanRequest);
-
-		/*
-		 * Now modify the elements of local var scan request required
-		 * to be modified for split scan
-		 */
-		if (scan_req.ChannelInfo.ChannelList != NULL) {
-				qdf_mem_free(scan_req.ChannelInfo.ChannelList);
-			scan_req.ChannelInfo.ChannelList = NULL;
-		}
-
-		chn_info->numOfChannels = numchan_combinedconc;
-		qdf_mem_copy(&channel_to_scan[0],
-				&scan_cmd->u.scanCmd.u.scanRequest.ChannelInfo.
-				ChannelList[0], chn_info->numOfChannels
-				* sizeof(uint8_t));
-		chn_info->ChannelList = &channel_to_scan[0];
-
-		for (i = 0, j = numchan_combinedconc;
-				i < (num_chn - numchan_combinedconc);
-						i++, j++) {
-			/* Move all the channels one step */
-			scan_cmd->u.scanCmd.u.scanRequest.ChannelInfo.
-					ChannelList[i] =
-					scan_cmd->u.scanCmd.u.scanRequest.
-					ChannelInfo.ChannelList[j];
-		}
-
-		/* reduce outstanding # of channels to be scanned */
-		scan_cmd->u.scanCmd.u.scanRequest.ChannelInfo.numOfChannels =
-				num_chn - numchan_combinedconc;
-
-		scan_req.BSSType = eCSR_BSS_TYPE_ANY;
-		/* Modify callers parameters in case of concurrency */
-		scan_req.scanType = eSIR_ACTIVE_SCAN;
-		/* Use concurrency values for min/maxChnTime. */
-		csr_set_default_scan_timing(mac_ctx, scan_req.scanType,
-						&scan_req);
-
-		status = csr_scan_copy_request(mac_ctx,
-						&send_scancmd->u.scanCmd.u.
-						scanRequest, &scan_req);
-		if (!QDF_IS_STATUS_SUCCESS(status)) {
-			sms_log(mac_ctx, LOGE,
-				FL(" Failed to get copy csr_scan_request = %d"),
-				status);
-			csr_ll_unlock(&mac_ctx->scan.scanCmdPendingList);
-			return;
-		}
-		/* Clean the local scan variable */
-		scan_req.ChannelInfo.ChannelList = NULL;
-		scan_req.ChannelInfo.numOfChannels = 0;
-		csr_scan_free_request(mac_ctx, &scan_req);
-	} else {
-		/*
-		 * no active connected session present or numChn == 1
-		 * scan all remaining channels
-		 */
-		send_scancmd = scan_cmd;
-		/* remove this command from pending list */
-		if (csr_ll_remove_head(&mac_ctx->scan.scanCmdPendingList,
-			/*
-			 * In case between PeekHead and here, the entry
-			 * got removed by another thread.
-			 */
-					LL_ACCESS_NOLOCK) == NULL) {
-			sms_log(mac_ctx, LOGE,
-				FL(" Failed to remove entry from scanCmdPendingList"));
-		}
-
-	}
-	csr_queue_sme_command(mac_ctx, send_scancmd, false);
-
-
-	csr_ll_unlock(&mac_ctx->scan.scanCmdPendingList);
-
-}
-#endif
 
 /**
  * csr_purge_scan_result_by_age() - Purge scan results based on Age
@@ -6058,25 +6239,25 @@ static void csr_purge_scan_result_by_age(void *pv)
 {
 	tpAniSirGlobal mac_ctx = PMAC_STRUCT(pv);
 	tListElem *entry, *tmp_entry;
-	tCsrScanResult *result;
+	struct tag_csrscan_result *result;
 	uint64_t ageout_time =
 		mac_ctx->scan.scanResultCfgAgingTime * SYSTEM_TIME_SEC_TO_MSEC;
 	uint64_t cur_time = qdf_mc_timer_get_system_time();
 	uint8_t *bssId;
 
 	csr_ll_lock(&mac_ctx->scan.scanResultList);
-	entry = csr_ll_peek_head(&mac_ctx->scan.scanResultList, LL_ACCESS_NOLOCK);
-	sms_log(mac_ctx, LOG1, FL(" Ageout time=%llu"), ageout_time);
+	entry = csr_ll_peek_head(&mac_ctx->scan.scanResultList,
+				LL_ACCESS_NOLOCK);
+	sme_debug("Ageout time=%llu", ageout_time);
 	while (entry) {
 		tmp_entry = csr_ll_next(&mac_ctx->scan.scanResultList, entry,
 					LL_ACCESS_NOLOCK);
-		result = GET_BASE_ADDR(entry, tCsrScanResult, Link);
+		result = GET_BASE_ADDR(entry, struct tag_csrscan_result, Link);
 
 		if ((cur_time - result->Result.BssDescriptor.received_time) >
 			    ageout_time) {
 			bssId = result->Result.BssDescriptor.bssId;
-			sms_log(mac_ctx, LOGW,
-				FL("age out for BSSID" MAC_ADDRESS_STR" Channel %d"),
+			sme_debug("age out BSSID " MAC_ADDRESS_STR" Channel %d",
 				MAC_ADDR_ARRAY(bssId),
 				result->Result.BssDescriptor.channelId);
 			csr_scan_age_out_bss(mac_ctx, result);
@@ -6096,7 +6277,7 @@ bool csr_scan_remove_fresh_scan_command(tpAniSirGlobal pMac, uint8_t sessionId)
 
 	qdf_mem_zero(&localList, sizeof(tDblLinkList));
 	if (!QDF_IS_STATUS_SUCCESS(csr_ll_open(pMac->hHdd, &localList))) {
-		sms_log(pMac, LOGE, FL(" failed to open list"));
+		sme_err("failed to open list");
 		return fRet;
 	}
 
@@ -6112,8 +6293,7 @@ bool csr_scan_remove_fresh_scan_command(tpAniSirGlobal pMac, uint8_t sessionId)
 			pEntry = pEntryTmp;
 			continue;
 		}
-		sms_log(pMac, LOGW,
-			FL("-------- abort scan command reason = %d"),
+		sme_debug("-------- abort scan command reason = %d",
 			pCommand->u.scanCmd.reason);
 		/* The rest are fresh scan requests */
 		if (csr_ll_remove_entry(pCmdList, pEntry,
@@ -6153,19 +6333,70 @@ void csr_release_scan_command(tpAniSirGlobal pMac, tSmeCmd *pCommand,
 	tDblLinkList *cmd_list = NULL;
 
 	csr_scan_call_callback(pMac, pCommand, scanStatus);
-	sms_log(pMac, LOG1, FL("Remove Scan command reason = %d, scan_id %d"),
+	sme_debug("Remove Scan command reason = %d, scan_id %d",
 		reason, pCommand->u.scanCmd.scanID);
 	cmd_list = &pMac->sme.smeScanCmdActiveList;
 	status = csr_ll_remove_entry(cmd_list, &pCommand->Link, LL_ACCESS_LOCK);
 	if (!status) {
-		sms_log(pMac, LOGE,
-			FL("cannot release command reason %d scan_id %d"),
+		sme_err("cannot release command reason %d scan_id %d",
 			pCommand->u.scanCmd.reason,
 			pCommand->u.scanCmd.scanID);
 		return;
 	}
 	csr_release_command_scan(pMac, pCommand);
 }
+
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+tSmeCmd *csr_find_self_reassoc_cmd(tpAniSirGlobal mac_ctx, uint32_t session_id)
+{
+	tDblLinkList *cmd_list = NULL;
+	tListElem *entry;
+	tSmeCmd *temp_cmd = NULL;
+
+	cmd_list = &mac_ctx->sme.smeCmdActiveList;
+	entry = csr_ll_peek_head(cmd_list, LL_ACCESS_LOCK);
+	if (!entry) {
+		sme_err("Queue empty");
+		return NULL;
+	}
+	temp_cmd = GET_BASE_ADDR(entry, tSmeCmd, Link);
+	if ((temp_cmd->command != e_sme_command_issue_self_reassoc) ||
+			(temp_cmd->sessionId != session_id)) {
+		sme_debug("no self-reassoc cmd active");
+		return NULL;
+	}
+
+	return temp_cmd;
+}
+
+void csr_remove_same_ap_reassoc_cmd(tpAniSirGlobal mac_ctx, tSmeCmd *sme_cmd)
+{
+	bool status = false;
+	tDblLinkList *cmd_list = NULL;
+
+	cmd_list = &mac_ctx->sme.smeCmdActiveList;
+	sme_debug("Remove self reassoc cmd = %d, session_id = %d",
+		sme_cmd->command, sme_cmd->sessionId);
+	status = csr_ll_remove_entry(cmd_list,
+			&sme_cmd->Link, LL_ACCESS_LOCK);
+	if (!status) {
+		sme_err(
+			"can't del self-reassoc cmd %d session %d",
+			sme_cmd->command, sme_cmd->sessionId);
+		QDF_ASSERT(0);
+	}
+	sme_process_pending_queue(mac_ctx);
+}
+#else
+tSmeCmd *csr_find_self_reassoc_cmd(tpAniSirGlobal mac_ctx, uint32_t session_id)
+{
+	return NULL;
+}
+
+void csr_remove_same_ap_reassoc_cmd(tpAniSirGlobal mac_ctx, tSmeCmd *sme_cmd)
+{
+}
+#endif
 
 QDF_STATUS csr_scan_get_pmkid_candidate_list(tpAniSirGlobal pMac,
 					     uint32_t sessionId,
@@ -6180,11 +6411,11 @@ QDF_STATUS csr_scan_get_pmkid_candidate_list(tpAniSirGlobal pMac,
 	uint32_t nItems = *pNumItems;
 
 	if (!pSession) {
-		sms_log(pMac, LOGE, FL("  session %d not found "), sessionId);
+		sme_err("session %d not found", sessionId);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	sms_log(pMac, LOGW, FL("pMac->scan.NumPmkidCandidate = %d"),
+	sme_debug("pMac->scan.NumPmkidCandidate = %d",
 		pSession->NumPmkidCandidate);
 	csr_reset_pmkid_candidate_list(pMac, sessionId);
 	if (!(csr_is_conn_state_connected(pMac, sessionId)
@@ -6250,11 +6481,11 @@ QDF_STATUS csr_scan_get_bkid_candidate_list(tpAniSirGlobal pMac,
 	uint32_t nItems = *pNumItems;
 
 	if (!pSession) {
-		sms_log(pMac, LOGE, FL("  session %d not found "), sessionId);
+		sme_err("session %d not found", sessionId);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	sms_log(pMac, LOGW, FL("pMac->scan.NumBkidCandidate = %d"),
+	sme_debug("pMac->scan.NumBkidCandidate = %d",
 		pSession->NumBkidCandidate);
 	csr_reset_bkid_candidate_list(pMac, sessionId);
 	if (!(csr_is_conn_state_connected(pMac, sessionId)
@@ -6328,8 +6559,7 @@ static void csr_roam_copy_channellist(tpAniSirGlobal mac_ctx,
 			index++) {
 		if (!csr_roam_is_valid_channel(mac_ctx,
 			profile->ChannelInfo.ChannelList[index])) {
-			sms_log(mac_ctx, LOGW,
-				FL("process a channel (%d) that is invalid"),
+			sme_warn("process a channel: %d that is invalid",
 			profile->ChannelInfo.ChannelList[index]);
 			continue;
 		}
@@ -6401,11 +6631,9 @@ QDF_STATUS csr_scan_for_ssid(tpAniSirGlobal mac_ctx, uint32_t session_id,
 	tCsrSSIDs *ssids = NULL;
 	struct csr_scan_for_ssid_context *context;
 
-	sms_log(mac_ctx, LOG2, FL("called"));
-
 	if (!(mac_ctx->scan.fScanEnable) && (num_ssid != 1)) {
-		sms_log(mac_ctx, LOGE,
-			FL("cannot scan because scanEnable (%d) or numSSID (%d) is invalid"),
+		sme_err(
+			"cannot scan because scanEnable (%d) or numSSID (%d) is invalid",
 			mac_ctx->scan.fScanEnable, profile->SSIDs.numOfSSIDs);
 		return status;
 	}
@@ -6413,8 +6641,7 @@ QDF_STATUS csr_scan_for_ssid(tpAniSirGlobal mac_ctx, uint32_t session_id,
 	scan_cmd = csr_get_command_buffer(mac_ctx);
 
 	if (!scan_cmd) {
-		sms_log(mac_ctx, LOGE,
-			FL("failed to allocate command buffer"));
+		sme_err("failed to allocate command buffer");
 		goto error;
 	}
 
@@ -6431,8 +6658,7 @@ QDF_STATUS csr_scan_for_ssid(tpAniSirGlobal mac_ctx, uint32_t session_id,
 
 	context = qdf_mem_malloc(sizeof(*context));
 	if (NULL == context) {
-		sms_log(mac_ctx, LOGE,
-			"Failed to allocate memory for ssid scan context");
+		sme_err("Failed to allocate memory for ssid scan context");
 		goto error;
 	}
 	context->mac_ctx = mac_ctx;
@@ -6483,8 +6709,7 @@ QDF_STATUS csr_scan_for_ssid(tpAniSirGlobal mac_ctx, uint32_t session_id,
 					profile->nAddIEScanLength);
 			scan_req->uIEFieldLen = profile->nAddIEScanLength;
 		} else {
-			sms_log(mac_ctx, LOGE,
-				"No memory for scanning IE fields");
+			sme_err("No memory for scanning IE fields");
 		}
 	} else
 		scan_req->uIEFieldLen = 0;
@@ -6570,8 +6795,7 @@ QDF_STATUS csr_scan_for_ssid(tpAniSirGlobal mac_ctx, uint32_t session_id,
 	status = csr_queue_sme_command(mac_ctx, scan_cmd, false);
 error:
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGE,
-			FL(" failed to iniate scan with status = %d"), status);
+		sme_err("failed to initiate scan with status: %d", status);
 		if (scan_cmd)
 			csr_release_command_scan(mac_ctx, scan_cmd);
 		if (notify)
@@ -6582,21 +6806,21 @@ error:
 	return status;
 }
 
-void csr_set_cfg_valid_channel_list(tpAniSirGlobal pMac, uint8_t *pChannelList,
-				    uint8_t NumChannels)
+static void csr_set_cfg_valid_channel_list(tpAniSirGlobal pMac,
+				uint8_t *pChannelList, uint8_t NumChannels)
 {
 	uint32_t dataLen = sizeof(uint8_t) * NumChannels;
 	QDF_STATUS status;
 
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_INFO,
+	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "%s: dump valid channel list(NumChannels(%d))",
 		  __func__, NumChannels);
-	QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_INFO,
+	QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 			   pChannelList, NumChannels);
 	cfg_set_str(pMac, WNI_CFG_VALID_CHANNEL_LIST, pChannelList,
 			dataLen);
 
-	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_INFO,
+	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 		  "Scan offload is enabled, update default chan list");
 	/*
 	 * disable fcc constraint since new country code
@@ -6608,13 +6832,12 @@ void csr_set_cfg_valid_channel_list(tpAniSirGlobal pMac, uint8_t *pChannelList,
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			  "failed to update the supported channel list");
 	}
-	return;
 }
 
 /*
  * The Tx power limits are saved in the cfg for future usage.
  */
-void csr_save_tx_power_to_cfg(tpAniSirGlobal pMac, tDblLinkList *pList,
+static void csr_save_tx_power_to_cfg(tpAniSirGlobal pMac, tDblLinkList *pList,
 			      uint32_t cfgId)
 {
 	tListElem *pEntry;
@@ -6652,8 +6875,8 @@ void csr_save_tx_power_to_cfg(tpAniSirGlobal pMac, tDblLinkList *pList,
 				 * expanding this entry will overflow our
 				 * allocation
 				 */
-				sms_log(pMac, LOGE,
-					FL("Buffer overflow, start %d, num %d, offset %d"),
+				sme_err(
+					"Buffer overflow, start %d, num %d, offset %d",
 					ch_set->firstChannel,
 					ch_set->numChannels,
 					ch_set->interChannelOffset);
@@ -6664,15 +6887,15 @@ void csr_save_tx_power_to_cfg(tpAniSirGlobal pMac, tDblLinkList *pList,
 				ch_pwr_set->firstChanNum = (tSirMacChanNum)
 					(ch_set->firstChannel + (idx *
 						ch_set->interChannelOffset));
-				sms_log(pMac, LOG3,
-					FL("Setting Channel Number %d"),
+				sme_debug(
+					"Setting Channel Number %d",
 					ch_pwr_set->firstChanNum);
 				ch_pwr_set->numChannels = 1;
 				ch_pwr_set->maxTxPower =
 					QDF_MIN(ch_set->txPower,
 					pMac->roam.configParam.nTxPowerCap);
-				sms_log(pMac, LOG3,
-					FL("Setting Max Transmit Power %d"),
+				sme_debug(
+					"Setting Max Transmit Power %d",
 					ch_pwr_set->maxTxPower);
 				cbLen += sizeof(tSirMacChanInfo);
 				ch_pwr_set++;
@@ -6680,21 +6903,21 @@ void csr_save_tx_power_to_cfg(tpAniSirGlobal pMac, tDblLinkList *pList,
 		} else {
 			if (cbLen >= dataLen) {
 				/* this entry will overflow our allocation */
-				sms_log(pMac, LOGE,
-					FL("Buffer overflow, start %d, num %d, offset %d"),
+				sme_err(
+					"Buffer overflow, start %d, num %d, offset %d",
 					ch_set->firstChannel,
 					ch_set->numChannels,
 					ch_set->interChannelOffset);
 				break;
 			}
 			ch_pwr_set->firstChanNum = ch_set->firstChannel;
-			sms_log(pMac, LOG3, FL("Setting Channel Number %d"),
+			sme_debug("Setting Channel Number %d",
 				ch_pwr_set->firstChanNum);
 			ch_pwr_set->numChannels = ch_set->numChannels;
 			ch_pwr_set->maxTxPower = QDF_MIN(ch_set->txPower,
 					pMac->roam.configParam.nTxPowerCap);
-			sms_log(pMac, LOG3,
-				FL("Setting Max Tx Power %d, nTxPower %d"),
+			sme_debug(
+				"Setting Max Tx Power %d, nTxPower %d",
 				ch_pwr_set->maxTxPower,
 				pMac->roam.configParam.nTxPowerCap);
 			cbLen += sizeof(tSirMacChanInfo);
@@ -6708,19 +6931,19 @@ void csr_save_tx_power_to_cfg(tpAniSirGlobal pMac, tDblLinkList *pList,
 	qdf_mem_free(pBuf);
 }
 
-void csr_set_cfg_country_code(tpAniSirGlobal pMac, uint8_t *countryCode)
+static void csr_set_cfg_country_code(tpAniSirGlobal pMac, uint8_t *countryCode)
 {
 	uint8_t cc[WNI_CFG_COUNTRY_CODE_LEN];
 	/* v_REGDOMAIN_t DomainId */
 
-	sms_log(pMac, LOG3, FL("Setting Country Code in Cfg %s"), countryCode);
+	sme_debug("Setting Country Code in Cfg %s", countryCode);
 	qdf_mem_copy(cc, countryCode, WNI_CFG_COUNTRY_CODE_LEN);
 
 	/*
-	* don't program the bogus country codes that we created for Korea in the
-	* MAC. if we see the bogus country codes, program the MAC with the right
-	* country code.
-	*/
+	 * Don't program the bogus country codes that we created for Korea in
+	 * the MAC. if we see the bogus country codes, program the MAC with
+	 * the right country code.
+	 */
 	if (('K' == countryCode[0] && '1' == countryCode[1]) ||
 	    ('K' == countryCode[0] && '2' == countryCode[1]) ||
 	    ('K' == countryCode[0] && '3' == countryCode[1]) ||
@@ -6737,28 +6960,25 @@ void csr_set_cfg_country_code(tpAniSirGlobal pMac, uint8_t *countryCode)
 	 * Need to let HALPHY know about the current domain so it can apply some
 	 * domain-specific settings (TX filter...)
 	 */
-	/*
-	if(QDF_IS_STATUS_SUCCESS(csr_get_regulatory_domain_for_country(
-		pMac, cc, &DomainId))) {
-		halPhySetRegDomain(pMac, DomainId);
-	} */
 }
 
 QDF_STATUS csr_get_country_code(tpAniSirGlobal pMac, uint8_t *pBuf,
 				uint8_t *pbLen)
 {
-	QDF_STATUS status = QDF_STATUS_E_INVAL;
+	tSirRetStatus status;
 	uint32_t len;
 
 	if (pBuf && pbLen && (*pbLen >= WNI_CFG_COUNTRY_CODE_LEN)) {
 		len = *pbLen;
-		status = wlan_cfg_get_str(pMac, WNI_CFG_COUNTRY_CODE, pBuf, &len);
-		if (QDF_IS_STATUS_SUCCESS(status)) {
+		status = wlan_cfg_get_str(pMac, WNI_CFG_COUNTRY_CODE, pBuf,
+					&len);
+		if (status == eSIR_SUCCESS) {
 			*pbLen = (uint8_t) len;
+			return QDF_STATUS_SUCCESS;
 		}
 	}
 
-	return status;
+	return QDF_STATUS_E_INVAL;
 }
 
 void csr_set_cfg_scan_control_list(tpAniSirGlobal pMac, uint8_t *countryCode,
@@ -6787,15 +7007,15 @@ void csr_set_cfg_scan_control_list(tpAniSirGlobal pMac, uint8_t *countryCode,
 					/* insert a pair(channel#, flag) */
 					pControlList[j + 1] =
 						csr_get_scan_type(pMac,
-								  pControlList[j]);
+							pControlList[j]);
 					found = false;  /* reset the flag */
 				}
 
 			}
-			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_INFO,
+			QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG,
 				  "%s: dump scan control list", __func__);
 			QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_SME,
-					   QDF_TRACE_LEVEL_INFO, pControlList,
+					   QDF_TRACE_LEVEL_DEBUG, pControlList,
 					   len);
 
 			cfg_set_str(pMac, WNI_CFG_SCAN_CONTROL_LIST,
@@ -6880,7 +7100,7 @@ QDF_STATUS csr_remove_cmd_from_pending_list(tpAniSirGlobal pMac,
 
 	qdf_mem_zero(&localList, sizeof(tDblLinkList));
 	if (!QDF_IS_STATUS_SUCCESS(csr_ll_open(pMac->hHdd, &localList))) {
-		sms_log(pMac, LOGE, FL("failed to open list"));
+		sme_err("failed to open list");
 		return status;
 	}
 
@@ -6913,7 +7133,7 @@ QDF_STATUS csr_remove_cmd_from_pending_list(tpAniSirGlobal pMac,
 
 	while ((pEntry = csr_ll_remove_head(&localList, LL_ACCESS_NOLOCK))) {
 		pCommand = GET_BASE_ADDR(pEntry, tSmeCmd, Link);
-		sms_log(pMac, LOG1, FL("Sending abort for command ID %d"),
+		sme_debug("Sending abort for command ID %d",
 			(commandType == eSmeCommandScan) ? pCommand->u.
 			scanCmd.scanID : sessionId);
 		csr_abort_command(pMac, pCommand, false);
@@ -6948,7 +7168,7 @@ void csr_remove_scan_for_ssid_from_pending_list(tpAniSirGlobal pMac,
 
 	qdf_mem_zero(&localList, sizeof(tDblLinkList));
 	if (!QDF_IS_STATUS_SUCCESS(csr_ll_open(pMac->hHdd, &localList))) {
-		sms_log(pMac, LOGE, FL(" failed to open list"));
+		sme_err("failed to open list");
 		return;
 	}
 	csr_ll_lock(pList);
@@ -7005,24 +7225,21 @@ static void csr_send_scan_abort(tpAniSirGlobal mac_ctx,
 	msg_len = (uint16_t)(sizeof(tSirSmeScanAbortReq));
 	msg = qdf_mem_malloc(msg_len);
 	if (NULL == msg) {
-		sms_log(mac_ctx, LOGE,
-			FL("Failed to alloc memory for SmeScanAbortReq"));
+		sme_err("Failed to alloc memory for SmeScanAbortReq");
 		return;
 	}
 	msg->type = eWNI_SME_SCAN_ABORT_IND;
 	msg->msgLen = msg_len;
 	msg->sessionId = session_id;
 	msg->scan_id = scan_id;
-	sms_log(mac_ctx, LOG2,
-		FL("Abort scan sent to Firmware scan_id %d session %d"),
+	sme_debug(
+		"Abort scan sent to Firmware scan_id %d session %d",
 		scan_id, session_id);
 	status = cds_send_mb_message_to_mac(msg);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGE,
-			FL("Failed to send abort scan.scan_id %d session %d"),
+		sme_err("Failed to send abort scan.scan_id %d session %d",
 			scan_id, session_id);
 	}
-	return;
 }
 
 /**
@@ -7059,7 +7276,7 @@ QDF_STATUS csr_abort_scan_from_active_list(tpAniSirGlobal mac_ctx,
 			/*skip if abort reason is for SSID*/
 			if ((abort_reason == eCSR_SCAN_ABORT_SSID_ONLY) &&
 				(eCsrScanForSsid != cmd->u.scanCmd.reason))
-					continue;
+				continue;
 			/*
 			 * Do not skip if command and either session id
 			 * or scan id is matched
@@ -7083,22 +7300,22 @@ QDF_STATUS csr_abort_scan_from_active_list(tpAniSirGlobal mac_ctx,
 	return status;
 }
 
-
 QDF_STATUS csr_scan_abort_mac_scan_not_for_connect(tpAniSirGlobal pMac,
 						   uint8_t sessionId)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
-	if (!csr_is_scan_for_roam_command_active(pMac)) {
+
+	if (!csr_is_scan_for_roam_command_active(pMac))
 		/*
 		 * Only abort the scan if it is not used for other roam/connect
 		 * purpose
 		 */
 		status = csr_scan_abort_mac_scan(pMac, sessionId,
 				INVALID_SCAN_ID, eCSR_SCAN_ABORT_DEFAULT);
-	}
 	return status;
 }
-bool csr_roam_is_valid_channel(tpAniSirGlobal pMac, uint8_t channel)
+
+static bool csr_roam_is_valid_channel(tpAniSirGlobal pMac, uint8_t channel)
 {
 	bool fValid = false;
 	uint32_t idx_valid_ch;
@@ -7120,7 +7337,7 @@ QDF_STATUS csr_scan_save_preferred_network_found(tpAniSirGlobal pMac,
 {
 	uint32_t uLen = 0;
 	tpSirProbeRespBeacon parsed_frm;
-	tCsrScanResult *pScanResult = NULL;
+	struct tag_csrscan_result *pScanResult = NULL;
 	tSirBssDescription *pBssDescr = NULL;
 	bool fDupBss;
 	tDot11fBeaconIEs *local_ie = NULL;
@@ -7134,12 +7351,11 @@ QDF_STATUS csr_scan_save_preferred_network_found(tpAniSirGlobal pMac,
 	    (tpSirProbeRespBeacon) qdf_mem_malloc(sizeof(tSirProbeRespBeacon));
 
 	if (NULL == parsed_frm) {
-		sms_log(pMac, LOGE, FL("fail to allocate memory for frame"));
+		sme_err("fail to allocate memory for frame");
 		return QDF_STATUS_E_NOMEM;
 	}
 	if (pPrefNetworkFoundInd->frameLength <= SIR_MAC_HDR_LEN_3A) {
-		sms_log(pMac, LOGE,
-			FL("Incorrect len(%d)"),
+		sme_err("Incorrect len: %d",
 			pPrefNetworkFoundInd->frameLength);
 		qdf_mem_free(parsed_frm);
 		return QDF_STATUS_E_FAILURE;
@@ -7149,7 +7365,7 @@ QDF_STATUS csr_scan_save_preferred_network_found(tpAniSirGlobal pMac,
 		pPrefNetworkFoundInd->frameLength - SIR_MAC_HDR_LEN_3A,
 		parsed_frm) != eSIR_SUCCESS
 	    || !parsed_frm->ssidPresent) {
-		sms_log(pMac, LOGE, FL("Parse error ProbeResponse, length=%d"),
+		sme_err("Parse error ProbeResponse, length: %d",
 			pPrefNetworkFoundInd->frameLength);
 		qdf_mem_free(parsed_frm);
 		return QDF_STATUS_E_FAILURE;
@@ -7160,9 +7376,9 @@ QDF_STATUS csr_scan_save_preferred_network_found(tpAniSirGlobal pMac,
 		uLen = pPrefNetworkFoundInd->frameLength -
 		       (SIR_MAC_HDR_LEN_3A + SIR_MAC_B_PR_SSID_OFFSET);
 	}
-	pScanResult = qdf_mem_malloc(sizeof(tCsrScanResult) + uLen);
+	pScanResult = qdf_mem_malloc(sizeof(struct tag_csrscan_result) + uLen);
 	if (NULL == pScanResult) {
-		sms_log(pMac, LOGE, FL("fail to allocate memory for frame"));
+		sme_err("fail to allocate memory for frame");
 		qdf_mem_free(parsed_frm);
 		return QDF_STATUS_E_NOMEM;
 	}
@@ -7188,7 +7404,7 @@ QDF_STATUS csr_scan_save_preferred_network_found(tpAniSirGlobal pMac,
 		if ((pMac->roam.configParam.bandCapability == eCSR_BAND_ALL) ||
 			(pMac->roam.configParam.bandCapability == eCSR_BAND_24))
 			pBssDescr->channelId = 1;
-		 else if (pMac->roam.configParam.bandCapability == eCSR_BAND_5G)
+		else if (pMac->roam.configParam.bandCapability == eCSR_BAND_5G)
 			pBssDescr->channelId = 36;
 	}
 	if ((pBssDescr->channelId > 0) && (pBssDescr->channelId < 15)) {
@@ -7213,8 +7429,8 @@ QDF_STATUS csr_scan_save_preferred_network_found(tpAniSirGlobal pMac,
 	pBssDescr->rssi = -1 * pPrefNetworkFoundInd->rssi;
 	pBssDescr->beaconInterval = parsed_frm->beaconInterval;
 	if (!pBssDescr->beaconInterval) {
-		sms_log(pMac, LOGW, FL("Bcn Interval is Zero , default to 100"
-			MAC_ADDRESS_STR), MAC_ADDR_ARRAY(pBssDescr->bssId));
+		sme_warn("Bcn Interval is Zero , default to 100"
+			MAC_ADDRESS_STR, MAC_ADDR_ARRAY(pBssDescr->bssId));
 		pBssDescr->beaconInterval = 100;
 	}
 	pBssDescr->timeStamp[0] = parsed_frm->timeStamp[0];
@@ -7238,12 +7454,12 @@ QDF_STATUS csr_scan_save_preferred_network_found(tpAniSirGlobal pMac,
 		pBssDescr->mdie[1] = parsed_frm->mdie[1];
 		pBssDescr->mdie[2] = parsed_frm->mdie[2];
 	}
-	sms_log(pMac, LOG1, FL("mdie=%02x%02x%02x"),
+	sme_debug("mdie=%02x%02x%02x",
 		(unsigned int)pBssDescr->mdie[0],
 		(unsigned int)pBssDescr->mdie[1],
 		(unsigned int)pBssDescr->mdie[2]);
 
-	sms_log(pMac, LOG2, FL("Bssid= "MAC_ADDRESS_STR" chan= %d, rssi = %d"),
+	sme_debug("Bssid= "MAC_ADDRESS_STR" chan= %d, rssi = %d",
 		MAC_ADDR_ARRAY(pBssDescr->bssId), pBssDescr->channelId,
 		pBssDescr->rssi);
 	/* IEs */
@@ -7258,7 +7474,7 @@ QDF_STATUS csr_scan_save_preferred_network_found(tpAniSirGlobal pMac,
 				&pScanResult->Result.BssDescriptor, &local_ie);
 
 		if (!(local_ie || QDF_IS_STATUS_SUCCESS(status))) {
-			sms_log(pMac, LOGE, FL("Cannot parse IEs"));
+			sme_err("Cannot parse IEs");
 			csr_free_scan_result_entry(pMac, pScanResult);
 			qdf_mem_free(parsed_frm);
 			return QDF_STATUS_E_RESOURCES;
@@ -7267,11 +7483,11 @@ QDF_STATUS csr_scan_save_preferred_network_found(tpAniSirGlobal pMac,
 
 	fDupBss = csr_remove_dup_bss_description(pMac,
 			&pScanResult->Result.BssDescriptor,
-			local_ie, &tmpSsid, &timer);
+			&tmpSsid, &timer);
 	/* Check whether we have reach out limit */
 	if (CSR_SCAN_IS_OVER_BSS_LIMIT(pMac)) {
 		/* Limit reach */
-		sms_log(pMac, LOGE, FL("BSS limit reached"));
+		sme_err("BSS limit reached");
 		/* Free the resources */
 		if ((pScanResult->Result.pvIes == NULL) && local_ie)
 			qdf_mem_free(local_ie);
@@ -7298,7 +7514,7 @@ QDF_STATUS csr_scan_save_preferred_network_found(tpAniSirGlobal pMac,
 void csr_init_occupied_channels_list(tpAniSirGlobal pMac, uint8_t sessionId)
 {
 	tListElem *pEntry = NULL;
-	tCsrScanResult *pBssDesc = NULL;
+	struct tag_csrscan_result *pBssDesc = NULL;
 	tDot11fBeaconIEs *pIes = NULL;
 	tpCsrNeighborRoamControlInfo pNeighborRoamInfo =
 		&pMac->roam.neighborRoamInfo[sessionId];
@@ -7308,7 +7524,7 @@ void csr_init_occupied_channels_list(tpAniSirGlobal pMac, uint8_t sessionId)
 		 * Ini file contains neighbor scan channel list, hence NO need
 		 * to build occupied channel list"
 		 */
-		sms_log(pMac, LOG1, FL("Ini contains neighbor scan ch list"));
+		sme_debug("Ini contains neighbor scan ch list");
 		return;
 	}
 
@@ -7317,7 +7533,7 @@ void csr_init_occupied_channels_list(tpAniSirGlobal pMac, uint8_t sessionId)
 		 * Do not flush occupied list since current roam profile matches
 		 * previous
 		 */
-		sms_log(pMac, LOG2, FL("Current roam profile matches prev"));
+		sme_debug("Current roam profile matches prev");
 		return;
 	}
 
@@ -7328,13 +7544,18 @@ void csr_init_occupied_channels_list(tpAniSirGlobal pMac, uint8_t sessionId)
 	csr_ll_lock(&pMac->scan.scanResultList);
 	pEntry = csr_ll_peek_head(&pMac->scan.scanResultList, LL_ACCESS_NOLOCK);
 	while (pEntry) {
-		pBssDesc = GET_BASE_ADDR(pEntry, tCsrScanResult, Link);
+		pBssDesc = GET_BASE_ADDR(pEntry, struct tag_csrscan_result,
+					Link);
 		pIes = (tDot11fBeaconIEs *) (pBssDesc->Result.pvIes);
 		/* At this time, pBssDescription->Result.pvIes may be NULL */
 		if (!pIes && !QDF_IS_STATUS_SUCCESS(
 			csr_get_parsed_bss_description_ies(pMac,
-				&pBssDesc->Result.BssDescriptor, &pIes)))
+				&pBssDesc->Result.BssDescriptor, &pIes))) {
+			/* Pick next bss entry before continuing */
+			pEntry = csr_ll_next(&pMac->scan.scanResultList, pEntry,
+				     LL_ACCESS_NOLOCK);
 			continue;
+		}
 		csr_scan_add_to_occupied_channels(pMac, pBssDesc, sessionId,
 				&pMac->scan.occupiedChannels[sessionId], pIes,
 				true);
@@ -7365,28 +7586,28 @@ QDF_STATUS csr_scan_create_entry_in_scan_cache(tpAniSirGlobal pMac,
 		status = QDF_STATUS_E_FAILURE;
 		return status;
 	}
-	sms_log(pMac, LOG2, FL("Current bssid::"MAC_ADDRESS_STR),
+	sme_debug("Current bssid::"MAC_ADDRESS_STR,
 		MAC_ADDR_ARRAY(pSession->pConnectBssDesc->bssId));
-	sms_log(pMac, LOG2, FL("My bssid::"MAC_ADDRESS_STR" channel %d"),
+	sme_debug("My bssid::"MAC_ADDRESS_STR" channel %d",
 		MAC_ADDR_ARRAY(bssid.bytes), channel);
 
 	if (!QDF_IS_STATUS_SUCCESS(csr_get_parsed_bss_description_ies(
 					pMac, pSession->pConnectBssDesc,
 					&pNewIes))) {
-		sms_log(pMac, LOGE, FL("Failed to parse IEs"));
+		sme_err("Failed to parse IEs");
 		status = QDF_STATUS_E_FAILURE;
 		goto free_mem;
 	}
 	size = pSession->pConnectBssDesc->length +
 		sizeof(pSession->pConnectBssDesc->length);
 	if (!size) {
-		sms_log(pMac, LOGE, FL("length of bss descriptor is 0"));
+		sme_err("length of bss descriptor is 0");
 		status = QDF_STATUS_E_FAILURE;
 		goto free_mem;
 	}
 	pNewBssDescriptor = qdf_mem_malloc(size);
 	if (NULL == pNewBssDescriptor) {
-		sms_log(pMac, LOGE, FL("memory allocation failed"));
+		sme_err("memory allocation failed");
 		status = QDF_STATUS_E_FAILURE;
 		goto free_mem;
 	}
@@ -7397,21 +7618,19 @@ QDF_STATUS csr_scan_create_entry_in_scan_cache(tpAniSirGlobal pMac,
 	pNewBssDescriptor->channelId = channel;
 	if (NULL == csr_scan_append_bss_description(pMac, pNewBssDescriptor,
 						pNewIes, sessionId)) {
-		sms_log(pMac, LOGE,
-			FL("csr_scan_append_bss_description failed"));
-
+		sme_err("csr_scan_append_bss_description failed");
 		status = QDF_STATUS_E_FAILURE;
 		goto free_mem;
 	}
-	sms_log(pMac, LOGE, FL("entry successfully added in scan cache"));
+	sme_err("entry successfully added in scan cache");
 
 free_mem:
-	if (pNewIes) {
+	if (pNewIes)
 		qdf_mem_free(pNewIes);
-	}
-	if (pNewBssDescriptor) {
+
+	if (pNewBssDescriptor)
 		qdf_mem_free(pNewBssDescriptor);
-	}
+
 	return status;
 }
 
@@ -7421,6 +7640,7 @@ void update_cckmtsf(uint32_t *timeStamp0, uint32_t *timeStamp1,
 		    uint64_t *incr)
 {
 	uint64_t timeStamp64 = ((uint64_t) *timeStamp1 << 32) | (*timeStamp0);
+
 	timeStamp64 = (uint64_t)(timeStamp64 + (*incr));
 	*timeStamp0 = (uint32_t) (timeStamp64 & 0xffffffff);
 	*timeStamp1 = (uint32_t) ((timeStamp64 >> 32) & 0xffffffff);
@@ -7450,12 +7670,13 @@ QDF_STATUS csr_scan_save_roam_offload_ap_to_scan_cache(tpAniSirGlobal pMac,
 	tDot11fBeaconIEs *ies_local_ptr = NULL;
 	tAniSSID tmpSsid;
 	unsigned long timer = 0;
-	tCsrScanResult *scan_res_ptr = NULL;
+	struct tag_csrscan_result *scan_res_ptr = NULL;
 	uint8_t session_id = roam_sync_ind_ptr->roamedVdevId;
 
 	length = roam_sync_ind_ptr->beaconProbeRespLength -
 		(SIR_MAC_HDR_LEN_3A + SIR_MAC_B_PR_SSID_OFFSET);
-	scan_res_ptr = qdf_mem_malloc(sizeof(tCsrScanResult) + length);
+	scan_res_ptr = qdf_mem_malloc(sizeof(struct tag_csrscan_result) +
+				length);
 	if (scan_res_ptr == NULL) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				" fail to allocate memory for frame");
@@ -7479,7 +7700,7 @@ QDF_STATUS csr_scan_save_roam_offload_ap_to_scan_cache(tpAniSirGlobal pMac,
 
 	dup_bss = csr_remove_dup_bss_description(pMac,
 			&scan_res_ptr->Result.BssDescriptor,
-			ies_local_ptr, &tmpSsid, &timer);
+			&tmpSsid, &timer);
 	if (CSR_SCAN_IS_OVER_BSS_LIMIT(pMac)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 				"%s:BSS Limit Exceed", __func__);
@@ -7490,7 +7711,7 @@ QDF_STATUS csr_scan_save_roam_offload_ap_to_scan_cache(tpAniSirGlobal pMac,
 		return QDF_STATUS_E_RESOURCES;
 	}
 
-	sms_log(pMac, LOG1, FL("LFR3:Add BSSID to scan cache" MAC_ADDRESS_STR),
+	sme_debug("LFR3:Add BSSID to scan cache" MAC_ADDRESS_STR,
 		MAC_ADDR_ARRAY(scan_res_ptr->Result.BssDescriptor.bssId));
 	csr_scan_add_result(pMac, scan_res_ptr, ies_local_ptr, session_id);
 	if ((scan_res_ptr->Result.pvIes == NULL) && ies_local_ptr)
@@ -7509,8 +7730,9 @@ QDF_STATUS csr_scan_save_roam_offload_ap_to_scan_cache(tpAniSirGlobal pMac,
 tpSirBssDescription csr_get_fst_bssdescr_ptr(tScanResultHandle result_handle)
 {
 	tListElem *first_element = NULL;
-	tCsrScanResult *scan_result = NULL;
-	tScanResultList *bss_list = (tScanResultList *)result_handle;
+	struct tag_csrscan_result *scan_result = NULL;
+	struct scan_result_list *bss_list =
+				(struct scan_result_list *)result_handle;
 
 	if (NULL == bss_list) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
@@ -7520,7 +7742,6 @@ tpSirBssDescription csr_get_fst_bssdescr_ptr(tScanResultHandle result_handle)
 	if (csr_ll_is_list_empty(&bss_list->List, LL_ACCESS_NOLOCK)) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			FL("bss_list->List is empty"));
-		qdf_mem_free(bss_list);
 		return NULL;
 	}
 	first_element = csr_ll_peek_head(&bss_list->List, LL_ACCESS_NOLOCK);
@@ -7530,7 +7751,8 @@ tpSirBssDescription csr_get_fst_bssdescr_ptr(tScanResultHandle result_handle)
 		return NULL;
 	}
 
-	scan_result = GET_BASE_ADDR(first_element, tCsrScanResult, Link);
+	scan_result = GET_BASE_ADDR(first_element, struct tag_csrscan_result,
+					Link);
 
 	return &scan_result->Result.BssDescriptor;
 }
@@ -7549,8 +7771,9 @@ csr_get_bssdescr_from_scan_handle(tScanResultHandle result_handle,
 				tSirBssDescription *bss_descr)
 {
 	tListElem *first_element = NULL;
-	tCsrScanResult *scan_result = NULL;
-	tScanResultList *bss_list = (tScanResultList *)result_handle;
+	struct tag_csrscan_result *scan_result = NULL;
+	struct scan_result_list *bss_list =
+				(struct scan_result_list *)result_handle;
 
 	if (NULL == bss_list) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
@@ -7566,7 +7789,7 @@ csr_get_bssdescr_from_scan_handle(tScanResultHandle result_handle,
 	first_element = csr_ll_peek_head(&bss_list->List, LL_ACCESS_NOLOCK);
 	if (first_element) {
 		scan_result = GET_BASE_ADDR(first_element,
-				tCsrScanResult,
+				struct tag_csrscan_result,
 				Link);
 		qdf_mem_copy(bss_descr,
 				&scan_result->Result.BssDescriptor,
@@ -7605,14 +7828,12 @@ void csr_scan_active_list_timeout_handle(void *userData)
 	}
 	mac_ctx = PMAC_STRUCT(hal_ctx);
 	scan_id = scan_cmd->u.scanCmd.scanID;
-	sms_log(mac_ctx, LOGE,
-		FL("Scan Timeout:Sending abort to Firmware ID %d session %d "),
+	sme_err("Scan Timeout:Sending abort to Firmware ID %d session %d",
 		scan_id, scan_cmd->sessionId);
 	msg_len = (uint16_t)(sizeof(tSirSmeScanAbortReq));
 	msg = qdf_mem_malloc(msg_len);
 	if (NULL == msg) {
-		sms_log(mac_ctx, LOGE,
-			FL("Failed to alloc memory for SmeScanAbortReq"));
+		sme_err("Failed to alloc memory for SmeScanAbortReq");
 		return;
 	}
 	msg->type = eWNI_SME_SCAN_ABORT_IND;
@@ -7620,12 +7841,11 @@ void csr_scan_active_list_timeout_handle(void *userData)
 	msg->sessionId = scan_cmd->sessionId;
 	msg->scan_id = scan_id;
 	status = cds_send_mb_message_to_mac(msg);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		sms_log(mac_ctx, LOGE,
-			FL(" Failed to post message to LIM"));
-	}
+	if (!QDF_IS_STATUS_SUCCESS(status))
+		sme_err("Failed to post message to LIM");
+
 	csr_save_scan_results(mac_ctx, scan_cmd->u.scanCmd.reason,
 		scan_cmd->sessionId);
+	scan_cmd->u.scanCmd.abort_scan_indication = eCSR_SCAN_ABORT_DEFAULT;
 	csr_release_scan_command(mac_ctx, scan_cmd, eCSR_SCAN_FAILURE);
-	return;
 }

@@ -32,14 +32,15 @@
 #ifndef _WMI_UNIFIED_PRIV_H_
 #define _WMI_UNIFIED_PRIV_H_
 #include <osdep.h>
-#include "a_types.h"
+#include "wmi_unified_api.h"
 #include "wmi_unified_param.h"
+#ifdef CONFIG_MCL
+#include <wmi_unified.h>
+#endif
 #include "qdf_atomic.h"
 
 #define WMI_UNIFIED_MAX_EVENT 0x100
 #define WMI_MAX_CMDS 1024
-
-typedef qdf_nbuf_t wmi_buf_t;
 
 #ifdef WMI_INTERFACE_EVENT_LOGGING
 
@@ -103,12 +104,14 @@ struct wmi_command_header {
  * @ buf_tail_idx - Tail index of buffer
  * @ p_buf_tail_idx - refernce to buffer tail index. It is added to accommodate
  * unified design since MCL uses global variable for buffer tail index
+ * @ size - the size of the buffer in number of entries
  */
 struct wmi_log_buf_t {
 	void *buf;
 	uint32_t length;
 	uint32_t buf_tail_idx;
 	uint32_t *p_buf_tail_idx;
+	uint32_t size;
 };
 
 /**
@@ -225,6 +228,13 @@ QDF_STATUS (*send_suspend_cmd)(wmi_unified_t wmi_handle,
 
 QDF_STATUS (*send_resume_cmd)(wmi_unified_t wmi_handle,
 				uint8_t mac_id);
+
+#ifdef FEATURE_WLAN_D0WOW
+QDF_STATUS (*send_d0wow_enable_cmd)(wmi_unified_t wmi_handle,
+				uint8_t mac_id);
+QDF_STATUS (*send_d0wow_disable_cmd)(wmi_unified_t wmi_handle,
+				uint8_t mac_id);
+#endif
 
 QDF_STATUS (*send_wow_enable_cmd)(wmi_unified_t wmi_handle,
 				struct wow_cmd_params *param,
@@ -393,6 +403,11 @@ QDF_STATUS (*send_roam_scan_offload_rssi_thresh_cmd)(wmi_unified_t wmi_handle,
 QDF_STATUS (*send_roam_scan_filter_cmd)(wmi_unified_t wmi_handle,
 				struct roam_scan_filter_params *roam_req);
 
+#if defined (WLAN_FEATURE_FILS_SK)
+QDF_STATUS (*send_roam_scan_send_hlp_cmd) (wmi_unified_t wmi_handle,
+				struct hlp_params *params);
+#endif
+
 QDF_STATUS (*send_set_passpoint_network_list_cmd)(wmi_unified_t wmi_handle,
 					struct wifi_passpoint_req_param *req);
 
@@ -461,6 +476,9 @@ QDF_STATUS (*send_process_ll_stats_get_cmd)
 QDF_STATUS (*send_get_stats_cmd)(wmi_unified_t wmi_handle,
 		       struct pe_stats_req  *get_stats_param,
 			   uint8_t addr[IEEE80211_ADDR_LEN]);
+
+QDF_STATUS (*send_congestion_cmd)(wmi_unified_t wmi_handle,
+			A_UINT8 vdev_id);
 
 QDF_STATUS (*send_snr_request_cmd)(wmi_unified_t wmi_handle);
 
@@ -535,7 +553,7 @@ QDF_STATUS
 
 QDF_STATUS (*send_add_wow_wakeup_event_cmd)(wmi_unified_t wmi_handle,
 					uint32_t vdev_id,
-					uint32_t bitmap,
+					uint32_t *bitmap,
 					bool enable);
 
 QDF_STATUS (*send_wow_patterns_to_fw_cmd)(wmi_unified_t wmi_handle,
@@ -570,6 +588,10 @@ QDF_STATUS (*send_add_clear_mcbc_filter_cmd)(wmi_unified_t wmi_handle,
 				     uint8_t vdev_id,
 				     struct qdf_mac_addr multicast_addr,
 				     bool clearList);
+
+QDF_STATUS (*send_multiple_add_clear_mcbc_filter_cmd)(wmi_unified_t wmi_handle,
+				uint8_t vdev_id,
+				struct mcast_filter_params *filter_param);
 
 QDF_STATUS (*send_gtk_offload_cmd)(wmi_unified_t wmi_handle, uint8_t vdev_id,
 					   struct gtk_offload_params *params,
@@ -611,8 +633,8 @@ QDF_STATUS (*send_process_ch_avoid_update_cmd)(wmi_unified_t wmi_handle);
 
 QDF_STATUS (*send_regdomain_info_to_fw_cmd)(wmi_unified_t wmi_handle,
 				   uint32_t reg_dmn, uint16_t regdmn2G,
-				   uint16_t regdmn5G, int8_t ctl2G,
-				   int8_t ctl5G);
+				   uint16_t regdmn5G, uint8_t ctl2G,
+				   uint8_t ctl5G);
 
 QDF_STATUS (*send_set_tdls_offchan_mode_cmd)(wmi_unified_t wmi_handle,
 			      struct tdls_channel_switch_params *chan_switch_params);
@@ -835,6 +857,8 @@ QDF_STATUS (*send_vdev_spectral_configure_cmd)(wmi_unified_t wmi_handle,
 
 QDF_STATUS (*send_vdev_spectral_enable_cmd)(wmi_unified_t wmi_handle,
 		struct vdev_spectral_enable_params *param);
+QDF_STATUS (*send_set_del_pmkid_cache_cmd) (wmi_unified_t wmi_handle,
+		wmi_pmk_cache *req_buf, uint32_t vdev_id);
 
 QDF_STATUS (*send_bss_chan_info_request_cmd)(wmi_unified_t wmi_handle,
 		struct bss_chan_info_request_params *param);
@@ -1147,6 +1171,9 @@ QDF_STATUS (*send_power_dbg_cmd)(wmi_unified_t wmi_handle,
 QDF_STATUS (*send_adapt_dwelltime_params_cmd)(wmi_unified_t wmi_handle,
 			struct wmi_adaptive_dwelltime_params *dwelltime_params);
 
+QDF_STATUS (*send_dbs_scan_sel_params_cmd)(wmi_unified_t wmi_handle,
+			struct wmi_dbs_scan_sel_params *dbs_scan_params);
+
 QDF_STATUS (*send_fw_test_cmd)(wmi_unified_t wmi_handle,
 			       struct set_fwtest_params *wmi_fwtest);
 
@@ -1160,6 +1187,9 @@ uint16_t (*wmi_set_htc_tx_tag)(wmi_unified_t wmi_handle,
 
 QDF_STATUS (*send_get_rcpi_cmd)(wmi_unified_t wmi_handle,
 				struct rcpi_req *get_rcpi_param);
+
+QDF_STATUS (*send_limit_off_chan_cmd)(wmi_unified_t wmi_handle,
+			struct wmi_limit_off_chan_param *limit_off_chan_param);
 };
 
 struct target_abi_version {
@@ -1200,7 +1230,8 @@ struct wmi_unified {
 	void *htc_handle;
 	qdf_spinlock_t eventq_lock;
 	qdf_nbuf_queue_t event_queue;
-	struct work_struct rx_event_work;
+	qdf_work_t rx_event_work;
+	qdf_workqueue_t *wmi_rx_work_queue;
 	int wmi_stop_in_progress;
 #ifndef WMI_NON_TLV_SUPPORT
 	struct _wmi_abi_version fw_abi_version;

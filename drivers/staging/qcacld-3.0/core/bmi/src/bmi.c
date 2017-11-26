@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2016 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -27,6 +27,7 @@
 
 #include "i_bmi.h"
 #include "cds_api.h"
+#include "hif.h"
 
 /* APIs visible to the driver */
 
@@ -51,8 +52,9 @@ QDF_STATUS bmi_init(struct ol_context *ol_ctx)
 
 	if (!info->bmi_cmd_buff) {
 		info->bmi_cmd_buff =
-			qdf_mem_alloc_consistent(qdf_dev, qdf_dev->dev, MAX_BMI_CMDBUF_SZ,
-							&info->bmi_cmd_da);
+			qdf_mem_alloc_consistent(qdf_dev, qdf_dev->dev,
+						 MAX_BMI_CMDBUF_SZ,
+						 &info->bmi_cmd_da);
 		if (!info->bmi_cmd_buff) {
 			BMI_ERR("No Memory for BMI Command");
 			return QDF_STATUS_E_NOMEM;
@@ -61,8 +63,9 @@ QDF_STATUS bmi_init(struct ol_context *ol_ctx)
 
 	if (!info->bmi_rsp_buff) {
 		info->bmi_rsp_buff =
-			qdf_mem_alloc_consistent(qdf_dev, qdf_dev->dev, MAX_BMI_CMDBUF_SZ,
-							&info->bmi_rsp_da);
+			qdf_mem_alloc_consistent(qdf_dev, qdf_dev->dev,
+						 MAX_BMI_CMDBUF_SZ,
+						 &info->bmi_rsp_da);
 		if (!info->bmi_rsp_buff) {
 			BMI_ERR("No Memory for BMI Response");
 			goto end;
@@ -223,11 +226,11 @@ QDF_STATUS bmi_download_firmware(struct ol_context *ol_ctx)
 		if (NO_BMI) {
 			/* ol_ctx is not allocated in NO_BMI case */
 			return QDF_STATUS_SUCCESS;
-		} else {
-			BMI_ERR("ol_ctx is NULL");
-			bmi_assert(0);
-			return QDF_STATUS_NOT_INITIALIZED;
 		}
+
+		BMI_ERR("ol_ctx is NULL");
+		bmi_assert(0);
+		return QDF_STATUS_NOT_INITIALIZED;
 	}
 
 	scn = ol_ctx->scn;
@@ -266,7 +269,7 @@ QDF_STATUS bmi_read_soc_register(uint32_t address, uint32_t *param,
 		return QDF_STATUS_E_PERM;
 	}
 
-	BMI_DBG("BMI Read SOC Register:device: 0x%p, address: 0x%x",
+	BMI_DBG("BMI Read SOC Register:device: 0x%pK, address: 0x%x",
 			 scn, address);
 
 	cid = BMI_READ_SOC_REGISTER;
@@ -310,7 +313,7 @@ QDF_STATUS bmi_write_soc_register(uint32_t address, uint32_t param,
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	BMI_DBG("SOC Register Write:device:0x%p, addr:0x%x, param:%d",
+	BMI_DBG("SOC Register Write:device:0x%pK, addr:0x%x, param:%d",
 						scn, address, param);
 
 	cid = BMI_WRITE_SOC_REGISTER;
@@ -355,7 +358,7 @@ bmilz_data(uint8_t *buffer, uint32_t length, struct ol_context *ol_ctx)
 		return QDF_STATUS_E_PERM;
 	}
 
-	BMI_DBG("BMI Send LZ Data: device: 0x%p, length: %d",
+	BMI_DBG("BMI Send LZ Data: device: 0x%pK, length: %d",
 						scn, length);
 
 	cid = BMI_LZ_DATA;
@@ -412,7 +415,7 @@ QDF_STATUS bmi_sign_stream_start(uint32_t address, uint8_t *buffer,
 		return QDF_STATUS_E_PERM;
 	}
 
-	BMI_ERR("Sign Stream start:device:0x%p, addr:0x%x, length:%d",
+	BMI_ERR("Sign Stream start:device:0x%pK, addr:0x%x, length:%d",
 						scn, address, length);
 
 	cid = BMI_SIGN_STREAM_START;
@@ -474,7 +477,7 @@ bmilz_stream_start(uint32_t address, struct ol_context *ol_ctx)
 		BMI_DBG("Command disallowed");
 		return QDF_STATUS_E_PERM;
 	}
-	BMI_DBG("BMI LZ Stream Start: (device: 0x%p, address: 0x%x)",
+	BMI_DBG("BMI LZ Stream Start: (device: 0x%pK, address: 0x%x)",
 						scn, address);
 
 	cid = BMI_LZ_STREAM_START;

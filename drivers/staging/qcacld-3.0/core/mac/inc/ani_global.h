@@ -37,7 +37,6 @@
 #include "sch_global.h"
 #include "sys_global.h"
 #include "cfg_global.h"
-#include "utils_global.h"
 #include "sir_api.h"
 
 #include "csr_api.h"
@@ -83,6 +82,9 @@
 
 #define P2P_WILDCARD_SSID "DIRECT-"     /* TODO Put it in proper place; */
 #define P2P_WILDCARD_SSID_LEN 7
+
+/* Flags for processing single BSS */
+#define WLAN_SKIP_RSSI_UPDATE   0x01
 
 #ifdef WLAN_FEATURE_CONCURRENT_P2P
 #define MAX_NO_OF_P2P_SESSIONS  5
@@ -171,6 +173,9 @@ enum log_event_indicator {
  * @WLAN_LOG_REASON_NO_SCAN_RESULTS: no scan results to report from HDD
  * This enum contains the different reason codes for bug report
  * @WLAN_LOG_REASON_SCAN_NOT_ALLOWED: scan not allowed due to connection states
+ * @WLAN_LOG_REASON_HB_FAILURE: station triggered heart beat failure with AP
+ * @WLAN_LOG_REASON_ROAM_HO_FAILURE: Handover failed during LFR3 roaming
+ * @WLAN_LOG_REASON_DISCONNECT: Disconnect because of some failure
  */
 enum log_event_host_reason_code {
 	WLAN_LOG_REASON_CODE_UNUSED,
@@ -185,6 +190,9 @@ enum log_event_host_reason_code {
 	WLAN_LOG_REASON_SME_OUT_OF_CMD_BUF,
 	WLAN_LOG_REASON_NO_SCAN_RESULTS,
 	WLAN_LOG_REASON_SCAN_NOT_ALLOWED,
+	WLAN_LOG_REASON_HB_FAILURE,
+	WLAN_LOG_REASON_ROAM_HO_FAILURE,
+	WLAN_LOG_REASON_DISCONNECT
 };
 
 
@@ -325,6 +333,11 @@ typedef struct sLimTimers {
 	 */
 	TX_TIMER gLimActiveToPassiveChannelTimer;
 	TX_TIMER g_lim_periodic_auth_retry_timer;
+	/*
+	 * This timer is used for delay between shared auth failure and
+	 * open auth start
+	 */
+	TX_TIMER open_sys_auth_timer;
 
 /* ********************TIMER SECTION ENDS************************************************** */
 /* ALL THE FIELDS BELOW THIS CAN BE ZEROED OUT in lim_initialize */
@@ -389,6 +402,8 @@ typedef struct sAniSirLim {
 	/* abort scan is used to abort an on-going scan */
 	uint8_t abortScan;
 	tLimScanChnInfo scanChnInfo;
+
+	struct lim_scan_channel_status scan_channel_status;
 
 	/* ////////////////////////////////////     SCAN/LEARN RELATED START /////////////////////////////////////////// */
 	tSirMacAddr gSelfMacAddr;       /* added for BT-AMP Support */
@@ -812,8 +827,6 @@ typedef struct sAniSirLim {
 	tLimDisassocDeauthCnfReq limDisassocDeauthCnfReq;
 	uint8_t deferredMsgCnt;
 	tSirDFSChannelList dfschannelList;
-	uint8_t deauthMsgCnt;
-	uint8_t disassocMsgCnt;
 	uint8_t gLimIbssStaLimit;
 
 	/* Number of channel switch IEs sent so far */
@@ -824,6 +837,8 @@ typedef struct sAniSirLim {
 	QDF_STATUS(*add_bssdescr_callback)
 		(tpAniSirGlobal pMac, tpSirBssDescription buf,
 		uint32_t scan_id, uint32_t flags);
+	QDF_STATUS(*sme_msg_callback)
+		(tHalHandle hal, cds_msg_t *msg);
 	uint8_t retry_packet_cnt;
 	uint8_t scan_disabled;
 	uint8_t beacon_probe_rsp_cnt_per_scan;
@@ -842,22 +857,9 @@ typedef struct sRrmContext {
 	tRrmPEContext rrmPEContext;
 } tRrmContext, *tpRrmContext;
 
-/**
- * enum tDriverType - Indicate the driver type to the mac, and based on this
- * do appropriate initialization.
- *
- * @eDRIVER_TYPE_PRODUCTION:
- * @eDRIVER_TYPE_MFG:
- *
- */
-typedef enum {
-	eDRIVER_TYPE_PRODUCTION = 0,
-	eDRIVER_TYPE_MFG = 1,
-} tDriverType;
-
 typedef struct sHalMacStartParameters {
 	/* parametes for the Firmware */
-	tDriverType driverType;
+	enum qdf_driver_type driverType;
 
 } tHalMacStartParameters;
 
@@ -902,13 +904,12 @@ struct vdev_type_nss {
 /* ------------------------------------------------------------------- */
 /* / MAC Sirius parameter structure */
 typedef struct sAniSirGlobal {
-	tDriverType gDriverType;
+	enum qdf_driver_type gDriverType;
 
 	tAniSirCfg cfg;
 	tAniSirLim lim;
 	tAniSirSch sch;
 	tAniSirSys sys;
-	tAniSirUtils utils;
 
 	/* PAL/HDD handle */
 	tHddHandle hHdd;
@@ -940,6 +941,7 @@ typedef struct sAniSirGlobal {
 	uint8_t lteCoexAntShare;
 	uint8_t beacon_offload;
 	bool pmf_offload;
+	bool is_fils_roaming_supported;
 	uint32_t fEnableDebugLog;
 	uint16_t mgmtSeqNum;
 	bool enable5gEBT;
@@ -959,6 +961,7 @@ typedef struct sAniSirGlobal {
 	/* 802.11p enable */
 	bool enable_dot11p;
 
+	bool allow_adj_ch_bcn;
 	/* DBS capability based on INI and FW capability */
 	uint8_t hw_dbs_capable;
 	/* Based on INI parameter */
@@ -972,6 +975,9 @@ typedef struct sAniSirGlobal {
 	bool sta_prefer_80MHz_over_160MHz;
 	enum  country_src reg_hint_src;
 	uint32_t rx_packet_drop_counter;
+	bool snr_monitor_enabled;
+	/* channel information callback */
+	void (*chan_info_cb)(struct scan_chan_info *chan_info);
 } tAniSirGlobal;
 
 typedef enum {

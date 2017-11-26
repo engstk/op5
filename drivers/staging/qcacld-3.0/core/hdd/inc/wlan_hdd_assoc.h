@@ -46,7 +46,7 @@
 #define HDD_MAX_NUM_TDLS_STA          8
 #define HDD_MAX_NUM_TDLS_STA_P_UAPSD_OFFCHAN  1
 #define TDLS_STA_INDEX_VALID(staId) \
-	(((staId) >= 1) && ((staId) < 0xFF))
+	(((staId) >= 0) && ((staId) < 0xFF))
 #endif
 #define TKIP_COUNTER_MEASURE_STARTED 1
 #define TKIP_COUNTER_MEASURE_STOPED  0
@@ -84,14 +84,14 @@ typedef enum {
 } eConnectionState;
 
 /**
- * typedef ePeerStatus - Peer status
+ * enum peer_status - Peer status
  * @ePeerConnected: peer connected
  * @ePeerDisconnected: peer disconnected
  */
-typedef enum {
+enum peer_status {
 	ePeerConnected = 1,
 	ePeerDisconnected
-} ePeerStatus;
+};
 
 /**
  * struct hdd_conn_flag - connection flags
@@ -174,6 +174,7 @@ struct hdd_conn_flag {
  * @roam_count: roaming counter
  * @signal: holds rssi info
  * @assoc_status_code: holds assoc fail reason
+ * @congestion: holds congestion percentage
  */
 typedef struct connection_info_s {
 	eConnectionState connState;
@@ -205,6 +206,7 @@ typedef struct connection_info_s {
 	uint32_t roam_count;
 	int8_t signal;
 	int32_t assoc_status_code;
+	uint32_t cca;
 } connection_info_t;
 
 /* Forward declarations */
@@ -212,7 +214,6 @@ typedef struct hdd_adapter_s hdd_adapter_t;
 typedef struct hdd_context_s hdd_context_t;
 typedef struct hdd_station_ctx hdd_station_ctx_t;
 typedef struct hdd_ap_ctx_s hdd_ap_ctx_t;
-typedef struct hdd_mon_ctx_s hdd_mon_ctx_t;
 
 /**
  * hdd_is_connecting() - Function to check connection progress
@@ -348,9 +349,24 @@ QDF_STATUS hdd_roam_deregister_sta(hdd_adapter_t *adapter, uint8_t sta_id);
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 void hdd_wma_send_fastreassoc_cmd(hdd_adapter_t *adapter,
 				  const tSirMacAddr bssid, int channel);
+/**
+ * hdd_save_gtk_params() - Save GTK offload params
+ * @adapter: HDD adapter
+ * @csr_roam_info: CSR roam info
+ * @is_reassoc: boolean to indicate roaming
+ *
+ * Return: None
+ */
+void hdd_save_gtk_params(hdd_adapter_t *adapter,
+			 tCsrRoamInfo *csr_roam_info, bool is_reassoc);
 #else
 static inline void hdd_wma_send_fastreassoc_cmd(hdd_adapter_t *adapter,
 		const tSirMacAddr bssid, int channel)
+{
+}
+static inline void hdd_save_gtk_params(hdd_adapter_t *adapter,
+				       tCsrRoamInfo *csr_roam_info,
+				       bool is_reassoc)
 {
 }
 #endif

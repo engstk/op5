@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2016 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -236,7 +236,7 @@ static void epping_stop_adapter(epping_adapter_t *pAdapter)
 	}
 
 	if (pAdapter && pAdapter->started) {
-		EPPING_LOG(LOG1, FL("Disabling queues"));
+		EPPING_LOG(QDF_TRACE_LEVEL_INFO, FL("Disabling queues"));
 		netif_tx_disable(pAdapter->dev);
 		netif_carrier_off(pAdapter->dev);
 		pAdapter->started = false;
@@ -264,12 +264,12 @@ static int epping_start_adapter(epping_adapter_t *pAdapter)
 		pld_request_bus_bandwidth(qdf_ctx->dev,
 					  PLD_BUS_WIDTH_HIGH);
 		netif_carrier_on(pAdapter->dev);
-		EPPING_LOG(LOG1, FL("Enabling queues"));
+		EPPING_LOG(QDF_TRACE_LEVEL_INFO, FL("Enabling queues"));
 		netif_tx_start_all_queues(pAdapter->dev);
 		pAdapter->started = true;
 	} else {
 		EPPING_LOG(QDF_TRACE_LEVEL_WARN,
-			   "%s: pAdapter %p already started\n", __func__,
+			   "%s: pAdapter %pK already started\n", __func__,
 			   pAdapter);
 	}
 	return 0;
@@ -389,7 +389,7 @@ epping_adapter_t *epping_add_adapter(epping_context_t *pEpping_ctx,
 	dev->watchdog_timeo = 5 * HZ;   /* XXX */
 	dev->tx_queue_len = EPPING_TXBUF - 1;      /* 1 for mgmt frame */
 	if (epping_register_adapter(pAdapter) == 0) {
-		EPPING_LOG(LOG1, FL("Disabling queues"));
+		EPPING_LOG(QDF_TRACE_LEVEL_INFO, FL("Disabling queues"));
 		netif_tx_disable(dev);
 		netif_carrier_off(dev);
 		return pAdapter;
@@ -402,8 +402,8 @@ epping_adapter_t *epping_add_adapter(epping_context_t *pEpping_ctx,
 int epping_connect_service(epping_context_t *pEpping_ctx)
 {
 	int status, i;
-	HTC_SERVICE_CONNECT_REQ connect;
-	HTC_SERVICE_CONNECT_RESP response;
+	struct htc_service_connect_req connect;
+	struct htc_service_connect_resp response;
 
 	qdf_mem_zero(&connect, sizeof(connect));
 	qdf_mem_zero(&response, sizeof(response));
@@ -434,6 +434,10 @@ int epping_connect_service(epping_context_t *pEpping_ctx)
 		EPPING_LOG(QDF_TRACE_LEVEL_FATAL,
 			   "Failed to connect to Endpoint Ping BE service status:%d\n",
 			   status);
+
+		if (!cds_is_fw_down())
+			QDF_BUG(0);
+
 		return status;
 	} else {
 		EPPING_LOG(QDF_TRACE_LEVEL_FATAL,
@@ -448,6 +452,10 @@ int epping_connect_service(epping_context_t *pEpping_ctx)
 		EPPING_LOG(QDF_TRACE_LEVEL_FATAL,
 			   "Failed to connect to Endpoint Ping BK service status:%d\n",
 			   status);
+
+		if (!cds_is_fw_down())
+			QDF_BUG(0);
+
 		return status;
 	} else {
 		EPPING_LOG(QDF_TRACE_LEVEL_FATAL,

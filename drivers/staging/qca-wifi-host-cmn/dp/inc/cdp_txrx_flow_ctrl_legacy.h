@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -24,7 +24,7 @@
  * under proprietary terms before Copyright ownership was assigned
  * to the Linux Foundation.
  */
- /**
+/**
  * @file cdp_txrx_flow_ctrl_legacy.h
  * @brief Define the host data path legacy flow control API
  * functions
@@ -54,6 +54,8 @@ enum netif_action_type {
 	WLAN_NETIF_TX_DISABLE_N_CARRIER,
 	WLAN_NETIF_CARRIER_ON,
 	WLAN_NETIF_CARRIER_OFF,
+	WLAN_NETIF_PRIORITY_QUEUE_ON,
+	WLAN_NETIF_PRIORITY_QUEUE_OFF,
 	WLAN_NETIF_ACTION_TYPE_MAX,
 };
 
@@ -75,6 +77,7 @@ enum netif_reason_type {
 	WLAN_VDEV_STOP,
 	WLAN_PEER_UNAUTHORISED,
 	WLAN_THERMAL_MITIGATION,
+	WLAN_DATA_FLOW_CONTROL_PRIORITY,
 	WLAN_REASON_TYPE_MAX,
 };
 
@@ -111,7 +114,6 @@ void ol_txrx_vdev_flush(ol_txrx_vdev_handle data_vdev);
 #ifdef CONFIG_ICNSS
 static inline void ol_txrx_vdev_pause(ol_txrx_vdev_handle vdev, uint32_t reason)
 {
-	return;
 }
 #else
 void ol_txrx_vdev_pause(ol_txrx_vdev_handle vdev, uint32_t reason);
@@ -121,7 +123,6 @@ void ol_txrx_vdev_pause(ol_txrx_vdev_handle vdev, uint32_t reason);
 static inline void ol_txrx_vdev_unpause(ol_txrx_vdev_handle data_vdev,
 					uint32_t reason)
 {
-	return;
 }
 #else
 void ol_txrx_vdev_unpause(ol_txrx_vdev_handle data_vdev, uint32_t reason);

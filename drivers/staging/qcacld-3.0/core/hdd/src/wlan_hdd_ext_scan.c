@@ -63,6 +63,8 @@ static const struct nla_policy wlan_hdd_extscan_config_policy
 				.type = NLA_U32},
 	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_GET_VALID_CHANNELS_CONFIG_PARAM_WIFI_BAND] = {
 				.type = NLA_U32},
+	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_GET_VALID_CHANNELS_CONFIG_PARAM_MAX_CHANNELS] = {
+				.type = NLA_U32 },
 	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_CHANNEL_SPEC_CHANNEL] = {.type = NLA_U32},
 	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_CHANNEL_SPEC_DWELL_TIME] = {
 				.type = NLA_U32},
@@ -92,7 +94,8 @@ static const struct nla_policy wlan_hdd_extscan_config_policy
 	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_GET_CACHED_SCAN_RESULTS_CONFIG_PARAM_MAX] = {
 				.type = NLA_U32},
 	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM_BSSID] = {
-				.type = NLA_UNSPEC},
+				.type = NLA_UNSPEC,
+				.len = QDF_MAC_ADDR_SIZE},
 	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM_RSSI_LOW] = {
 				.type = NLA_S32},
 	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM_RSSI_HIGH] = {
@@ -109,6 +112,12 @@ static const struct nla_policy wlan_hdd_extscan_config_policy
 				.type = NLA_U32},
 	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_SIGNIFICANT_CHANGE_PARAMS_NUM_AP] = {
 				.type = NLA_U32},
+	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_MAX_PERIOD] = {
+				.type = NLA_U32},
+	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_BASE] = {
+				.type = NLA_U32},
+	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_STEP_COUNT] = {
+				.type = NLA_U32},
 	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_SSID_THRESHOLD_PARAM_SSID] = {
 				.type = NLA_BINARY,
 				.len = IEEE80211_MAX_SSID_LEN + 1 },
@@ -124,10 +133,18 @@ static const struct nla_policy wlan_hdd_extscan_config_policy
 				.type = NLA_S32 },
 	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_CONFIGURATION_FLAGS] = {
 				.type = NLA_U32 },
+	[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BSSID_HOTLIST_PARAMS_LOST_AP_SAMPLE_SIZE] = {
+				.type = NLA_U32 },
 };
 
 static const struct nla_policy
 wlan_hdd_pno_config_policy[QCA_WLAN_VENDOR_ATTR_PNO_MAX + 1] = {
+	[QCA_WLAN_VENDOR_ATTR_PNO_PASSPOINT_LIST_PARAM_NUM] = {
+		.type = NLA_U32
+	},
+	[QCA_WLAN_VENDOR_ATTR_PNO_PASSPOINT_NETWORK_PARAM_ID] = {
+		.type = NLA_U32
+	},
 	[QCA_WLAN_VENDOR_ATTR_PNO_SET_LIST_PARAM_NUM_NETWORKS] = {
 		.type = NLA_U32
 	},
@@ -140,6 +157,30 @@ wlan_hdd_pno_config_policy[QCA_WLAN_VENDOR_ATTR_PNO_MAX + 1] = {
 	},
 	[QCA_WLAN_VENDOR_ATTR_PNO_SET_LIST_PARAM_EPNO_NETWORK_AUTH_BIT] = {
 		.type = NLA_U8
+	},
+	[QCA_WLAN_VENDOR_ATTR_EPNO_MIN5GHZ_RSSI] = {
+		.type = NLA_U32
+	},
+	[QCA_WLAN_VENDOR_ATTR_EPNO_MIN24GHZ_RSSI] = {
+		.type = NLA_U32
+	},
+	[QCA_WLAN_VENDOR_ATTR_EPNO_INITIAL_SCORE_MAX] = {
+		.type = NLA_U32
+	},
+	[QCA_WLAN_VENDOR_ATTR_EPNO_CURRENT_CONNECTION_BONUS] = {
+		.type = NLA_U32
+	},
+	[QCA_WLAN_VENDOR_ATTR_EPNO_SAME_NETWORK_BONUS] = {
+		.type = NLA_U32
+	},
+	[QCA_WLAN_VENDOR_ATTR_EPNO_SECURE_BONUS] = {
+		.type = NLA_U32
+	},
+	[QCA_WLAN_VENDOR_ATTR_EPNO_BAND5GHZ_BONUS] = {
+		.type = NLA_U32
+	},
+	[QCA_WLAN_VENDOR_ATTR_PNO_CONFIG_REQUEST_ID] = {
+		.type = NLA_U32
 	},
 };
 
@@ -180,17 +221,14 @@ wlan_hdd_cfg80211_extscan_get_capabilities_rsp(void *ctx,
 	/* validate response received from target*/
 	if (context->request_id != data->requestId) {
 		spin_unlock(&context->context_lock);
-		hdd_err("Target response id did not match: request_id %d response_id %d",
+		hdd_err("Target response id did not match. request_id: %d response_id: %d",
 			context->request_id, data->requestId);
 		return;
-	} else {
-		context->capability_response = *data;
-		complete(&context->response_event);
 	}
 
+	context->capability_response = *data;
+	complete(&context->response_event);
 	spin_unlock(&context->context_lock);
-
-	return;
 }
 
 /*
@@ -371,12 +409,12 @@ wlan_hdd_cfg80211_extscan_cached_results_ind(void *ctx,
 		hdd_err("cfg80211_vendor_cmd_alloc_reply_skb failed");
 		goto fail;
 	}
-	hdd_notice("Req Id %u Num_scan_ids %u More Data %u",
+	hdd_debug("Req Id %u Num_scan_ids %u More Data %u",
 		data->request_id, data->num_scan_ids, data->more_data);
 
 	result = &data->result[0];
 	for (i = 0; i < data->num_scan_ids; i++) {
-		hdd_notice("[i=%d] scan_id %u flags %u num_results %u buckets scanned %u",
+		hdd_debug("[i=%d] scan_id %u flags %u num_results %u buckets scanned %u",
 			i, result->scan_id, result->flags, result->num_results,
 			result->buckets_scanned);
 
@@ -390,7 +428,7 @@ wlan_hdd_cfg80211_extscan_cached_results_ind(void *ctx,
 			 * BSSID was cached.
 			 */
 			ap->ts += pHddCtx->ext_scan_start_since_boot;
-			hdd_notice("Timestamp %llu "
+			hdd_debug("Timestamp %llu "
 				"Ssid: %s "
 				"Bssid (" MAC_ADDRESS_STR ") "
 				"Channel %u "
@@ -418,7 +456,7 @@ wlan_hdd_cfg80211_extscan_cached_results_ind(void *ctx,
 	if (nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_REQUEST_ID,
 		data->request_id) ||
 	    nla_put_u32(skb,
-		QCA_WLAN_VENDOR_ATTR_EXTSCAN_NUM_RESULTS_AVAILABLE,
+		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_NUM_RESULTS_AVAILABLE,
 		data->num_scan_ids) ||
 	    nla_put_u8(skb,
 		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_SCAN_RESULT_MORE_DATA,
@@ -429,6 +467,7 @@ wlan_hdd_cfg80211_extscan_cached_results_ind(void *ctx,
 
 	if (data->num_scan_ids) {
 		struct nlattr *nla_results;
+
 		result = &data->result[0];
 
 		if (nla_put_u32(skb,
@@ -460,7 +499,7 @@ wlan_hdd_cfg80211_extscan_cached_results_ind(void *ctx,
 				QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_BUCKETS_SCANNED,
 				result->buckets_scanned) ||
 			    nla_put_u32(skb,
-				QCA_WLAN_VENDOR_ATTR_EXTSCAN_NUM_RESULTS_AVAILABLE,
+				QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_NUM_RESULTS_AVAILABLE,
 				result->num_results)) {
 				hdd_err("put fail");
 				goto fail;
@@ -502,8 +541,6 @@ fail:
 	spin_lock(&context->context_lock);
 	context->response_status = -EINVAL;
 	spin_unlock(&context->context_lock);
-
-	return;
 }
 
 /**
@@ -549,14 +586,14 @@ wlan_hdd_cfg80211_extscan_hotlist_match_ind(void *ctx,
 		hdd_err("cfg80211_vendor_event_alloc failed");
 		return;
 	}
-	hdd_info("Req Id: %u Num_APs: %u MoreData: %u ap_found: %u",
+	hdd_debug("Req Id: %u Num_APs: %u MoreData: %u ap_found: %u",
 			data->requestId, data->numOfAps, data->moreData,
 			data->ap_found);
 
 	for (i = 0; i < data->numOfAps; i++) {
 		data->ap[i].ts = qdf_get_monotonic_boottime();
 
-		hdd_notice("[i=%d] Timestamp %llu "
+		hdd_debug("[i=%d] Timestamp %llu "
 		       "Ssid: %s "
 		       "Bssid (" MAC_ADDRESS_STR ") "
 		       "Channel %u "
@@ -576,7 +613,7 @@ wlan_hdd_cfg80211_extscan_hotlist_match_ind(void *ctx,
 		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_REQUEST_ID,
 		data->requestId) ||
 	    nla_put_u32(skb,
-		QCA_WLAN_VENDOR_ATTR_EXTSCAN_NUM_RESULTS_AVAILABLE,
+		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_NUM_RESULTS_AVAILABLE,
 		data->numOfAps)) {
 		hdd_err("put fail");
 		goto fail;
@@ -638,7 +675,6 @@ wlan_hdd_cfg80211_extscan_hotlist_match_ind(void *ctx,
 
 fail:
 	kfree_skb(skb);
-	return;
 }
 
 /**
@@ -684,12 +720,12 @@ wlan_hdd_cfg80211_extscan_signif_wifi_change_results_ind(
 		hdd_err("cfg80211_vendor_event_alloc failed");
 		return;
 	}
-	hdd_notice("Req Id %u Num results %u More Data %u",
+	hdd_debug("Req Id %u Num results %u More Data %u",
 		pData->requestId, pData->numResults, pData->moreData);
 
 	ap_info = &pData->ap[0];
 	for (i = 0; i < pData->numResults; i++) {
-		hdd_notice("[i=%d] "
+		hdd_debug("[i=%d] "
 		       "Bssid (" MAC_ADDRESS_STR ") "
 		       "Channel %u "
 		       "numOfRssi %d",
@@ -698,7 +734,7 @@ wlan_hdd_cfg80211_extscan_signif_wifi_change_results_ind(
 		       ap_info->channel, ap_info->numOfRssi);
 		rssi = &(ap_info)->rssi[0];
 		for (j = 0; j < ap_info->numOfRssi; j++)
-			hdd_notice("Rssi %d", *rssi++);
+			hdd_debug("Rssi %d", *rssi++);
 
 		ap_info += ap_info->numOfRssi * sizeof(*rssi);
 	}
@@ -707,7 +743,7 @@ wlan_hdd_cfg80211_extscan_signif_wifi_change_results_ind(
 		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_REQUEST_ID,
 		pData->requestId) ||
 	    nla_put_u32(skb,
-		QCA_WLAN_VENDOR_ATTR_EXTSCAN_NUM_RESULTS_AVAILABLE,
+		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_NUM_RESULTS_AVAILABLE,
 		pData->numResults)) {
 		hdd_err("put fail");
 		goto fail;
@@ -815,13 +851,14 @@ wlan_hdd_cfg80211_extscan_full_scan_result_event(void *ctx,
 	pData->ap.channel = cds_chan_to_freq(pData->ap.channel);
 
 	/* Android does not want the time stamp from the frame.
-	   Instead it wants a monotonic increasing value since boot */
+	 * Instead it wants a monotonic increasing value since boot
+	 */
 	get_monotonic_boottime(&ts);
 	pData->ap.ts = ((u64)ts.tv_sec * 1000000) + (ts.tv_nsec / 1000);
 
-	hdd_notice("Req Id %u More Data %u", pData->requestId,
+	hdd_debug("Req Id %u More Data %u", pData->requestId,
 	       pData->moreData);
-	hdd_notice("AP Info: Timestamp %llu Ssid: %s "
+	hdd_debug("AP Info: Timestamp %llu Ssid: %s "
 	       "Bssid (" MAC_ADDRESS_STR ") "
 	       "Channel %u "
 	       "Rssi %d "
@@ -894,7 +931,7 @@ wlan_hdd_cfg80211_extscan_full_scan_result_event(void *ctx,
 		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_BUCKETS_SCANNED,
 		context->buckets_scanned)) {
 		spin_unlock(&context->context_lock);
-		hdd_notice("Failed to include buckets_scanned");
+		hdd_debug("Failed to include buckets_scanned");
 		goto nla_put_failure;
 	}
 	spin_unlock(&context->context_lock);
@@ -904,7 +941,6 @@ wlan_hdd_cfg80211_extscan_full_scan_result_event(void *ctx,
 
 nla_put_failure:
 	kfree_skb(skb);
-	return;
 }
 
 /**
@@ -947,13 +983,13 @@ wlan_hdd_cfg80211_extscan_scan_res_available_event(
 		return;
 	}
 
-	hdd_notice("Req Id %u Num results %u",
+	hdd_debug("Req Id %u Num results %u",
 	       pData->requestId, pData->numResultsAvailable);
 	if (nla_put_u32(skb,
 		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_REQUEST_ID,
 		pData->requestId) ||
 	    nla_put_u32(skb,
-		QCA_WLAN_VENDOR_ATTR_EXTSCAN_NUM_RESULTS_AVAILABLE,
+		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_NUM_RESULTS_AVAILABLE,
 		pData->numResultsAvailable)) {
 		hdd_err("nla put fail");
 		goto nla_put_failure;
@@ -965,7 +1001,6 @@ wlan_hdd_cfg80211_extscan_scan_res_available_event(
 
 nla_put_failure:
 	kfree_skb(skb);
-	return;
 }
 
 /**
@@ -1009,7 +1044,7 @@ wlan_hdd_cfg80211_extscan_scan_progress_event(void *ctx,
 		return;
 	}
 
-	hdd_notice("Request Id: %u Scan event type: %u Scan event status: %u buckets scanned: %u",
+	hdd_debug("Request Id: %u Scan event type: %u Scan event status: %u buckets scanned: %u",
 		pData->requestId, pData->scanEventType, pData->status,
 		pData->buckets_scanned);
 
@@ -1042,7 +1077,6 @@ wlan_hdd_cfg80211_extscan_scan_progress_event(void *ctx,
 
 nla_put_failure:
 	kfree_skb(skb);
-	return;
 }
 
 /**
@@ -1100,11 +1134,11 @@ wlan_hdd_cfg80211_extscan_epno_match_found(void *ctx,
 		return;
 	}
 
-	hdd_notice("Req Id %u More Data %u num_results %d",
+	hdd_debug("Req Id %u More Data %u num_results %d",
 		data->request_id, data->more_data, data->num_results);
 	for (i = 0; i < data->num_results; i++) {
 		data->ap[i].channel = cds_chan_to_freq(data->ap[i].channel);
-		hdd_notice("AP Info: Timestamp %llu) Ssid: %s "
+		hdd_debug("AP Info: Timestamp %llu) Ssid: %s "
 					"Bssid (" MAC_ADDRESS_STR ") "
 					"Channel %u "
 					"Rssi %d "
@@ -1128,7 +1162,7 @@ wlan_hdd_cfg80211_extscan_epno_match_found(void *ctx,
 	if (nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_REQUEST_ID,
 		data->request_id) ||
 	    nla_put_u32(skb,
-		QCA_WLAN_VENDOR_ATTR_EXTSCAN_NUM_RESULTS_AVAILABLE,
+		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_NUM_RESULTS_AVAILABLE,
 		data->num_results) ||
 	    nla_put_u8(skb,
 		QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_SCAN_RESULT_MORE_DATA,
@@ -1139,6 +1173,7 @@ wlan_hdd_cfg80211_extscan_epno_match_found(void *ctx,
 
 	if (data->num_results) {
 		struct nlattr *nla_aps;
+
 		nla_aps = nla_nest_start(skb,
 			QCA_WLAN_VENDOR_ATTR_EXTSCAN_RESULTS_LIST);
 		if (!nla_aps)
@@ -1156,7 +1191,6 @@ wlan_hdd_cfg80211_extscan_epno_match_found(void *ctx,
 
 fail:
 	kfree_skb(skb);
-	return;
 }
 
 /**
@@ -1207,10 +1241,10 @@ wlan_hdd_cfg80211_passpoint_match_found(void *ctx,
 		return;
 	}
 
-	hdd_notice("Req Id %u Id %u ANQP length %u num_matches %u",
+	hdd_debug("Req Id %u Id %u ANQP length %u num_matches %u",
 		data->request_id, data->id, data->anqp_len, num_matches);
 	for (i = 0; i < num_matches; i++) {
-		hdd_notice("AP Info: Timestamp %llu Ssid: %s "
+		hdd_debug("AP Info: Timestamp %llu Ssid: %s "
 					"Bssid (" MAC_ADDRESS_STR ") "
 					"Channel %u "
 					"Rssi %d "
@@ -1288,7 +1322,6 @@ wlan_hdd_cfg80211_passpoint_match_found(void *ctx,
 
 fail:
 	kfree_skb(skb);
-	return;
 }
 
 /**
@@ -1314,12 +1347,12 @@ wlan_hdd_cfg80211_extscan_generic_rsp
 	ENTER();
 
 	if (wlan_hdd_validate_context(hdd_ctx) || !response) {
-		hdd_err("HDD context is not valid or response(%p) is null",
+		hdd_err("HDD context is not valid or response(%pK) is null",
 		       response);
 		return;
 	}
 
-	hdd_notice("request %u status %u",
+	hdd_debug("request %u status %u",
 	       response->request_id, response->status);
 
 	context = &ext_scan_context;
@@ -1329,8 +1362,6 @@ wlan_hdd_cfg80211_extscan_generic_rsp
 		complete(&context->response_event);
 	}
 	spin_unlock(&context->context_lock);
-
-	return;
 }
 
 /**
@@ -1351,13 +1382,14 @@ void wlan_hdd_cfg80211_extscan_callback(void *ctx, const uint16_t evType,
 	if (wlan_hdd_validate_context(pHddCtx))
 		return;
 
-	hdd_notice("Rcvd Event %d", evType);
+	hdd_debug("Rcvd Event %d", evType);
 
 	switch (evType) {
 	case eSIR_EXTSCAN_CACHED_RESULTS_RSP:
 		/* There is no need to send this response to upper layer
-		   Just log the message */
-		hdd_notice("Rcvd eSIR_EXTSCAN_CACHED_RESULTS_RSP");
+		 * Just log the message
+		 */
+		hdd_debug("Rcvd eSIR_EXTSCAN_CACHED_RESULTS_RSP");
 		break;
 
 	case eSIR_EXTSCAN_GET_CAPABILITIES_IND:
@@ -1415,7 +1447,7 @@ void wlan_hdd_cfg80211_extscan_callback(void *ctx, const uint16_t evType,
 		break;
 
 	default:
-		hdd_err("Unknown event type %u", evType);
+		hdd_err("Unknown event type: %u", evType);
 		break;
 	}
 }
@@ -1499,31 +1531,31 @@ static int wlan_hdd_send_ext_scan_capability(hdd_context_t *hdd_ctx)
 	}
 
 
-	hdd_notice("Req Id %u", data->requestId);
-	hdd_notice("Status %u", data->status);
-	hdd_notice("Scan cache size %u",
+	hdd_debug("Req Id %u", data->requestId);
+	hdd_debug("Status %u", data->status);
+	hdd_debug("Scan cache size %u",
 	       data->max_scan_cache_size);
-	hdd_notice("Scan buckets %u", data->max_scan_buckets);
-	hdd_notice("Max AP per scan %u",
+	hdd_debug("Scan buckets %u", data->max_scan_buckets);
+	hdd_debug("Max AP per scan %u",
 	       data->max_ap_cache_per_scan);
-	hdd_notice("max_rssi_sample_size %u",
+	hdd_debug("max_rssi_sample_size %u",
 	       data->max_rssi_sample_size);
-	hdd_notice("max_scan_reporting_threshold %u",
+	hdd_debug("max_scan_reporting_threshold %u",
 	       data->max_scan_reporting_threshold);
-	hdd_notice("max_hotlist_bssids %u",
+	hdd_debug("max_hotlist_bssids %u",
 	       data->max_hotlist_bssids);
-	hdd_notice("max_significant_wifi_change_aps %u",
+	hdd_debug("max_significant_wifi_change_aps %u",
 	       data->max_significant_wifi_change_aps);
-	hdd_notice("max_bssid_history_entries %u",
+	hdd_debug("max_bssid_history_entries %u",
 	       data->max_bssid_history_entries);
-	hdd_notice("max_hotlist_ssids %u", data->max_hotlist_ssids);
-	hdd_notice("max_number_epno_networks %u",
+	hdd_debug("max_hotlist_ssids %u", data->max_hotlist_ssids);
+	hdd_debug("max_number_epno_networks %u",
 					data->max_number_epno_networks);
-	hdd_notice("max_number_epno_networks_by_ssid %u",
+	hdd_debug("max_number_epno_networks_by_ssid %u",
 					data->max_number_epno_networks_by_ssid);
-	hdd_notice("max_number_of_white_listed_ssid %u",
+	hdd_debug("max_number_of_white_listed_ssid %u",
 					data->max_number_of_white_listed_ssid);
-	hdd_notice("max_number_of_black_listed_bssid (%u)",
+	hdd_debug("max_number_of_black_listed_bssid (%u)",
 					data->max_number_of_black_listed_bssid);
 
 	if (nla_put_u32(skb, PARAM_REQUEST_ID, data->requestId) ||
@@ -1616,6 +1648,11 @@ static int __wlan_hdd_cfg80211_extscan_get_capabilities(struct wiphy *wiphy,
 	if (0 != ret)
 		return -EINVAL;
 
+	if (pHddCtx->driver_status == DRIVER_MODULES_CLOSED) {
+		hdd_err("Driver Modules are closed");
+		return -EINVAL;
+	}
+
 	if (!pHddCtx->config->extscan_enabled) {
 		hdd_err("extscan not supported");
 		return -ENOTSUPP;
@@ -1642,7 +1679,7 @@ static int __wlan_hdd_cfg80211_extscan_get_capabilities(struct wiphy *wiphy,
 		nla_get_u32(tb
 		 [QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID]);
 	pReqMsg->sessionId = pAdapter->sessionId;
-	hdd_notice("Req Id %d Session Id %d",
+	hdd_debug("Req Id %d Session Id %d",
 		pReqMsg->requestId, pReqMsg->sessionId);
 
 	context = &ext_scan_context;
@@ -1785,7 +1822,7 @@ static int __wlan_hdd_cfg80211_extscan_get_cached_results(struct wiphy *wiphy,
 		goto fail;
 	}
 	pReqMsg->flush = nla_get_u8(tb[PARAM_FLUSH]);
-	hdd_notice("Req Id: %u Session Id: %d Flush: %d",
+	hdd_debug("Req Id: %u Session Id: %d Flush: %d",
 		pReqMsg->requestId, pReqMsg->sessionId, pReqMsg->flush);
 
 	context = &ext_scan_context;
@@ -1928,7 +1965,7 @@ __wlan_hdd_cfg80211_extscan_set_bssid_hotlist(struct wiphy *wiphy,
 	pReqMsg->requestId =
 		nla_get_u32(tb
 		 [QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID]);
-	hdd_notice("Req Id %d", pReqMsg->requestId);
+	hdd_debug("Req Id %d", pReqMsg->requestId);
 
 	/* Parse and fetch number of APs */
 	if (!tb[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BSSID_HOTLIST_PARAMS_NUM_AP]) {
@@ -1944,7 +1981,7 @@ __wlan_hdd_cfg80211_extscan_set_bssid_hotlist(struct wiphy *wiphy,
 		goto fail;
 	}
 	pReqMsg->sessionId = pAdapter->sessionId;
-	hdd_notice("Number of AP %d Session Id %d",
+	hdd_debug("Number of AP %d Session Id %d",
 		pReqMsg->numAp, pReqMsg->sessionId);
 
 	/* Parse and fetch lost ap sample size */
@@ -1955,7 +1992,7 @@ __wlan_hdd_cfg80211_extscan_set_bssid_hotlist(struct wiphy *wiphy,
 
 	pReqMsg->lost_ap_sample_size = nla_get_u32(
 		tb[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BSSID_HOTLIST_PARAMS_LOST_AP_SAMPLE_SIZE]);
-	hdd_notice("Lost ap sample size %d",
+	hdd_debug("Lost ap sample size %d",
 			pReqMsg->lost_ap_sample_size);
 
 	if (!tb[QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM]) {
@@ -1988,7 +2025,7 @@ __wlan_hdd_cfg80211_extscan_set_bssid_hotlist(struct wiphy *wiphy,
 			tb2
 			[QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM_BSSID],
 			   QDF_MAC_ADDR_SIZE);
-		hdd_notice(MAC_ADDRESS_STR,
+		hdd_debug(MAC_ADDRESS_STR,
 		       MAC_ADDR_ARRAY(pReqMsg->ap[i].bssid.bytes));
 
 		/* Parse and fetch low RSSI */
@@ -2000,7 +2037,7 @@ __wlan_hdd_cfg80211_extscan_set_bssid_hotlist(struct wiphy *wiphy,
 		pReqMsg->ap[i].low =
 			nla_get_s32(tb2
 			    [QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM_RSSI_LOW]);
-		hdd_notice("RSSI low %d", pReqMsg->ap[i].low);
+		hdd_debug("RSSI low %d", pReqMsg->ap[i].low);
 
 		/* Parse and fetch high RSSI */
 		if (!tb2
@@ -2011,7 +2048,7 @@ __wlan_hdd_cfg80211_extscan_set_bssid_hotlist(struct wiphy *wiphy,
 		pReqMsg->ap[i].high =
 			nla_get_s32(tb2
 			    [QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM_RSSI_HIGH]);
-		hdd_notice("RSSI High %d", pReqMsg->ap[i].high);
+		hdd_debug("RSSI High %d", pReqMsg->ap[i].high);
 
 		i++;
 	}
@@ -2083,7 +2120,7 @@ int wlan_hdd_cfg80211_extscan_set_bssid_hotlist(struct wiphy *wiphy,
 
 
 /**
- * __wlan_hdd_cfg80211_extscan_set_significant_change () - set significant change
+ * __wlan_hdd_cfg80211_extscan_set_significant_change() - set significant change
  * @wiphy: Pointer to wireless phy
  * @wdev: Pointer to wireless device
  * @data: Pointer to data
@@ -2145,7 +2182,7 @@ __wlan_hdd_cfg80211_extscan_set_significant_change(struct wiphy *wiphy,
 	pReqMsg->requestId =
 		nla_get_u32(tb
 		 [QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID]);
-	hdd_notice("Req Id %d", pReqMsg->requestId);
+	hdd_debug("Req Id %d", pReqMsg->requestId);
 
 	/* Parse and fetch RSSI sample size */
 	if (!tb
@@ -2156,7 +2193,7 @@ __wlan_hdd_cfg80211_extscan_set_significant_change(struct wiphy *wiphy,
 	pReqMsg->rssiSampleSize =
 		nla_get_u32(tb
 		    [QCA_WLAN_VENDOR_ATTR_EXTSCAN_SIGNIFICANT_CHANGE_PARAMS_RSSI_SAMPLE_SIZE]);
-	hdd_notice("RSSI sample size %u", pReqMsg->rssiSampleSize);
+	hdd_debug("RSSI sample size %u", pReqMsg->rssiSampleSize);
 
 	/* Parse and fetch lost AP sample size */
 	if (!tb
@@ -2167,7 +2204,7 @@ __wlan_hdd_cfg80211_extscan_set_significant_change(struct wiphy *wiphy,
 	pReqMsg->lostApSampleSize =
 		nla_get_u32(tb
 		    [QCA_WLAN_VENDOR_ATTR_EXTSCAN_SIGNIFICANT_CHANGE_PARAMS_LOST_AP_SAMPLE_SIZE]);
-	hdd_notice("Lost AP sample size %u", pReqMsg->lostApSampleSize);
+	hdd_debug("Lost AP sample size %u", pReqMsg->lostApSampleSize);
 
 	/* Parse and fetch AP min breacing */
 	if (!tb
@@ -2178,7 +2215,7 @@ __wlan_hdd_cfg80211_extscan_set_significant_change(struct wiphy *wiphy,
 	pReqMsg->minBreaching =
 		nla_get_u32(tb
 		    [QCA_WLAN_VENDOR_ATTR_EXTSCAN_SIGNIFICANT_CHANGE_PARAMS_MIN_BREACHING]);
-	hdd_notice("AP min breaching %u", pReqMsg->minBreaching);
+	hdd_debug("AP min breaching %u", pReqMsg->minBreaching);
 
 	/* Parse and fetch number of APs */
 	if (!tb[QCA_WLAN_VENDOR_ATTR_EXTSCAN_SIGNIFICANT_CHANGE_PARAMS_NUM_AP]) {
@@ -2196,7 +2233,7 @@ __wlan_hdd_cfg80211_extscan_set_significant_change(struct wiphy *wiphy,
 	}
 
 	pReqMsg->sessionId = pAdapter->sessionId;
-	hdd_notice("Number of AP %d Session Id %d",
+	hdd_debug("Number of AP %d Session Id %d",
 		pReqMsg->numAp, pReqMsg->sessionId);
 
 	if (!tb[QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM]) {
@@ -2230,7 +2267,7 @@ __wlan_hdd_cfg80211_extscan_set_significant_change(struct wiphy *wiphy,
 			   tb2
 			   [QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM_BSSID],
 			   QDF_MAC_ADDR_SIZE);
-		hdd_notice(MAC_ADDRESS_STR,
+		hdd_debug(MAC_ADDRESS_STR,
 		       MAC_ADDR_ARRAY(pReqMsg->ap[i].bssid.bytes));
 
 		/* Parse and fetch low RSSI */
@@ -2242,7 +2279,7 @@ __wlan_hdd_cfg80211_extscan_set_significant_change(struct wiphy *wiphy,
 		pReqMsg->ap[i].low =
 			nla_get_s32(tb2
 			    [QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM_RSSI_LOW]);
-		hdd_notice("RSSI low %d", pReqMsg->ap[i].low);
+		hdd_debug("RSSI low %d", pReqMsg->ap[i].low);
 
 		/* Parse and fetch high RSSI */
 		if (!tb2
@@ -2253,7 +2290,7 @@ __wlan_hdd_cfg80211_extscan_set_significant_change(struct wiphy *wiphy,
 		pReqMsg->ap[i].high =
 			nla_get_s32(tb2
 			    [QCA_WLAN_VENDOR_ATTR_EXTSCAN_AP_THRESHOLD_PARAM_RSSI_HIGH]);
-		hdd_notice("RSSI High %d", pReqMsg->ap[i].high);
+		hdd_debug("RSSI High %d", pReqMsg->ap[i].high);
 
 		i++;
 	}
@@ -2463,7 +2500,7 @@ __wlan_hdd_cfg80211_extscan_get_valid_channels(struct wiphy *wiphy,
 		return -EINVAL;
 	}
 
-	hdd_notice("Req Id: %u Wifi band: %d Max channels: %d", requestId,
+	hdd_debug("Req Id: %u Wifi band: %d Max channels: %d", requestId,
 		    wifiBand, maxChannels);
 	status = sme_get_valid_channels_by_band((tHalHandle) (pHddCtx->hHal),
 						wifiBand, chan_list,
@@ -2483,12 +2520,12 @@ __wlan_hdd_cfg80211_extscan_get_valid_channels(struct wiphy *wiphy,
 		hdd_remove_passive_channels(wiphy, chan_list,
 					    &num_channels);
 
-	hdd_notice("Number of channels: %d", num_channels);
+	hdd_debug("Number of channels: %d", num_channels);
 	for (i = 0; i < num_channels; i++)
 		len += scnprintf(buf + len, sizeof(buf) - len,
 				 "%u ", chan_list[i]);
 
-	hdd_notice("Channels: %s", buf);
+	hdd_debug("Channels: %s", buf);
 
 	reply_skb = cfg80211_vendor_cmd_alloc_reply_skb(wiphy, sizeof(u32) +
 							sizeof(u32) *
@@ -2639,7 +2676,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 	QDF_STATUS status;
 	uint8_t bkt_index, j, num_channels, total_channels = 0;
 	uint32_t expected_buckets;
-	uint32_t chan_list[WNI_CFG_VALID_CHANNEL_LIST_LEN] = {0};
+	uint32_t *chan_list;
 
 	uint32_t min_dwell_time_active_bucket =
 		hdd_ctx->config->extscan_active_max_chn_time;
@@ -2650,6 +2687,13 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 	uint32_t max_dwell_time_passive_bucket =
 		hdd_ctx->config->extscan_passive_max_chn_time;
 
+	chan_list = qdf_mem_malloc(sizeof(uint32_t) *
+				WNI_CFG_VALID_CHANNEL_LIST_LEN);
+
+	if (!chan_list) {
+		hdd_err("failed to allocate memory");
+		return -EINVAL;
+	}
 	req_msg->min_dwell_time_active =
 		req_msg->max_dwell_time_active =
 			hdd_ctx->config->extscan_active_max_chn_time;
@@ -2671,16 +2715,17 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 		}
 
 		if (nla_parse(bucket,
-			QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_MAX,
-			nla_data(buckets), nla_len(buckets), NULL)) {
+			      QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_MAX,
+			      nla_data(buckets), nla_len(buckets),
+			      wlan_hdd_extscan_config_policy)) {
 			hdd_err("nla_parse failed");
-			return -EINVAL;
+			goto fail;
 		}
 
 		/* Parse and fetch bucket spec */
 		if (!bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_INDEX]) {
 			hdd_err("attr bucket index failed");
-			return -EINVAL;
+			goto fail;
 		}
 		req_msg->buckets[bkt_index].bucket = nla_get_u8(
 			bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_INDEX]);
@@ -2688,7 +2733,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 		/* Parse and fetch wifi band */
 		if (!bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_BAND]) {
 			hdd_err("attr wifi band failed");
-			return -EINVAL;
+			goto fail;
 		}
 		req_msg->buckets[bkt_index].band = nla_get_u8(
 			bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_BAND]);
@@ -2696,7 +2741,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 		/* Parse and fetch period */
 		if (!bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_PERIOD]) {
 			hdd_err("attr period failed");
-			return -EINVAL;
+			goto fail;
 		}
 		req_msg->buckets[bkt_index].period = nla_get_u32(
 		bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_PERIOD]);
@@ -2705,7 +2750,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 		if (!bucket[
 			QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_REPORT_EVENTS]) {
 			hdd_err("attr report events failed");
-			return -EINVAL;
+			goto fail;
 		}
 		req_msg->buckets[bkt_index].reportEvents = nla_get_u8(
 			bucket[
@@ -2714,7 +2759,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 		/* Parse and fetch max period */
 		if (!bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_MAX_PERIOD]) {
 			hdd_err("attr max period failed");
-			return -EINVAL;
+			goto fail;
 		}
 		req_msg->buckets[bkt_index].max_period = nla_get_u32(
 			bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_MAX_PERIOD]);
@@ -2722,7 +2767,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 		/* Parse and fetch base */
 		if (!bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_BASE]) {
 			hdd_err("attr base failed");
-			return -EINVAL;
+			goto fail;
 		}
 		req_msg->buckets[bkt_index].exponent = nla_get_u32(
 			bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_BASE]);
@@ -2730,11 +2775,11 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 		/* Parse and fetch step count */
 		if (!bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_STEP_COUNT]) {
 			hdd_err("attr step count failed");
-			return -EINVAL;
+			goto fail;
 		}
 		req_msg->buckets[bkt_index].step_count = nla_get_u32(
 			bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_STEP_COUNT]);
-		hdd_notice("Bucket spec Index: %d Wifi band: %d period: %d report events: %d max period: %u base: %u Step count: %u",
+		hdd_debug("Bucket spec Index: %d Wifi band: %d period: %d report events: %d max period: %u base: %u Step count: %u",
 				req_msg->buckets[bkt_index].bucket,
 				req_msg->buckets[bkt_index].band,
 				req_msg->buckets[bkt_index].period,
@@ -2759,27 +2804,29 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 		 */
 		if (req_msg->buckets[bkt_index].band != WIFI_BAND_UNSPECIFIED) {
 			if (hdd_extscan_channel_max_reached(req_msg,
-							    total_channels))
+							    total_channels)) {
+				qdf_mem_free(chan_list);
 				return 0;
+			}
 
 			num_channels = 0;
-			hdd_notice("WiFi band is specified, driver to fill channel list");
+			hdd_debug("WiFi band is specified, driver to fill channel list");
 			status = sme_get_valid_channels_by_band(hdd_ctx->hHal,
 						req_msg->buckets[bkt_index].band,
 						chan_list, &num_channels);
 			if (!QDF_IS_STATUS_SUCCESS(status)) {
 				hdd_err("sme_GetValidChannelsByBand failed (err=%d)",
 				       status);
-				return -EINVAL;
+				goto fail;
 			}
-			hdd_notice("before trimming, num_channels: %d",
+			hdd_debug("before trimming, num_channels: %d",
 				num_channels);
 
 			req_msg->buckets[bkt_index].numChannels =
 				QDF_MIN(num_channels,
 					(WLAN_EXTSCAN_MAX_CHANNELS -
 						total_channels));
-			hdd_info("Adj Num channels/bucket: %d total_channels: %d",
+			hdd_debug("Adj Num channels/bucket: %d total_channels: %d",
 				req_msg->buckets[bkt_index].numChannels,
 				total_channels);
 			total_channels +=
@@ -2831,7 +2878,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 
 				}
 
-				hdd_notice("Channel: %u Passive: %u Dwell time: %u ms Class: %u",
+				hdd_debug("Channel: %u Passive: %u Dwell time: %u ms Class: %u",
 					req_msg->buckets[bkt_index].channels[j].channel,
 					req_msg->buckets[bkt_index].channels[j].passive,
 					req_msg->buckets[bkt_index].channels[j].dwellTimeMs,
@@ -2845,7 +2892,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 					min_dwell_time_passive_bucket,
 					max_dwell_time_passive_bucket);
 
-			hdd_notice("bkt_index:%d actv_min:%d actv_max:%d pass_min:%d pass_max:%d",
+			hdd_debug("bkt_index:%d actv_min:%d actv_max:%d pass_min:%d pass_max:%d",
 					bkt_index,
 					req_msg->buckets[bkt_index].min_dwell_time_active,
 					req_msg->buckets[bkt_index].max_dwell_time_active,
@@ -2861,26 +2908,28 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 		if (!bucket[
 			QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_NUM_CHANNEL_SPECS]) {
 			hdd_err("attr num channels failed");
-			return -EINVAL;
+			goto fail;
 		}
 		req_msg->buckets[bkt_index].numChannels =
 		nla_get_u32(bucket[
 		QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC_NUM_CHANNEL_SPECS]);
-		hdd_info("before trimming: num channels %d",
+		hdd_debug("before trimming: num channels %d",
 			req_msg->buckets[bkt_index].numChannels);
 
 		req_msg->buckets[bkt_index].numChannels =
 			QDF_MIN(req_msg->buckets[bkt_index].numChannels,
 				(WLAN_EXTSCAN_MAX_CHANNELS - total_channels));
-		hdd_info("Num channels/bucket: %d total_channels: %d",
+		hdd_debug("Num channels/bucket: %d total_channels: %d",
 			req_msg->buckets[bkt_index].numChannels,
 			total_channels);
-		if (hdd_extscan_channel_max_reached(req_msg, total_channels))
+		if (hdd_extscan_channel_max_reached(req_msg, total_channels)) {
+			qdf_mem_free(chan_list);
 			return 0;
+		}
 
 		if (!bucket[QCA_WLAN_VENDOR_ATTR_EXTSCAN_CHANNEL_SPEC]) {
 			hdd_err("attr channel spec failed");
-			return -EINVAL;
+			goto fail;
 		}
 
 		j = 0;
@@ -2896,26 +2945,26 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 				nla_data(channels), nla_len(channels),
 				wlan_hdd_extscan_config_policy)) {
 				hdd_err("nla_parse failed");
-				return -EINVAL;
+				goto fail;
 			}
 
 			/* Parse and fetch channel */
 			if (!channel[
 				QCA_WLAN_VENDOR_ATTR_EXTSCAN_CHANNEL_SPEC_CHANNEL]) {
 				hdd_err("attr channel failed");
-				return -EINVAL;
+				goto fail;
 			}
 			req_msg->buckets[bkt_index].channels[j].channel =
 				nla_get_u32(channel[
 				QCA_WLAN_VENDOR_ATTR_EXTSCAN_CHANNEL_SPEC_CHANNEL]);
-			hdd_notice("channel %u",
+			hdd_debug("channel %u",
 				req_msg->buckets[bkt_index].channels[j].channel);
 
 			/* Parse and fetch dwell time */
 			if (!channel[
 				QCA_WLAN_VENDOR_ATTR_EXTSCAN_CHANNEL_SPEC_DWELL_TIME]) {
 				hdd_err("attr dwelltime failed");
-				return -EINVAL;
+				goto fail;
 			}
 			req_msg->buckets[bkt_index].channels[j].dwellTimeMs =
 				nla_get_u32(channel[
@@ -2926,7 +2975,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 				hdd_ctx->config->extscan_active_min_chn_time ||
 				req_msg->buckets[bkt_index].channels[j].dwellTimeMs >
 				hdd_ctx->config->extscan_active_max_chn_time) {
-				hdd_notice("WiFi band is unspecified, dwellTime:%d",
+				hdd_debug("WiFi band is unspecified, dwellTime:%d",
 						req_msg->buckets[bkt_index].channels[j].dwellTimeMs);
 
 				if (CDS_IS_PASSIVE_OR_DISABLE_CH(
@@ -2940,7 +2989,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 				}
 			}
 
-			hdd_notice("New Dwell time %u ms",
+			hdd_debug("New Dwell time %u ms",
 				req_msg->buckets[bkt_index].channels[j].dwellTimeMs);
 
 			if (CDS_IS_PASSIVE_OR_DISABLE_CH(
@@ -2973,12 +3022,12 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 			if (!channel[
 				QCA_WLAN_VENDOR_ATTR_EXTSCAN_CHANNEL_SPEC_PASSIVE]) {
 				hdd_err("attr channel spec passive failed");
-				return -EINVAL;
+				goto fail;
 			}
 			req_msg->buckets[bkt_index].channels[j].passive =
 				nla_get_u8(channel[
 				QCA_WLAN_VENDOR_ATTR_EXTSCAN_CHANNEL_SPEC_PASSIVE]);
-			hdd_notice("Chnl spec passive %u",
+			hdd_debug("Chnl spec passive %u",
 				req_msg->buckets[bkt_index].channels[j].passive);
 			/* Override scan type if required */
 			if (CDS_IS_PASSIVE_OR_DISABLE_CH(
@@ -2999,7 +3048,7 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 					min_dwell_time_passive_bucket,
 					max_dwell_time_passive_bucket);
 
-		hdd_notice("bktIndex:%d actv_min:%d actv_max:%d pass_min:%d pass_max:%d",
+		hdd_debug("bktIndex:%d actv_min:%d actv_max:%d pass_min:%d pass_max:%d",
 				bkt_index,
 				req_msg->buckets[bkt_index].min_dwell_time_active,
 				req_msg->buckets[bkt_index].max_dwell_time_active,
@@ -3010,13 +3059,17 @@ static int hdd_extscan_start_fill_bucket_channel_spec(
 		req_msg->numBuckets++;
 	}
 
-	hdd_notice("Global: actv_min:%d actv_max:%d pass_min:%d pass_max:%d",
+	hdd_debug("Global: actv_min:%d actv_max:%d pass_min:%d pass_max:%d",
 				req_msg->min_dwell_time_active,
 				req_msg->max_dwell_time_active,
 				req_msg->min_dwell_time_passive,
 				req_msg->max_dwell_time_passive);
-
+	qdf_mem_free(chan_list);
 	return 0;
+fail:
+	if (chan_list)
+		qdf_mem_free(chan_list);
+	return -EINVAL;
 }
 
 /*
@@ -3092,6 +3145,11 @@ __wlan_hdd_cfg80211_extscan_start(struct wiphy *wiphy,
 		return -EPERM;
 	}
 
+	if (QDF_NDI_MODE == pAdapter->device_mode) {
+		hdd_err("Command not allowed for NDI interface");
+		return -EPERM;
+	}
+
 	retval = wlan_hdd_validate_context(pHddCtx);
 	if (0 != retval)
 		return -EINVAL;
@@ -3148,7 +3206,7 @@ __wlan_hdd_cfg80211_extscan_start(struct wiphy *wiphy,
 		goto fail;
 	}
 	pReqMsg->report_threshold_num_scans = nla_get_u8(tb[PARAM_RPT_THRHLD_NUM_SCANS]);
-	hdd_notice("Req Id: %d Session Id: %d Base Period: %d Max AP per Scan: %d Report Threshold percent: %d Report Threshold num scans: %d",
+	hdd_debug("Req Id: %d Session Id: %d Base Period: %d Max AP per Scan: %d Report Threshold percent: %d Report Threshold num scans: %d",
 		pReqMsg->requestId, pReqMsg->sessionId,
 		pReqMsg->basePeriod, pReqMsg->maxAPperScan,
 		pReqMsg->report_threshold_percent,
@@ -3165,7 +3223,7 @@ __wlan_hdd_cfg80211_extscan_start(struct wiphy *wiphy,
 				WLAN_EXTSCAN_MAX_BUCKETS);
 		num_buckets = WLAN_EXTSCAN_MAX_BUCKETS;
 	}
-	hdd_info("Input: Number of Buckets %d", num_buckets);
+	hdd_debug("Input: Number of Buckets %d", num_buckets);
 	pReqMsg->numBuckets = num_buckets;
 
 	/* This is optional attribute, if not present set it to 0 */
@@ -3179,7 +3237,7 @@ __wlan_hdd_cfg80211_extscan_start(struct wiphy *wiphy,
 	pReqMsg->extscan_adaptive_dwell_mode =
 		pHddCtx->config->extscan_adaptive_dwell_mode;
 
-	hdd_notice("Configuration flags: %u",
+	hdd_debug("Configuration flags: %u",
 				pReqMsg->configuration_flags);
 
 	if (!tb[QCA_WLAN_VENDOR_ATTR_EXTSCAN_BUCKET_SPEC]) {
@@ -3204,7 +3262,7 @@ __wlan_hdd_cfg80211_extscan_start(struct wiphy *wiphy,
 	}
 
 	pHddCtx->ext_scan_start_since_boot = qdf_get_monotonic_boottime();
-	hdd_notice("Timestamp since boot: %llu",
+	hdd_debug("Timestamp since boot: %llu",
 			pHddCtx->ext_scan_start_since_boot);
 
 	/* request was sent -- wait for the response */
@@ -3334,7 +3392,7 @@ __wlan_hdd_cfg80211_extscan_stop(struct wiphy *wiphy,
 
 	pReqMsg->requestId = nla_get_u32(tb[PARAM_REQUEST_ID]);
 	pReqMsg->sessionId = pAdapter->sessionId;
-	hdd_notice("Req Id %d Session Id %d",
+	hdd_debug("Req Id %d Session Id %d",
 		pReqMsg->requestId, pReqMsg->sessionId);
 
 	context = &ext_scan_context;
@@ -3466,7 +3524,7 @@ __wlan_hdd_cfg80211_extscan_reset_bssid_hotlist(struct wiphy *wiphy,
 		nla_get_u32(tb
 		 [QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID]);
 	pReqMsg->sessionId = pAdapter->sessionId;
-	hdd_notice("Req Id %d Session Id %d",
+	hdd_debug("Req Id %d Session Id %d",
 		pReqMsg->requestId, pReqMsg->sessionId);
 
 	context = &ext_scan_context;
@@ -3594,7 +3652,7 @@ __wlan_hdd_cfg80211_extscan_reset_significant_change(struct wiphy
 		nla_get_u32(tb
 		 [QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID]);
 	pReqMsg->sessionId = pAdapter->sessionId;
-	hdd_notice("Req Id %d Session Id %d",
+	hdd_debug("Req Id %d Session Id %d",
 		pReqMsg->requestId, pReqMsg->sessionId);
 
 	context = &ext_scan_context;
@@ -3722,11 +3780,11 @@ static int hdd_extscan_epno_fill_network_list(
 		ssid_len--;
 
 		req_msg->networks[index].ssid.length = ssid_len;
-		hdd_notice("network ssid length %d", ssid_len);
+		hdd_debug("network ssid length %d", ssid_len);
 		ssid = nla_data(network[QCA_WLAN_VENDOR_ATTR_PNO_SET_LIST_PARAM_EPNO_NETWORK_SSID]);
 		qdf_mem_copy(req_msg->networks[index].ssid.ssId,
 				ssid, ssid_len);
-		hdd_notice("Ssid (%.*s)",
+		hdd_debug("Ssid (%.*s)",
 			req_msg->networks[index].ssid.length,
 			req_msg->networks[index].ssid.ssId);
 
@@ -3737,7 +3795,7 @@ static int hdd_extscan_epno_fill_network_list(
 		}
 		req_msg->networks[index].flags = nla_get_u8(
 			network[QCA_WLAN_VENDOR_ATTR_PNO_SET_LIST_PARAM_EPNO_NETWORK_FLAGS]);
-		hdd_notice("flags %u", req_msg->networks[index].flags);
+		hdd_debug("flags %u", req_msg->networks[index].flags);
 
 		/* Parse and fetch auth bit */
 		if (!network[QCA_WLAN_VENDOR_ATTR_PNO_SET_LIST_PARAM_EPNO_NETWORK_AUTH_BIT]) {
@@ -3746,7 +3804,7 @@ static int hdd_extscan_epno_fill_network_list(
 		}
 		req_msg->networks[index].auth_bit_field = nla_get_u8(
 			network[QCA_WLAN_VENDOR_ATTR_PNO_SET_LIST_PARAM_EPNO_NETWORK_AUTH_BIT]);
-		hdd_notice("auth bit %u",
+		hdd_debug("auth bit %u",
 			req_msg->networks[index].auth_bit_field);
 
 		index++;
@@ -3818,12 +3876,12 @@ static int __wlan_hdd_cfg80211_set_epno_list(struct wiphy *wiphy,
 		tb[QCA_WLAN_VENDOR_ATTR_PNO_SET_LIST_PARAM_NUM_NETWORKS]);
 
 	if (num_networks > MAX_EPNO_NETWORKS) {
-		hdd_notice("num of nw: %d exceeded max: %d, resetting to: %d",
+		hdd_debug("num of nw: %d exceeded max: %d, resetting to: %d",
 			num_networks, MAX_EPNO_NETWORKS, MAX_EPNO_NETWORKS);
 		num_networks = MAX_EPNO_NETWORKS;
 	}
 
-	hdd_notice("num networks %u", num_networks);
+	hdd_debug("num networks %u", num_networks);
 	len = sizeof(*req_msg) +
 			(num_networks * sizeof(struct wifi_epno_network));
 
@@ -3835,16 +3893,16 @@ static int __wlan_hdd_cfg80211_set_epno_list(struct wiphy *wiphy,
 	req_msg->num_networks = num_networks;
 
 	/* Parse and fetch request Id */
-	if (!tb[QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID]) {
+	if (!tb[QCA_WLAN_VENDOR_ATTR_PNO_CONFIG_REQUEST_ID]) {
 		hdd_err("attr request id failed");
 		goto fail;
 	}
 	req_msg->request_id = nla_get_u32(
-	    tb[QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID]);
-	hdd_notice("Req Id %u", req_msg->request_id);
+	    tb[QCA_WLAN_VENDOR_ATTR_PNO_CONFIG_REQUEST_ID]);
+	hdd_debug("Req Id %u", req_msg->request_id);
 
 	req_msg->session_id = adapter->sessionId;
-	hdd_notice("Session Id %d", req_msg->session_id);
+	hdd_debug("Session Id %d", req_msg->session_id);
 
 	if (num_networks) {
 
@@ -3905,13 +3963,13 @@ static int __wlan_hdd_cfg80211_set_epno_list(struct wiphy *wiphy,
 		req_msg->band_5ghz_bonus = nla_get_u32(
 			tb[QCA_WLAN_VENDOR_ATTR_EPNO_BAND5GHZ_BONUS]);
 
-		hdd_notice("min_5ghz_rssi: %d min_24ghz_rssi: %d",
+		hdd_debug("min_5ghz_rssi: %d min_24ghz_rssi: %d",
 			req_msg->min_5ghz_rssi,
 			req_msg->min_24ghz_rssi);
-		hdd_notice("initial_score_max: %d current_connection_bonus:%d",
+		hdd_debug("initial_score_max: %d current_connection_bonus:%d",
 			req_msg->initial_score_max,
 			req_msg->current_connection_bonus);
-		hdd_notice("Bonuses same_network: %d secure: %d band_5ghz: %d",
+		hdd_debug("Bonuses same_network: %d secure: %d band_5ghz: %d",
 			req_msg->same_network_bonus,
 			req_msg->secure_bonus,
 			req_msg->band_5ghz_bonus);
@@ -3936,7 +3994,7 @@ fail:
 	return -EINVAL;
 }
 
- /**
+/**
  * wlan_hdd_cfg80211_set_epno_list() - epno set network list
  * @wiphy: wiphy
  * @wdev: pointer to wireless dev
@@ -4002,8 +4060,9 @@ static int hdd_extscan_passpoint_fill_network_list(
 		}
 
 		if (nla_parse(network,
-			QCA_WLAN_VENDOR_ATTR_PNO_MAX,
-			nla_data(networks), nla_len(networks), NULL)) {
+			      QCA_WLAN_VENDOR_ATTR_PNO_MAX,
+			      nla_data(networks), nla_len(networks),
+			      wlan_hdd_pno_config_policy)) {
 			hdd_err("nla_parse failed");
 			return -EINVAL;
 		}
@@ -4015,7 +4074,7 @@ static int hdd_extscan_passpoint_fill_network_list(
 		}
 		req_msg->networks[index].id = nla_get_u32(
 			network[QCA_WLAN_VENDOR_ATTR_PNO_PASSPOINT_NETWORK_PARAM_ID]);
-		hdd_notice("Id %u", req_msg->networks[index].id);
+		hdd_debug("Id %u", req_msg->networks[index].id);
 
 		/* Parse and fetch realm */
 		if (!network[QCA_WLAN_VENDOR_ATTR_PNO_PASSPOINT_NETWORK_PARAM_REALM]) {
@@ -4031,8 +4090,8 @@ static int hdd_extscan_passpoint_fill_network_list(
 		qdf_mem_copy(req_msg->networks[index].realm,
 				nla_data(network[QCA_WLAN_VENDOR_ATTR_PNO_PASSPOINT_NETWORK_PARAM_REALM]),
 				len);
-		hdd_notice("realm len %d", len);
-		hdd_notice("realm: %s", req_msg->networks[index].realm);
+		hdd_debug("realm len %d", len);
+		hdd_debug("realm: %s", req_msg->networks[index].realm);
 
 		/* Parse and fetch roaming consortium ids */
 		if (!network[QCA_WLAN_VENDOR_ATTR_PNO_PASSPOINT_NETWORK_PARAM_ROAM_CNSRTM_ID]) {
@@ -4042,7 +4101,7 @@ static int hdd_extscan_passpoint_fill_network_list(
 		nla_memcpy(&req_msg->networks[index].roaming_consortium_ids,
 			network[QCA_WLAN_VENDOR_ATTR_PNO_PASSPOINT_NETWORK_PARAM_ROAM_CNSRTM_ID],
 			sizeof(req_msg->networks[0].roaming_consortium_ids));
-		hdd_notice("roaming consortium ids");
+		hdd_debug("roaming consortium ids");
 
 		/* Parse and fetch plmn */
 		if (!network[QCA_WLAN_VENDOR_ATTR_PNO_PASSPOINT_NETWORK_PARAM_ROAM_PLMN]) {
@@ -4052,7 +4111,7 @@ static int hdd_extscan_passpoint_fill_network_list(
 		nla_memcpy(&req_msg->networks[index].plmn,
 			network[QCA_WLAN_VENDOR_ATTR_PNO_PASSPOINT_NETWORK_PARAM_ROAM_PLMN],
 			SIR_PASSPOINT_PLMN_LEN);
-		hdd_notice("plmn %02x:%02x:%02x)",
+		hdd_debug("plmn %02x:%02x:%02x)",
 			req_msg->networks[index].plmn[0],
 			req_msg->networks[index].plmn[1],
 			req_msg->networks[index].plmn[2]);
@@ -4101,7 +4160,7 @@ static int __wlan_hdd_cfg80211_set_passpoint_list(struct wiphy *wiphy,
 	}
 
 	if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_PNO_MAX, data, data_len,
-		wlan_hdd_extscan_config_policy)) {
+		      wlan_hdd_pno_config_policy)) {
 		hdd_err("Invalid ATTR");
 		return -EINVAL;
 	}
@@ -4119,7 +4178,7 @@ static int __wlan_hdd_cfg80211_set_passpoint_list(struct wiphy *wiphy,
 		return -EINVAL;
 	}
 
-	hdd_notice("num networks %u", num_networks);
+	hdd_debug("num networks %u", num_networks);
 
 	req_msg = qdf_mem_malloc(sizeof(*req_msg) +
 			(num_networks * sizeof(req_msg->networks[0])));
@@ -4138,7 +4197,7 @@ static int __wlan_hdd_cfg80211_set_passpoint_list(struct wiphy *wiphy,
 	    tb[QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID]);
 
 	req_msg->session_id = adapter->sessionId;
-	hdd_notice("Req Id %u Session Id %d", req_msg->request_id,
+	hdd_debug("Req Id %u Session Id %d", req_msg->request_id,
 			req_msg->session_id);
 
 	if (hdd_extscan_passpoint_fill_network_list(hdd_ctx, req_msg, tb))
@@ -4242,7 +4301,7 @@ static int __wlan_hdd_cfg80211_reset_passpoint_list(struct wiphy *wiphy,
 	    tb[QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID]);
 
 	req_msg->session_id = adapter->sessionId;
-	hdd_notice("Req Id %u Session Id %d",
+	hdd_debug("Req Id %u Session Id %d",
 			req_msg->request_id, req_msg->session_id);
 
 	status = sme_reset_passpoint_list(hdd_ctx->hHal, req_msg);
@@ -4300,7 +4359,6 @@ static inline void wlan_hdd_init_completion_extwow(hdd_context_t *pHddCtx)
 #else
 static inline void wlan_hdd_init_completion_extwow(hdd_context_t *pHddCtx)
 {
-	return;
 }
 #endif
 

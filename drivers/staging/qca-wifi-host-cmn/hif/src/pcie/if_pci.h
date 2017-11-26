@@ -103,15 +103,15 @@ struct hif_pci_pm_stats {
 struct hif_msi_info {
 	void *magic;
 	dma_addr_t magic_da;
-	OS_DMA_MEM_CONTEXT(dmacontext)
+	OS_DMA_MEM_CONTEXT(dmacontext);
 };
 
 struct hif_pci_softc {
 	struct HIF_CE_state ce_sc;
 	void __iomem *mem;      /* PCI address. */
-	/* For efficiency, should be first in struct */
+	size_t mem_len;
 
-	struct device *dev;
+	struct device *dev;	/* For efficiency, should be first in struct */
 	struct pci_dev *pdev;
 	int num_msi_intrs;      /* number of MSI interrupts granted */
 	/* 0 --> using legacy PCI line interrupts */
@@ -149,6 +149,7 @@ int hif_configure_irq(struct hif_softc *sc);
 void hif_pci_cancel_deferred_target_sleep(struct hif_softc *scn);
 void wlan_tasklet(unsigned long data);
 irqreturn_t hif_pci_interrupt_handler(int irq, void *arg);
+int hif_pci_addr_in_boundary(struct hif_softc *scn, uint32_t offset);
 
 /*
  * A firmware interrupt to the Host is indicated by the

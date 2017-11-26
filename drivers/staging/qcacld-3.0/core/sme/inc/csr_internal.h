@@ -44,8 +44,6 @@
 
 #include "sir_types.h"
 
-#define CSR_MAX_STA (HAL_NUM_STA)
-
 /* define scan return criteria. LIM should use these define as well */
 #define CSR_SCAN_RETURN_AFTER_ALL_CHANNELS          (0)
 #define CSR_SCAN_RETURN_AFTER_FIRST_MATCH           (0x01)
@@ -236,10 +234,7 @@ typedef enum {
 typedef enum {
 	eCsrSummaryStats = 0,
 	eCsrGlobalClassAStats,
-	eCsrGlobalClassBStats,
-	eCsrGlobalClassCStats,
 	eCsrGlobalClassDStats,
-	eCsrPerStaStats,
 	csr_per_chain_rssi_stats,
 	eCsrMaxStats
 } eCsrRoamStatsClassTypes;
@@ -262,17 +257,6 @@ typedef enum {
 	eCSR_REASON_ROAM_HO_FAIL,
 
 } eCsrDiagWlanStatusEventReason;
-
-/**
- * enum eCSR_WLAN_DIAG_EVENT_TYPE - enum for DIAG events
- * @eCSR_EVENT_SCAN_COMPLETE - scan complete
- * @eCSR_EVENT_SCAN_RES_FOUND - scan result found
- */
-typedef enum {
-	eCSR_EVENT_TYPE_INVALID = 0,
-	eCSR_EVENT_SCAN_COMPLETE = 64,
-	eCSR_EVENT_SCAN_RES_FOUND = 65,
-} eCSR_WLAN_DIAG_EVENT_TYPE;
 
 #endif /* FEATURE_WLAN_DIAG_SUPPORT */
 
@@ -468,7 +452,9 @@ typedef struct tagCsr11rConfig {
 
 typedef struct tagCsrNeighborRoamConfig {
 	uint32_t nNeighborScanTimerPeriod;
+	uint32_t neighbor_scan_min_timer_period;
 	uint8_t nNeighborLookupRssiThreshold;
+	int8_t rssi_thresh_offset_5g;
 	uint16_t nNeighborScanMinChanTime;
 	uint16_t nNeighborScanMaxChanTime;
 	sCsrChannel neighborScanChanList;
@@ -504,6 +490,7 @@ typedef struct tagCsrConfig {
 	bool Is11eSupportEnabled;
 	bool Is11dSupportEnabled;
 	bool Is11dSupportEnabledOriginal;
+	bool enable_11d_in_world_mode;
 	bool Is11hSupportEnabled;
 	bool shortSlotTime;
 	bool ProprietaryRatesEnabled;
@@ -548,10 +535,6 @@ typedef struct tagCsrConfig {
 	/* In units of milliseconds */
 	uint32_t  idle_time_conc;
 
-	/* number of channels combined for Sta in each split scan operation */
-	uint8_t nNumStaChanCombinedConc;
-	/* number of channels combined for P2P in each split scan operation */
-	uint8_t nNumP2PChanCombinedConc;
 #endif
 	/*
 	 * in dBm, the max TX power. The actual TX power is the lesser of this
@@ -605,8 +588,10 @@ typedef struct tagCsrConfig {
 	uint8_t enableHtSmps;
 	uint8_t htSmps;
 	bool send_smps_action;
-	uint8_t txLdpcEnable;
-	uint8_t rxLdpcEnable;
+	uint8_t tx_ldpc_enable;
+	uint8_t rx_ldpc_enable;
+	uint8_t disable_high_ht_mcs_2x2;
+	uint8_t rx_ldpc_support_for_2g;
 	/*
 	 * Enable/Disable heartbeat offload
 	 */
@@ -667,7 +652,15 @@ typedef struct tagCsrConfig {
 	bool qcn_ie_support;
 	uint8_t fils_max_chan_guard_time;
 	uint16_t pkt_err_disconn_th;
+	bool is_bssid_hint_priority;
 	bool is_force_1x1;
+	uint16_t num_11b_tx_chains;
+	uint16_t num_11ag_tx_chains;
+	uint32_t disallow_duration;
+	uint32_t rssi_channel_penalization;
+	uint32_t num_disallowed_aps;
+	uint32_t scan_probe_repeat_time;
+	uint32_t scan_num_probes;
 } tCsrConfig;
 
 typedef struct tagCsrChannelPowerInfo {
@@ -705,9 +698,6 @@ typedef struct tagCsrScanStruct {
 	tDblLinkList tempScanResults;
 	bool fScanEnable;
 	bool fFullScanIssued;
-#ifdef WLAN_AP_STA_CONCURRENCY
-	qdf_mc_timer_t hTimerStaApConcTimer;
-#endif
 	qdf_mc_timer_t hTimerIdleScan;
 	/*
 	 * changes on every scan, it is used as a flag for whether 11d info is
@@ -871,7 +861,13 @@ typedef struct tagCsrRoamOffloadSynchStruct {
 	struct qdf_mac_addr bssid;      /* MAC address of roamed AP */
 	tCsrRoamOffloadAuthStatus authStatus;   /* auth status */
 	uint8_t kck[SIR_KCK_KEY_LEN];
-	uint8_t kek[SIR_KEK_KEY_LEN];
+	uint8_t kek[SIR_KEK_KEY_LEN_FILS];
+	uint32_t kek_len;
+	uint32_t pmk_len;
+	uint8_t pmk[SIR_PMK_LEN];
+	uint8_t pmkid[SIR_PMKID_LEN];
+	bool update_erp_next_seq_num;
+	uint16_t next_erp_seq_num;
 	uint8_t replay_ctr[SIR_REPLAY_CTR_LEN];
 	tpSirBssDescription  bss_desc_ptr;      /*BSS descriptor*/
 } csr_roam_offload_synch_params;
@@ -885,6 +881,24 @@ struct csr_roam_stored_profile {
 	uint32_t roam_id;
 	bool imediate_flag;
 	bool clear_flag;
+};
+
+/**
+ * struct csr_disconnect_stats - Disconnect Stats per session
+ * @disconnection_cnt: total no. of disconnections
+ * @disconnection_by_app: diconnections triggered by application
+ * @disassoc_by_peer: disassoc sent by peer
+ * @deauth_by_peer: deauth sent by peer
+ * @bmiss: disconnect triggered by beacon miss
+ * @peer_kickout: disconnect triggered by peer kickout
+ */
+struct csr_disconnect_stats {
+	uint32_t disconnection_cnt;
+	uint32_t disconnection_by_app;
+	uint32_t disassoc_by_peer;
+	uint32_t deauth_by_peer;
+	uint32_t bmiss;
+	uint32_t peer_kickout;
 };
 
 typedef struct tagCsrRoamSession {
@@ -1002,6 +1016,11 @@ typedef struct tagCsrRoamSession {
 	uint8_t disconnect_reason;
 	uint8_t uapsd_mask;
 	qdf_mc_timer_t roaming_offload_timer;
+	bool is_fils_connection;
+	uint16_t fils_seq_num;
+	bool ignore_assoc_disallowed;
+	bool discon_in_progress;
+	struct csr_disconnect_stats disconnect_stats;
 } tCsrRoamSession;
 
 typedef struct tagCsrRoamStruct {
@@ -1024,10 +1043,7 @@ typedef struct tagCsrRoamStruct {
 	qdf_mc_timer_t hTimerWaitForKey; /* support timeout for WaitForKey */
 	tCsrSummaryStatsInfo summaryStatsInfo;
 	tCsrGlobalClassAStatsInfo classAStatsInfo;
-	tCsrGlobalClassBStatsInfo classBStatsInfo;
-	tCsrGlobalClassCStatsInfo classCStatsInfo;
 	tCsrGlobalClassDStatsInfo classDStatsInfo;
-	tCsrPerStaStatsInfo perStaStatsInfo[CSR_MAX_STA];
 	struct csr_per_chain_rssi_stats_info  per_chain_rssi_stats;
 	tDblLinkList statsClientReqList;
 	tDblLinkList peStatsReqList;
@@ -1049,6 +1065,7 @@ typedef struct tagCsrRoamStruct {
 	uint8_t *pReassocResp;          /* reassociation response from new AP */
 	uint16_t reassocRespLen;        /* length of reassociation response */
 	qdf_mc_timer_t packetdump_timer;
+	qdf_list_t rssi_disallow_bssid;
 } tCsrRoamStruct;
 
 #define GET_NEXT_ROAM_ID(pRoamStruct)  (((pRoamStruct)->nextRoamId + 1 == 0) ? \
@@ -1397,10 +1414,6 @@ bool csr_clear_joinreq_param(tpAniSirGlobal mac_ctx,
 QDF_STATUS csr_issue_stored_joinreq(tpAniSirGlobal mac_ctx,
 		uint32_t *roam_id,
 		uint32_t session_id);
-#ifdef FEATURE_WLAN_DIAG_SUPPORT
-void csr_diag_event_report(tpAniSirGlobal pmac, uint16_t event_type,
-			   uint16_t status, uint16_t reasoncode);
-#endif
 QDF_STATUS csr_get_channels_and_power(tpAniSirGlobal pMac);
 
 /* csr_scan_process_single_bssdescr() - Add a bssdescriptor to scan table

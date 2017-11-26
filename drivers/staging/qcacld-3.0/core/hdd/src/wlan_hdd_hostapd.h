@@ -52,8 +52,6 @@ hdd_adapter_t *hdd_wlan_create_ap_dev(hdd_context_t *pHddCtx,
 				      unsigned char name_assign_type,
 				      uint8_t *name);
 
-QDF_STATUS hdd_register_hostapd(hdd_adapter_t *pAdapter, uint8_t rtnl_held);
-
 int hdd_unregister_hostapd(hdd_adapter_t *pAdapter, bool rtnl_held);
 
 eCsrAuthType
@@ -81,10 +79,12 @@ hdd_translate_wpa_to_csr_auth_type(uint8_t auth_suite[4]);
 eCsrEncryptionType
 hdd_translate_wpa_to_csr_encryption_type(uint8_t cipher_suite[4]);
 
-QDF_STATUS hdd_softap_sta_deauth(hdd_adapter_t *,
-		struct tagCsrDelStaParams *);
-void hdd_softap_sta_disassoc(hdd_adapter_t *, struct tagCsrDelStaParams *);
-void hdd_softap_tkip_mic_fail_counter_measure(hdd_adapter_t *, bool);
+QDF_STATUS hdd_softap_sta_deauth(hdd_adapter_t *adapter,
+		struct tagCsrDelStaParams *pDelStaParams);
+void hdd_softap_sta_disassoc(hdd_adapter_t *adapter,
+			     struct tagCsrDelStaParams *pDelStaParams);
+void hdd_softap_tkip_mic_fail_counter_measure(hdd_adapter_t *adapter,
+					      bool enable);
 int hdd_softap_unpack_ie(tHalHandle halHandle,
 			 eCsrEncryptionType *pEncryptType,
 			 eCsrEncryptionType *mcEncryptType,

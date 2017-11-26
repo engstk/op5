@@ -30,7 +30,7 @@
 #include <linux/kernel.h>       /* We're doing kernel work */
 #include <linux/version.h>      /* We're doing kernel work */
 #include <linux/proc_fs.h>      /* Necessary because we use the proc fs */
-#include <asm/uaccess.h>        /* for copy_from_user */
+#include <linux/uaccess.h>        /* for copy_from_user */
 #include "hif.h"
 #include "hif_main.h"
 #if defined(HIF_USB)
@@ -72,17 +72,21 @@ static ssize_t ath_procfs_diag_read(struct file *file, char __user *buf,
 	struct hif_softc *scn;
 	uint32_t offset = 0, memtype = 0;
 
+	hif_hdl = get_hif_hdl_from_file(file);
+	scn = HIF_GET_SOFTC(hif_hdl);
+
+	if (scn->bus_ops.hif_addr_in_boundary(hif_hdl, (uint32_t)(*pos)))
+		return -EINVAL;
+
 	read_buffer = qdf_mem_malloc(count);
 	if (NULL == read_buffer) {
 		HIF_ERROR("%s: cdf_mem_alloc failed", __func__);
 		return -ENOMEM;
 	}
 
-	hif_hdl = get_hif_hdl_from_file(file);
-	HIF_DBG("rd buff 0x%p cnt %zu offset 0x%x buf 0x%p",
+	HIF_DBG("rd buff 0x%pK cnt %zu offset 0x%x buf 0x%pK",
 		 read_buffer, count, (int)*pos, buf);
 
-	scn = HIF_GET_SOFTC(hif_hdl);
 	if (scn->bus_type == QDF_BUS_TYPE_SNOC) {
 		memtype = ((uint32_t)(*pos) & 0xff000000) >> 24;
 		offset = (uint32_t)(*pos) & 0xffffff;
@@ -112,9 +116,8 @@ out:
 		HIF_ERROR("%s: copy_to_user error in /proc/%s",
 			__func__, PROCFS_NAME);
 		return -EFAULT;
-	} else
-		qdf_mem_free(read_buffer);
-
+	}
+	qdf_mem_free(read_buffer);
 	return count;
 }
 
@@ -128,6 +131,12 @@ static ssize_t ath_procfs_diag_write(struct file *file,
 	struct hif_softc *scn;
 	uint32_t offset = 0, memtype = 0;
 
+	hif_hdl = get_hif_hdl_from_file(file);
+	scn = HIF_GET_SOFTC(hif_hdl);
+
+	if (scn->bus_ops.hif_addr_in_boundary(hif_hdl, (uint32_t)(*pos)))
+		return -EINVAL;
+
 	write_buffer = qdf_mem_malloc(count);
 	if (NULL == write_buffer) {
 		HIF_ERROR("%s: cdf_mem_alloc failed", __func__);
@@ -140,12 +149,10 @@ static ssize_t ath_procfs_diag_write(struct file *file,
 		return -EFAULT;
 	}
 
-	hif_hdl = get_hif_hdl_from_file(file);
-	HIF_DBG("wr buff 0x%p buf 0x%p cnt %zu offset 0x%x value 0x%x",
+	HIF_DBG("wr buff 0x%pK buf 0x%pK cnt %zu offset 0x%x value 0x%x",
 		 write_buffer, buf, count,
 		 (int)*pos, *((uint32_t *) write_buffer));
 
-	scn = HIF_GET_SOFTC(hif_hdl);
 	if (scn->bus_type == QDF_BUS_TYPE_SNOC) {
 		memtype = ((uint32_t)(*pos) & 0xff000000) >> 24;
 		offset = (uint32_t)(*pos) & 0xffffff;
@@ -160,6 +167,7 @@ static ssize_t ath_procfs_diag_write(struct file *file,
 	if ((count == 4) && ((((uint32_t) (*pos)) & 3) == 0)) {
 		/* reading a word? */
 		uint32_t value = *((uint32_t *)write_buffer);
+
 		rv = hif_diag_write_access(hif_hdl, (uint32_t)(*pos), value);
 	} else {
 		rv = hif_diag_write_mem(hif_hdl, (uint32_t)(*pos),
@@ -169,11 +177,10 @@ static ssize_t ath_procfs_diag_write(struct file *file,
 out:
 
 	qdf_mem_free(write_buffer);
-	if (rv == 0) {
+	if (rv == 0)
 		return count;
-	} else {
+	else
 		return -EIO;
-	}
 }
 
 static const struct file_operations athdiag_fops = {
@@ -181,8 +188,8 @@ static const struct file_operations athdiag_fops = {
 	.write = ath_procfs_diag_write,
 };
 
-/**
-   *This function is called when the module is loaded
+/*
+ * This function is called when the module is loaded
  *
  */
 int athdiag_procfs_init(void *scn)
@@ -195,8 +202,7 @@ int athdiag_procfs_init(void *scn)
 		return -ENOMEM;
 	}
 
-	proc_file = proc_create_data(PROCFS_NAME,
-				     S_IRUSR | S_IWUSR, proc_dir,
+	proc_file = proc_create_data(PROCFS_NAME, 0600, proc_dir,
 				     &athdiag_fops, (void *)scn);
 	if (proc_file == NULL) {
 		remove_proc_entry(PROCFS_NAME, proc_dir);
@@ -209,8 +215,8 @@ int athdiag_procfs_init(void *scn)
 	return 0;               /* everything is ok */
 }
 
-/**
-   *This function is called when the module is unloaded
+/*
+ * This function is called when the module is unloaded
  *
  */
 void athdiag_procfs_remove(void)

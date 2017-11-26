@@ -54,8 +54,10 @@ typedef enum {
 typedef struct sCsrNeighborRoamCfgParams {
 	uint8_t maxNeighborRetries;
 	uint32_t neighborScanPeriod;
+	uint32_t neighbor_scan_min_period;
 	tCsrChannelInfo channelInfo;
 	uint8_t neighborLookupThreshold;
+	int8_t rssi_thresh_offset_5g;
 	uint8_t neighborReassocThreshold;
 	uint32_t minChannelScanTime;
 	uint32_t maxChannelScanTime;
@@ -170,6 +172,7 @@ typedef struct sCsrNeighborRoamControlInfo {
 	uint8_t currentRoamBmissFinalBcnt;
 	uint8_t currentRoamBeaconRssiWeight;
 	uint8_t last_sent_cmd;
+	bool b_roam_scan_offload_started;
 } tCsrNeighborRoamControlInfo, *tpCsrNeighborRoamControlInfo;
 
 /* All the necessary Function declarations are here */
@@ -324,7 +327,11 @@ void csr_roam_reset_roam_params(tpAniSirGlobal mac_ptr);
 #define REASON_CONNECT_IES_CHANGED                  34
 #define REASON_ROAM_SCAN_STA_ROAM_POLICY_CHANGED    35
 #define REASON_ROAM_SYNCH_FAILED                    36
-
+#define REASON_ROAM_PSK_PMK_CHANGED                 37
+#define REASON_ROAM_STOP_ALL                        38
+#define REASON_SUPPLICANT_DISABLED_ROAMING          39
+#define REASON_CTX_INIT                             40
+#define REASON_FILS_PARAMS_CHANGED                  41
 
 #if defined(WLAN_FEATURE_HOST_ROAM) || defined(WLAN_FEATURE_ROAM_OFFLOAD)
 QDF_STATUS csr_roam_offload_scan(tpAniSirGlobal pMac, uint8_t sessionId,
@@ -336,6 +343,22 @@ static inline QDF_STATUS csr_roam_offload_scan(tpAniSirGlobal pMac,
 	return QDF_STATUS_E_NOSUPPORT;
 }
 #endif
+
+#if defined(WLAN_FEATURE_FILS_SK)
+/**
+ * csr_update_fils_config - Update FILS config to CSR roam session
+ * @mac: MAC context
+ * @session_id: session id
+ * @src_profile: Source profile having latest FILS config
+ *
+ * API to update FILS config to roam csr session
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS csr_update_fils_config(tpAniSirGlobal mac, uint8_t session_id,
+				  tCsrRoamProfile *src_profile);
+#endif
+
 QDF_STATUS csr_neighbor_roam_handoff_req_hdlr(tpAniSirGlobal pMac, void *pMsg);
 QDF_STATUS csr_neighbor_roam_proceed_with_handoff_req(tpAniSirGlobal pMac,
 		uint8_t sessionId);

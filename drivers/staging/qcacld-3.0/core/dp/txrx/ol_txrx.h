@@ -39,7 +39,7 @@
  */
 #define OL_TX_NON_FWD_RESERVE	100
 #define OL_TXRX_PEER_UNREF_DELETE(peer) \
-	ol_txrx_peer_unref_delete(peer, __func__, __LINE__);
+	ol_txrx_peer_unref_delete(peer, __func__, __LINE__)
 
 int ol_txrx_peer_unref_delete(ol_txrx_peer_handle peer,
 					      const char *fname,
@@ -88,7 +88,6 @@ ol_txrx_hl_tdls_flag_reset(struct ol_txrx_vdev_t *vdev, bool flag);
 static inline void
 ol_txrx_hl_tdls_flag_reset(struct ol_txrx_vdev_t *vdev, bool flag)
 {
-	return;
 }
 #endif
 
@@ -114,14 +113,12 @@ ol_txrx_update_last_real_peer(
 static inline void
 ol_txrx_copy_mac_addr_raw(ol_txrx_vdev_handle vdev, uint8_t *bss_addr)
 {
-	return;
 }
 
 static inline void
 ol_txrx_add_last_real_peer(ol_txrx_pdev_handle pdev,
 			   ol_txrx_vdev_handle vdev, uint8_t *peer_id)
 {
-	return;
 }
 
 static inline bool
@@ -137,7 +134,6 @@ ol_txrx_update_last_real_peer(
 	uint8_t *peer_id, bool restore_last_peer)
 
 {
-	return;
 }
 #endif
 
@@ -151,6 +147,24 @@ ol_txrx_update_last_real_peer(
  */
 void
 ol_txrx_dump_pkt(qdf_nbuf_t nbuf, uint32_t nbuf_paddr, int len);
+
+
+/**
+ * ol_txrx_post_data_stall_event() - post data stall event
+ * @indicator: Module triggering data stall
+ * @data_stall_type: data stall event type
+ * @pdev_id: pdev id
+ * @vdev_id_bitmap: vdev id bitmap
+ * @recovery_type: data stall recovery type
+ *
+ * Return: None
+ */
+
+void ol_txrx_post_data_stall_event(
+			enum data_stall_log_event_indicator indicator,
+			enum data_stall_log_event_type data_stall_type,
+			uint32_t pdev_id, uint32_t vdev_id_bitmap,
+			enum data_stall_log_recovery_type recovery_type);
 
 /**
  * ol_txrx_fwd_desc_thresh_check() - check to forward packet to tx path

@@ -36,7 +36,7 @@ struct hif_softc;
 
 struct hif_bus_ops {
 	QDF_STATUS (*hif_bus_open)(struct hif_softc *hif_sc,
-				   enum qdf_bus_type bus_type);
+					enum qdf_bus_type bus_type);
 	void (*hif_bus_close)(struct hif_softc *hif_sc);
 	void (*hif_bus_prevent_linkdown)(struct hif_softc *hif_sc, bool flag);
 	void (*hif_reset_soc)(struct hif_softc *hif_sc);
@@ -51,12 +51,14 @@ struct hif_bus_ops {
 	void (*hif_disable_isr)(struct hif_softc *hif_sc);
 	void (*hif_nointrs)(struct hif_softc *hif_sc);
 	QDF_STATUS (*hif_enable_bus)(struct hif_softc *hif_sc,
-			struct device *dev, void *bdev, const hif_bus_id *bid,
-			enum hif_enable_type type);
+				      struct device *dev,
+				      void *bdev,
+				      const struct hif_bus_id *bid,
+				      enum hif_enable_type type);
 	void (*hif_disable_bus)(struct hif_softc *hif_sc);
 	int (*hif_bus_configure)(struct hif_softc *hif_sc);
 	QDF_STATUS (*hif_get_config_item)(struct hif_softc *hif_sc,
-		     int opcode, void *config, uint32_t config_len);
+			     int opcode, void *config, uint32_t config_len);
 	void (*hif_set_mailbox_swap)(struct hif_softc *hif_sc);
 	void (*hif_claim_device)(struct hif_softc *hif_sc);
 	void (*hif_shutdown_device)(struct hif_softc *hif_sc);
@@ -69,7 +71,7 @@ struct hif_bus_ops {
 				       void *ramdump_base,
 				       uint32_t address, uint32_t size);
 	void (*hif_ipa_get_ce_resource)(struct hif_softc *hif_sc,
-					qdf_dma_addr_t *sr_base_paddr,
+					qdf_shared_mem_t **ce_sr,
 					uint32_t *sr_ring_size,
 					qdf_dma_addr_t *reg_paddr);
 	void (*hif_mask_interrupt_call)(struct hif_softc *hif_sc);
@@ -78,9 +80,10 @@ struct hif_bus_ops {
 	void (*hif_disable_power_management)(struct hif_softc *hif_ctx);
 	void (*hif_display_stats)(struct hif_softc *hif_ctx);
 	void (*hif_clear_stats)(struct hif_softc *hif_ctx);
-	void (*hif_set_bundle_mode) (struct hif_softc *hif_ctx, bool enabled,
+	void (*hif_set_bundle_mode)(struct hif_softc *hif_ctx, bool enabled,
 					int rx_bundle_cnt);
 	int (*hif_bus_reset_resume)(struct hif_softc *hif_ctx);
+	int (*hif_addr_in_boundary)(struct hif_softc *scn, uint32_t offset);
 };
 
 #ifdef HIF_SNOC

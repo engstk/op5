@@ -27,11 +27,9 @@
 #ifndef _WMI_UNIFIED_TLV_H_
 #define _WMI_UNIFIED_TLV_H_
 #include <osdep.h>
-#include "a_types.h"
 #include "wmi_unified_param.h"
 #include "wmi.h"
 #include "wmi_unified.h"
-#include "ol_defines.h" /* Fix Me: wmi_unified_t structure definition */
 
 QDF_STATUS send_vdev_create_cmd_tlv(wmi_unified_t wmi_handle,
 				 uint8_t macaddr[IEEE80211_ADDR_LEN],
@@ -90,6 +88,13 @@ QDF_STATUS send_suspend_cmd_tlv(wmi_unified_t wmi_handle,
 
 QDF_STATUS send_resume_cmd_tlv(wmi_unified_t wmi_handle,
 				uint8_t mac_id);
+
+#ifdef FEATURE_WLAN_D0WOW
+QDF_STATUS send_d0wow_enable_cmd_tlv(wmi_unified_t wmi_handle,
+				uint8_t mac_id);
+QDF_STATUS send_d0wow_disable_cmd_tlv(wmi_unified_t wmi_handle,
+				uint8_t mac_id);
+#endif
 
 QDF_STATUS send_wow_enable_cmd_tlv(wmi_unified_t wmi_handle,
 				struct wow_cmd_params *param,
@@ -269,6 +274,16 @@ QDF_STATUS send_roam_scan_offload_rssi_thresh_cmd_tlv(wmi_unified_t wmi_handle,
 QDF_STATUS send_roam_scan_filter_cmd_tlv(wmi_unified_t wmi_handle,
 				struct roam_scan_filter_params *roam_req);
 
+/**
+ * send_roam_scan_send_hlp_cmd_tlv() - send HLP info
+ * @wmi_handle: wmi handle
+ * @params: Pointer to HLP params
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS send_roam_scan_send_hlp_cmd_tlv(wmi_unified_t wmi_handle,
+				struct hlp_params *params);
+
 QDF_STATUS send_set_ric_req_cmd_tlv(wmi_unified_t wmi_handle, void *msg,
 			uint8_t is_add_ts);
 
@@ -325,6 +340,16 @@ QDF_STATUS send_process_ll_stats_get_cmd_tlv
 QDF_STATUS send_get_stats_cmd_tlv(wmi_unified_t wmi_handle,
 		       struct pe_stats_req  *get_stats_param,
 			   uint8_t addr[IEEE80211_ADDR_LEN]);
+
+/**
+ * send_congestion_cmd_tlv() - send request to fw to get CCA
+ * @wmi_handle: wmi handle
+ * @vdev_id: vdev id
+ *
+ * Return: CDF status
+ */
+QDF_STATUS send_congestion_cmd_tlv(wmi_unified_t wmi_handle,
+			A_UINT8 vdev_id);
 
 QDF_STATUS send_snr_request_cmd_tlv(wmi_unified_t wmi_handle);
 
@@ -386,7 +411,7 @@ QDF_STATUS send_pktlog_wmi_send_cmd_tlv(wmi_unified_t wmi_handle,
 
 QDF_STATUS send_add_wow_wakeup_event_cmd_tlv(wmi_unified_t wmi_handle,
 					uint32_t vdev_id,
-					uint32_t bitmap,
+					uint32_t *event_bitmap,
 					bool enable);
 
 QDF_STATUS send_wow_patterns_to_fw_cmd_tlv(wmi_unified_t wmi_handle,
@@ -421,6 +446,10 @@ QDF_STATUS send_add_clear_mcbc_filter_cmd_tlv(wmi_unified_t wmi_handle,
 				     uint8_t vdev_id,
 				     struct qdf_mac_addr multicast_addr,
 				     bool clearList);
+
+QDF_STATUS send_multiple_add_clear_mcbc_filter_cmd_tlv(wmi_unified_t wmi_handle,
+				     uint8_t vdev_id,
+				     struct mcast_filter_params *filter_param);
 
 QDF_STATUS send_gtk_offload_cmd_tlv(wmi_unified_t wmi_handle, uint8_t vdev_id,
 					   struct gtk_offload_params *params,
@@ -462,8 +491,8 @@ QDF_STATUS send_process_ch_avoid_update_cmd_tlv(wmi_unified_t wmi_handle);
 
 QDF_STATUS send_regdomain_info_to_fw_cmd_tlv(wmi_unified_t wmi_handle,
 				   uint32_t reg_dmn, uint16_t regdmn2G,
-				   uint16_t regdmn5G, int8_t ctl2G,
-				   int8_t ctl5G);
+				   uint16_t regdmn5G, uint8_t ctl2G,
+				   uint8_t ctl5G);
 
 QDF_STATUS send_set_tdls_offchan_mode_cmd_tlv(wmi_unified_t wmi_handle,
 			      struct tdls_channel_switch_params *chan_switch_params);

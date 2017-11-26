@@ -35,7 +35,8 @@
 #include "i_cds_packet.h"
 
 #define IS_MCC_SUPPORTED 1
-#define IS_FEATURE_SUPPORTED_BY_FW(feat_enum_value) wma_get_fw_wlan_feat_caps(feat_enum_value)
+#define IS_FEATURE_SUPPORTED_BY_FW(feat_enum_value) \
+				wma_get_fw_wlan_feat_caps(feat_enum_value)
 
 #define IS_ROAM_SCAN_OFFLOAD_FEATURE_ENABLE 1
 
@@ -175,6 +176,7 @@
 #define WMA_ENTER_PS_REQ               SIR_HAL_ENTER_PS_REQ
 #define WMA_EXIT_PS_REQ                SIR_HAL_EXIT_PS_REQ
 
+#define WMA_HIDDEN_SSID_RESTART_RSP    SIR_HAL_HIDDEN_SSID_RESTART_RSP
 #define WMA_SWITCH_CHANNEL_RSP         SIR_HAL_SWITCH_CHANNEL_RSP
 #define WMA_P2P_NOA_ATTR_IND           SIR_HAL_P2P_NOA_ATTR_IND
 #define WMA_P2P_NOA_START_IND          SIR_HAL_P2P_NOA_START_IND
@@ -182,7 +184,8 @@
 #define WMA_REGISTER_PE_CALLBACK       SIR_HAL_REGISTER_PE_CALLBACK
 
 #define WMA_IBSS_STA_ADD               SIR_HAL_IBSS_STA_ADD
-#define WMA_TIMER_ADJUST_ADAPTIVE_THRESHOLD_IND   SIR_HAL_TIMER_ADJUST_ADAPTIVE_THRESHOLD_IND
+#define WMA_TIMER_ADJUST_ADAPTIVE_THRESHOLD_IND \
+		SIR_HAL_TIMER_ADJUST_ADAPTIVE_THRESHOLD_IND
 #define WMA_SET_LINK_STATE             SIR_HAL_SET_LINK_STATE
 #define WMA_SET_LINK_STATE_RSP         SIR_HAL_SET_LINK_STATE_RSP
 #define WMA_SET_STA_BCASTKEY_REQ       SIR_HAL_SET_STA_BCASTKEY_REQ
@@ -332,6 +335,7 @@
 #define WMA_STOP_SCAN_OFFLOAD_REQ  SIR_HAL_STOP_SCAN_OFFLOAD_REQ
 #define WMA_UPDATE_CHAN_LIST_REQ    SIR_HAL_UPDATE_CHAN_LIST_REQ
 #define WMA_RX_SCAN_EVENT           SIR_HAL_RX_SCAN_EVENT
+#define WMA_RX_CHN_STATUS_EVENT     SIR_HAL_RX_CHN_STATUS_EVENT
 #define WMA_IBSS_PEER_INACTIVITY_IND SIR_HAL_IBSS_PEER_INACTIVITY_IND
 
 #define WMA_CLI_SET_CMD             SIR_HAL_CLI_SET_CMD
@@ -396,6 +400,9 @@
 #define WMA_DISASSOC_TX_COMP       SIR_HAL_DISASSOC_TX_COMP
 #define WMA_DEAUTH_TX_COMP         SIR_HAL_DEAUTH_TX_COMP
 
+#define WMA_GET_PEER_INFO          SIR_HAL_GET_PEER_INFO
+#define WMA_GET_PEER_INFO_EXT      SIR_HAL_GET_PEER_INFO_EXT
+
 #define WMA_MODEM_POWER_STATE_IND SIR_HAL_MODEM_POWER_STATE_IND
 
 #ifdef WLAN_FEATURE_STATS_EXT
@@ -427,6 +434,7 @@
 #define WMA_LINK_LAYER_STATS_SET_REQ          SIR_HAL_LL_STATS_SET_REQ
 #define WMA_LINK_LAYER_STATS_GET_REQ          SIR_HAL_LL_STATS_GET_REQ
 #define WMA_LINK_LAYER_STATS_RESULTS_RSP      SIR_HAL_LL_STATS_RESULTS_RSP
+#define WMA_LINK_LAYER_STATS_SET_THRESHOLD    SIR_HAL_LL_STATS_EXT_SET_THRESHOLD
 #endif /* WLAN_FEATURE_LINK_LAYER_STATS */
 
 #define WMA_LINK_STATUS_GET_REQ SIR_HAL_LINK_STATUS_GET_REQ
@@ -485,6 +493,8 @@
 #define WMA_POWER_DEBUG_STATS_REQ            SIR_HAL_POWER_DEBUG_STATS_REQ
 #define WMA_GET_RCPI_REQ                     SIR_HAL_GET_RCPI_REQ
 
+#define WMA_SET_DBS_SCAN_SEL_CONF_PARAMS     SIR_HAL_SET_DBS_SCAN_SEL_PARAMS
+
 #define WMA_SET_WOW_PULSE_CMD                SIR_HAL_SET_WOW_PULSE_CMD
 
 #define WDA_SET_UDP_RESP_OFFLOAD             SIR_HAL_SET_UDP_RESP_OFFLOAD
@@ -493,11 +503,15 @@
 #define WMA_SET_ARP_STATS_REQ                SIR_HAL_SET_ARP_STATS_REQ
 #define WMA_GET_ARP_STATS_REQ                SIR_HAL_GET_ARP_STATS_REQ
 
+#define WDA_ACTION_FRAME_RANDOM_MAC          SIR_HAL_ACTION_FRAME_RANDOM_MAC
+
+#define WMA_SET_LIMIT_OFF_CHAN               SIR_HAL_SET_LIMIT_OFF_CHAN
+
 /* Bit 6 will be used to control BD rate for Management frames */
 #define HAL_USE_BD_RATE2_FOR_MANAGEMENT_FRAME 0x40
 
 #define wma_tx_frame(hHal, pFrmBuf, frmLen, frmType, txDir, tid, pCompFunc, \
-		   pData, txFlag, sessionid, channel_freq) \
+		   pData, txFlag, sessionid, channel_freq, rid) \
 	(QDF_STATUS)( wma_tx_packet( \
 		      cds_get_context(QDF_MODULE_ID_WMA), \
 		      (pFrmBuf), \
@@ -511,11 +525,12 @@
 		      (txFlag), \
 		      (sessionid), \
 		      (false), \
-		      (channel_freq)))
+		      (channel_freq), \
+		      (rid)))
 
 #define wma_tx_frameWithTxComplete(hHal, pFrmBuf, frmLen, frmType, txDir, tid, \
 	 pCompFunc, pData, pCBackFnTxComp, txFlag, sessionid, tdlsflag, \
-	 channel_freq) \
+	 channel_freq, rid) \
 	(QDF_STATUS)( wma_tx_packet( \
 		      cds_get_context(QDF_MODULE_ID_WMA), \
 		      (pFrmBuf), \
@@ -529,7 +544,8 @@
 		      (txFlag), \
 		      (sessionid), \
 		      (tdlsflag), \
-		      (channel_freq)))
+		      (channel_freq), \
+		      (rid)))
 
 
 #define WMA_SetEnableSSR(enable_ssr) ((void)enable_ssr)
@@ -668,25 +684,41 @@ struct ar6k_testmode_cmd_data {
  * @WMA_TDLS_PEER_ADD_MAC_ADDR: add peer into connection table
  * @WMA_TDLS_PEER_REMOVE_MAC_ADDR: remove peer from connection table
  */
-typedef enum {
+enum WMA_TdlsPeerState {
 	WMA_TDLS_PEER_STATE_PEERING,
 	WMA_TDLS_PEER_STATE_CONNECTED,
 	WMA_TDLS_PEER_STATE_TEARDOWN,
 	WMA_TDLS_PEER_ADD_MAC_ADDR,
 	WMA_TDLS_PEER_REMOVE_MAC_ADDR,
-} WMA_TdlsPeerState;
+};
 
 /**
  * enum wma_tdls_off_chan_mode - modes for WMI_TDLS_SET_OFFCHAN_MODE_CMDID
  * @WMA_TDLS_ENABLE_OFFCHANNEL: enable off channel
  * @WMA_TDLS_DISABLE_OFFCHANNEL: disable off channel
  */
-typedef enum {
+enum wma_tdls_off_chan_mode {
 	WMA_TDLS_ENABLE_OFFCHANNEL,
 	WMA_TDLS_DISABLE_OFFCHANNEL
-} wma_tdls_off_chan_mode;
+};
 
 #endif /* FEATURE_WLAN_TDLS */
+
+enum rateid {
+	RATEID_1MBPS = 0,
+	RATEID_2MBPS,
+	RATEID_5_5MBPS,
+	RATEID_11MBPS,
+	RATEID_6MBPS,
+	RATEID_9MBPS,
+	RATEID_12MBPS,
+	RATEID_18MBPS,
+	RATEID_24MBPS,
+	RATEID_36MBPS,
+	RATEID_48MBPS = 10,
+	RATEID_54MBPS,
+	RATEID_DEFAULT
+};
 
 tSirRetStatus wma_post_ctrl_msg(tpAniSirGlobal pMac, tSirMsgQ *pMsg);
 
@@ -712,7 +744,23 @@ QDF_STATUS wma_tx_packet(void *pWMA,
 			 void *pData,
 			 pWMAAckFnTxComp pAckTxComp,
 			 uint8_t txFlag, uint8_t sessionId, bool tdlsflag,
-			 uint16_t channel_freq);
+			 uint16_t channel_freq, enum rateid rid);
+
+/**
+ * wma_vdev_init() - initialize a wma vdev
+ * @vdev: the vdev to initialize
+ *
+ * Return: None
+ */
+void wma_vdev_init(struct wma_txrx_node *vdev);
+
+/**
+ * wma_vdev_deinit() - de-initialize a wma vdev
+ * @vdev: the vdev to de-initialize
+ *
+ * Return: None
+ */
+void wma_vdev_deinit(struct wma_txrx_node *vdev);
 
 QDF_STATUS wma_open(void *p_cds_context,
 		    wma_tgt_cfg_cb pTgtUpdCB,

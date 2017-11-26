@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -27,41 +27,32 @@
 
 #ifndef __P2P_H
 #define __P2P_H
-/**===========================================================================
 
-   \file         wlan_hdd_p2p.h
-
-   \brief       Linux HDD P2P include file
-
-   ==========================================================================*/
+/**
+ * DOC: wlan_hdd_p2p.h
+ *
+ * Linux HDD P2P include file
+ */
 #define ACTION_FRAME_TX_TIMEOUT 2000
 #define WAIT_CANCEL_REM_CHAN    1000
 #define WAIT_REM_CHAN_READY     1000
 #define WAIT_CHANGE_CHANNEL_FOR_OFFCHANNEL_TX 3000
 #define COMPLETE_EVENT_PROPOGATE_TIME 10
 
-#ifdef QCA_WIFI_3_0_EMU
 #define ACTION_FRAME_DEFAULT_WAIT 500
-#else
-#define ACTION_FRAME_DEFAULT_WAIT 200
-#endif
 
 #define WLAN_HDD_GET_TYPE_FRM_FC(__fc__)         (((__fc__) & 0x0F) >> 2)
 #define WLAN_HDD_GET_SUBTYPE_FRM_FC(__fc__)      (((__fc__) & 0xF0) >> 4)
 #define WLAN_HDD_80211_FRM_DA_OFFSET             4
+#define WLAN_HDD_80211_FRM_SA_OFFSET            10
 #define P2P_WILDCARD_SSID_LEN                    7
 #define P2P_WILDCARD_SSID                        "DIRECT-"
 #define WLAN_HDD_80211_PEER_ADDR_OFFSET (WLAN_HDD_80211_FRM_DA_OFFSET + \
 					 MAC_ADDR_LEN)
 
 
-#ifdef QCA_WIFI_3_0_EMU
 #define P2P_ROC_DURATION_MULTIPLIER_GO_PRESENT   2
 #define P2P_ROC_DURATION_MULTIPLIER_GO_ABSENT    3
-#else
-#define P2P_ROC_DURATION_MULTIPLIER_GO_PRESENT   2
-#define P2P_ROC_DURATION_MULTIPLIER_GO_ABSENT    5
-#endif
 
 #define HDD_P2P_MAX_ROC_DURATION 1000
 #define MAX_ROC_REQ_QUEUE_ENTRY 10
@@ -74,20 +65,22 @@
 #define ACTION_FRAME_ACK_WAIT 300
 
 #ifdef WLAN_FEATURE_P2P_DEBUG
-typedef enum { P2P_NOT_ACTIVE,
-	       P2P_GO_NEG_PROCESS,
-	       P2P_GO_NEG_COMPLETED,
-	       P2P_CLIENT_CONNECTING_STATE_1,
-	       P2P_GO_COMPLETED_STATE,
-	       P2P_CLIENT_CONNECTED_STATE_1,
-	       P2P_CLIENT_DISCONNECTED_STATE,
-	       P2P_CLIENT_CONNECTING_STATE_2,
-	       P2P_CLIENT_COMPLETED_STATE} tP2PConnectionStatus;
+enum p2p_connection_status {
+	P2P_NOT_ACTIVE,
+	P2P_GO_NEG_PROCESS,
+	P2P_GO_NEG_COMPLETED,
+	P2P_CLIENT_CONNECTING_STATE_1,
+	P2P_GO_COMPLETED_STATE,
+	P2P_CLIENT_CONNECTED_STATE_1,
+	P2P_CLIENT_DISCONNECTED_STATE,
+	P2P_CLIENT_CONNECTING_STATE_2,
+	P2P_CLIENT_COMPLETED_STATE
+};
 
-extern tP2PConnectionStatus global_p2p_connection_status;
+extern enum p2p_connection_status global_p2p_connection_status;
 #endif
 
-typedef struct p2p_app_setP2pPs {
+struct p2p_app_set_ps {
 	uint8_t opp_ps;
 	uint32_t ctWindow;
 	uint8_t count;
@@ -95,7 +88,7 @@ typedef struct p2p_app_setP2pPs {
 	uint32_t interval;
 	uint32_t single_noa_duration;
 	uint8_t psSelection;
-} p2p_app_setP2pPs_t;
+};
 
 int wlan_hdd_cfg80211_remain_on_channel(struct wiphy *wiphy,
 					struct wireless_dev *wdev,
@@ -159,4 +152,16 @@ int __wlan_hdd_del_virtual_intf(struct wiphy *wiphy, struct wireless_dev *wdev);
 void wlan_hdd_cleanup_remain_on_channel_ctx(hdd_adapter_t *pAdapter);
 
 void wlan_hdd_roc_request_dequeue(struct work_struct *work);
+
+/**
+ * hdd_check_random_mac() - Whether addr is present in random_mac array
+ * @adapter: Pointer to adapter
+ * @mac_addr: random mac address
+ *
+ * This function is used to check whether given mac addr is present in list of
+ * random_mac structures in specified adapter
+ *
+ * Return: If random addr is present return true else false
+ */
+bool hdd_check_random_mac(hdd_adapter_t *adapter, uint8_t *random_mac_addr);
 #endif /* __P2P_H */

@@ -268,6 +268,7 @@ static const struct country_code_to_reg_dmn g_all_countries[] = {
 	{CTRY_GEORGIA, ETSI4_WORLD, "GE", "GEORGIA"},
 	{CTRY_GERMANY, ETSI1_WORLD, "DE", "GERMANY"},
 	{CTRY_GHANA, FCC3_WORLD, "GH", "GHANA"},
+	{CTRY_GIBRALTAR, ETSI1_WORLD, "GI", "GIBRALTAR"},
 	{CTRY_GREECE, ETSI1_WORLD, "GR", "GREECE"},
 	{CTRY_GREENLAND, ETSI1_WORLD, "GL", "GREENLAND"},
 	{CTRY_GRENADA, FCC3_FCCA, "GD", "GRENADA"},
@@ -283,6 +284,7 @@ static const struct country_code_to_reg_dmn g_all_countries[] = {
 	{CTRY_INDIA, APL15_WORLD, "IN", "INDIA"},
 	{CTRY_INDONESIA, APL2_ETSIC, "ID", "INDONESIA"},
 	{CTRY_IRAN, APL1_WORLD, "IR", "IRAN"},
+	{CTRY_IRAQ, ETSI1_WORLD, "IQ", "IRAQ"},
 	{CTRY_IRELAND, ETSI1_WORLD, "IE", "IRELAND"},
 	{CTRY_ISRAEL, ETSI3_WORLD, "IL", "ISRAEL"},
 	{CTRY_ITALY, ETSI1_WORLD, "IT", "ITALY"},
@@ -707,7 +709,7 @@ void cds_fill_and_send_ctl_to_fw(struct regulatory *reg)
 {
 	const struct reg_dmn *reg_dmn_2g = NULL;
 	const struct reg_dmn *reg_dmn_5g = NULL;
-	int8_t ctl_2g, ctl_5g;
+	uint8_t ctl_2g, ctl_5g;
 	const struct reg_dmn_pair *regpair;
 	tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
 
@@ -759,7 +761,7 @@ void cds_set_wma_dfs_region(uint8_t dfs_region)
 		return;
 	}
 
-	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO,
+	QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_DEBUG,
 		  "dfs_region: %d", dfs_region);
 
 	wma_set_dfs_region(wma, dfs_region);

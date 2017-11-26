@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2016 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -57,7 +57,7 @@
 tSirRetStatus wma_post_ctrl_msg(tpAniSirGlobal pMac, tSirMsgQ *pMsg)
 {
 	if (QDF_STATUS_SUCCESS !=
-	    cds_mq_post_message(CDS_MQ_ID_WMA, (cds_msg_t *) pMsg))
+	    cds_mq_post_message(QDF_MODULE_ID_WMA, (cds_msg_t *) pMsg))
 		return eSIR_FAILURE;
 	else
 		return eSIR_SUCCESS;
@@ -108,37 +108,28 @@ static tSirRetStatus wma_post_cfg_msg(tpAniSirGlobal pMac, tSirMsgQ *pMsg)
 tSirRetStatus u_mac_post_ctrl_msg(void *pSirGlobal, tSirMbMsg *pMb)
 {
 	tSirMsgQ msg;
+	tSirRetStatus status = eSIR_SUCCESS;
 	tpAniSirGlobal pMac = (tpAniSirGlobal) pSirGlobal;
 
-	tSirMbMsg *pMbLocal;
 	msg.type = pMb->type;
 	msg.bodyval = 0;
-
-	pMbLocal = qdf_mem_malloc(pMb->msgLen);
-	if (!pMbLocal) {
-		WMA_LOGE("Memory allocation failed! Can't send 0x%x\n",
-			 msg.type);
-		return eSIR_MEM_ALLOC_FAILED;
-	}
-
-	qdf_mem_copy((void *)pMbLocal, (void *)pMb, pMb->msgLen);
-	msg.bodyptr = pMbLocal;
+	msg.bodyptr = pMb;
 
 	switch (msg.type & HAL_MMH_MB_MSG_TYPE_MASK) {
 	case WMA_MSG_TYPES_BEGIN:       /* Posts a message to the HAL MsgQ */
-		wma_post_ctrl_msg(pMac, &msg);
+		status = wma_post_ctrl_msg(pMac, &msg);
 		break;
 
 	case SIR_LIM_MSG_TYPES_BEGIN:   /* Posts a message to the LIM MsgQ */
-		lim_post_msg_api(pMac, &msg);
+		status = lim_post_msg_api(pMac, &msg);
 		break;
 
 	case SIR_CFG_MSG_TYPES_BEGIN:   /* Posts a message to the CFG MsgQ */
-		wma_post_cfg_msg(pMac, &msg);
+		status = wma_post_cfg_msg(pMac, &msg);
 		break;
 
 	case SIR_PMM_MSG_TYPES_BEGIN:   /* Posts a message to the LIM MsgQ */
-		sme_post_pe_message(pMac, &msg);
+		status = sme_post_pe_message(pMac, &msg);
 		break;
 
 	case SIR_PTT_MSG_TYPES_BEGIN:
@@ -151,7 +142,10 @@ tSirRetStatus u_mac_post_ctrl_msg(void *pSirGlobal, tSirMbMsg *pMb)
 		return eSIR_FAILURE;
 	}
 
-	return eSIR_SUCCESS;
+	if (status != eSIR_SUCCESS)
+		qdf_mem_free(msg.bodyptr);
+
+	return status;
 
 } /* u_mac_post_ctrl_msg() */
 

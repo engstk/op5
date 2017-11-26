@@ -92,7 +92,11 @@
 
  /* very conservative to ensure enough buffers are allocated */
 #ifndef HTT_RX_HOST_LATENCY_WORST_LIKELY_MS
+#ifdef QCA_WIFI_3_0
 #define HTT_RX_HOST_LATENCY_WORST_LIKELY_MS 20
+#else
+#define HTT_RX_HOST_LATENCY_WORST_LIKELY_MS 10
+#endif
 #endif
 
 #ifndef HTT_RX_RING_REFILL_RETRY_TIME_MS
@@ -127,9 +131,22 @@ static void htt_rx_hash_deinit(struct htt_pdev_t *pdev)
 	struct htt_rx_hash_entry *hash_entry;
 	struct htt_rx_hash_bucket **hash_table;
 	struct htt_list_node *list_iter = NULL;
+	qdf_mem_info_t *mem_map_table = NULL, *mem_info = NULL;
+	uint32_t num_unmapped = 0;
 
 	if (NULL == pdev->rx_ring.hash_table)
 		return;
+
+	if (qdf_mem_smmu_s1_enabled(pdev->osdev) && pdev->is_ipa_uc_enabled) {
+		mem_map_table = qdf_mem_map_table_alloc(
+					pdev->rx_ring.fill_level);
+		if (!mem_map_table) {
+			qdf_print("%s: Failed to allocate memory for mem map table\n",
+				  __func__);
+			return;
+		}
+		mem_info = mem_map_table;
+	}
 
 	qdf_spin_lock_bh(&(pdev->rx_ring.rx_hash_lock));
 	hash_table = pdev->rx_ring.hash_table;
@@ -145,6 +162,16 @@ static void htt_rx_hash_deinit(struct htt_pdev_t *pdev)
 							     pdev->rx_ring.
 							     listnode_offset);
 			if (hash_entry->netbuf) {
+				if (qdf_mem_smmu_s1_enabled(pdev->osdev) &&
+						pdev->is_ipa_uc_enabled) {
+					qdf_update_mem_map_table(pdev->osdev,
+						mem_info,
+						QDF_NBUF_CB_PADDR(
+							hash_entry->netbuf),
+						HTT_RX_BUF_SIZE);
+					mem_info++;
+					num_unmapped++;
+				}
 #ifdef DEBUG_DMA_DONE
 				qdf_nbuf_unmap(pdev->osdev, hash_entry->netbuf,
 					       QDF_DMA_BIDIRECTIONAL);
@@ -168,6 +195,12 @@ static void htt_rx_hash_deinit(struct htt_pdev_t *pdev)
 
 	qdf_spinlock_destroy(&(pdev->rx_ring.rx_hash_lock));
 
+	if (qdf_mem_smmu_s1_enabled(pdev->osdev) && pdev->is_ipa_uc_enabled) {
+		if (num_unmapped)
+			cds_smmu_map_unmap(false, num_unmapped,
+					   mem_map_table);
+		qdf_mem_free(mem_map_table);
+	}
 }
 #endif
 
@@ -260,16 +293,16 @@ htt_rx_mpdu_desc_pn_hl(
 			*(word_ptr + 0) = rx_desc->pn_31_0;
 			break;
 		default:
-			qdf_print(
-				"Error: invalid length spec (%d bits) for PN\n",
-				pn_len_bits);
+			QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+				  "Error: invalid length spec (%d bits) for PN",
+				  pn_len_bits);
 			qdf_assert(0);
 			break;
 		};
 	} else {
 		/* not first msdu, no pn info */
-		qdf_print(
-			"Error: get pn from a not-first msdu.\n");
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+			  "Error: get pn from a not-first msdu.");
 		qdf_assert(0);
 	}
 }
@@ -393,7 +426,8 @@ htt_rx_paddr_unmark_high_bits(qdf_dma_addr_t paddr)
 		 * padded (with 0b0) to 8 bits
 		 */
 		if ((markings & 0xFFFF0000) != RX_PADDR_MAGIC_PATTERN) {
-			qdf_print("%s: paddr not marked correctly: 0x%p!\n",
+			QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+				  "%s: paddr not marked correctly: 0x%pK!",
 				  __func__, (void *)paddr);
 			HTT_ASSERT_ALWAYS(0);
 		}
@@ -437,12 +471,23 @@ static int htt_rx_ring_fill_n(struct htt_pdev_t *pdev, int num)
 	struct htt_host_rx_desc_base *rx_desc;
 	int filled = 0;
 	int debt_served = 0;
+	qdf_mem_info_t *mem_map_table = NULL, *mem_info = NULL;
+	int num_alloc = 0;
 
 	idx = *(pdev->rx_ring.alloc_idx.vaddr);
+	if (qdf_mem_smmu_s1_enabled(pdev->osdev) && pdev->is_ipa_uc_enabled) {
+		mem_map_table = qdf_mem_map_table_alloc(num);
+		if (!mem_map_table) {
+			qdf_print("%s: Failed to allocate memory for mem map table\n",
+				  __func__);
+			goto fail;
+		}
+		mem_info = mem_map_table;
+	}
 
 moretofill:
 	while (num > 0) {
-		qdf_dma_addr_t paddr;
+		qdf_dma_addr_t paddr, paddr_marked;
 		qdf_nbuf_t rx_netbuf;
 		int headroom;
 
@@ -465,7 +510,7 @@ moretofill:
 			qdf_timer_start(
 				&pdev->rx_ring.refill_retry_timer,
 				HTT_RX_RING_REFILL_RETRY_TIME_MS);
-			goto fail;
+			goto free_mem_map_table;
 		}
 
 		/* Clear rx_desc attention word before posting to Rx ring */
@@ -478,8 +523,10 @@ moretofill:
 #define MAGIC_PATTERN 0xDEADBEEF
 		*(uint32_t *) &rx_desc->msdu_start = MAGIC_PATTERN;
 
-		/* To ensure that attention bit is reset and msdu_end is set
-		   before calling dma_map */
+		/*
+		 * To ensure that attention bit is reset and msdu_end is set
+		 * before calling dma_map
+		 */
 		smp_mb();
 #endif
 		/*
@@ -500,15 +547,16 @@ moretofill:
 #endif
 		if (status != QDF_STATUS_SUCCESS) {
 			qdf_nbuf_free(rx_netbuf);
-			goto fail;
+			goto free_mem_map_table;
 		}
 		paddr = qdf_nbuf_get_frag_paddr(rx_netbuf, 0);
-		paddr = htt_rx_paddr_mark_high_bits(paddr);
+		paddr_marked = htt_rx_paddr_mark_high_bits(paddr);
 		if (pdev->cfg.is_full_reorder_offload) {
 			if (qdf_unlikely(htt_rx_hash_list_insert(
-					pdev, paddr, rx_netbuf))) {
-				qdf_print("%s: hash insert failed!\n",
-					  __func__);
+					pdev, paddr_marked, rx_netbuf))) {
+				QDF_TRACE(QDF_MODULE_ID_HTT,
+					  QDF_TRACE_LEVEL_ERROR,
+					  "%s: hash insert failed!", __func__);
 #ifdef DEBUG_DMA_DONE
 				qdf_nbuf_unmap(pdev->osdev, rx_netbuf,
 					       QDF_DMA_BIDIRECTIONAL);
@@ -517,13 +565,22 @@ moretofill:
 					       QDF_DMA_FROM_DEVICE);
 #endif
 				qdf_nbuf_free(rx_netbuf);
-				goto fail;
+				goto free_mem_map_table;
 			}
-			htt_rx_dbg_rxbuf_set(pdev, paddr, rx_netbuf);
+			htt_rx_dbg_rxbuf_set(pdev, paddr_marked, rx_netbuf);
 		} else {
 			pdev->rx_ring.buf.netbufs_ring[idx] = rx_netbuf;
 		}
-		pdev->rx_ring.buf.paddrs_ring[idx] = paddr;
+
+		if (qdf_mem_smmu_s1_enabled(pdev->osdev) &&
+					pdev->is_ipa_uc_enabled) {
+			qdf_update_mem_map_table(pdev->osdev, mem_info,
+						 paddr, HTT_RX_BUF_SIZE);
+			mem_info++;
+			num_alloc++;
+		}
+
+		pdev->rx_ring.buf.paddrs_ring[idx] = paddr_marked;
 		pdev->rx_ring.fill_cnt++;
 
 		num--;
@@ -537,7 +594,19 @@ moretofill:
 		goto moretofill;
 	}
 
+free_mem_map_table:
+	if (qdf_mem_smmu_s1_enabled(pdev->osdev) && pdev->is_ipa_uc_enabled) {
+		cds_smmu_map_unmap(true, num_alloc, mem_map_table);
+		qdf_mem_free(mem_map_table);
+	}
+
 fail:
+	/*
+	 * Make sure alloc index write is reflected correctly before FW polls
+	 * remote ring write index as compiler can reorder the instructions
+	 * based on optimizations.
+	 */
+	qdf_mb();
 	*(pdev->rx_ring.alloc_idx.vaddr) = idx;
 	htt_rx_dbg_rxbuf_indupd(pdev, idx);
 
@@ -614,22 +683,21 @@ static void htt_rx_ring_refill_retry(void *arg)
 	qdf_atomic_sub(num, &pdev->rx_ring.refill_debt);
 	filled = htt_rx_ring_fill_n(pdev, num);
 
-	qdf_spin_unlock_bh(&(pdev->rx_ring.refill_lock));
-
 	if (filled > num) {
 		/* we served ourselves and some other debt */
 		/* sub is safer than  = 0 */
 		qdf_atomic_sub(filled - num, &pdev->rx_ring.refill_debt);
 	} else if (num == filled) { /* nothing to be done */
 	} else {
+		qdf_atomic_add(num - filled, &pdev->rx_ring.refill_debt);
 		/* we could not fill all, timer must have been started */
 		pdev->refill_retry_timer_doubles++;
 	}
-
+	qdf_spin_unlock_bh(&(pdev->rx_ring.refill_lock));
 }
 #endif
 
-static inline unsigned htt_rx_ring_elems(struct htt_pdev_t *pdev)
+static inline unsigned int htt_rx_ring_elems(struct htt_pdev_t *pdev)
 {
 	return
 		(*pdev->rx_ring.alloc_idx.vaddr -
@@ -663,8 +731,31 @@ void htt_rx_detach(struct htt_pdev_t *pdev)
 		htt_rx_hash_deinit(pdev);
 	} else {
 		int sw_rd_idx = pdev->rx_ring.sw_rd_idx.msdu_payld;
+		qdf_mem_info_t *mem_map_table = NULL, *mem_info = NULL;
+		uint32_t num_unmapped = 0;
 
+		if (qdf_mem_smmu_s1_enabled(pdev->osdev) &&
+					pdev->is_ipa_uc_enabled) {
+			mem_map_table = qdf_mem_map_table_alloc(
+						pdev->rx_ring.fill_level);
+			if (!mem_map_table) {
+				qdf_print("%s: Failed to allocate memory for mem map table\n",
+					  __func__);
+				return;
+			}
+			mem_info = mem_map_table;
+		}
 		while (sw_rd_idx != *(pdev->rx_ring.alloc_idx.vaddr)) {
+			if (qdf_mem_smmu_s1_enabled(pdev->osdev) &&
+						pdev->is_ipa_uc_enabled) {
+				qdf_update_mem_map_table(pdev->osdev, mem_info,
+					QDF_NBUF_CB_PADDR(
+						pdev->rx_ring.buf.netbufs_ring[
+								sw_rd_idx]),
+					HTT_RX_BUF_SIZE);
+				mem_info++;
+				num_unmapped++;
+			}
 #ifdef DEBUG_DMA_DONE
 			qdf_nbuf_unmap(pdev->osdev,
 				       pdev->rx_ring.buf.
@@ -682,6 +773,14 @@ void htt_rx_detach(struct htt_pdev_t *pdev)
 			sw_rd_idx &= pdev->rx_ring.size_mask;
 		}
 		qdf_mem_free(pdev->rx_ring.buf.netbufs_ring);
+
+		if (qdf_mem_smmu_s1_enabled(pdev->osdev) &&
+					pdev->is_ipa_uc_enabled) {
+			if (num_unmapped)
+				cds_smmu_map_unmap(false, num_unmapped,
+						   mem_map_table);
+			qdf_mem_free(mem_map_table);
+		}
 	}
 
 	qdf_mem_free_consistent(pdev->osdev, pdev->osdev->dev,
@@ -796,7 +895,8 @@ htt_rx_mpdu_desc_pn_ll(htt_pdev_handle pdev,
 			((uint64_t) rx_desc->msdu_end.ext_wapi_pn_127_96) << 32;
 		break;
 	default:
-		qdf_print("Error: invalid length spec (%d bits) for PN\n",
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+			  "Error: invalid length spec (%d bits) for PN",
 			  pn_len_bits);
 	};
 }
@@ -843,8 +943,10 @@ static int htt_rx_msdu_has_wlan_mcast_flag_ll(htt_pdev_handle pdev,
 {
 	struct htt_host_rx_desc_base *rx_desc =
 		(struct htt_host_rx_desc_base *)msdu_desc;
-	/* HW rx desc: the mcast_bcast flag is only valid
-	   if first_msdu is set */
+	/*
+	 * HW rx desc: the mcast_bcast flag is only valid
+	 * if first_msdu is set
+	 */
 	return
 		((*(((uint32_t *) &rx_desc->msdu_end) + 4)) &
 		 RX_MSDU_END_4_FIRST_MSDU_MASK) >> RX_MSDU_END_4_FIRST_MSDU_LSB;
@@ -957,6 +1059,7 @@ static inline qdf_nbuf_t htt_rx_netbuf_pop(htt_pdev_handle pdev)
 	return msdu;
 }
 
+#ifndef CONFIG_HL_SUPPORT
 static inline qdf_nbuf_t
 htt_rx_in_order_netbuf_pop(htt_pdev_handle pdev, qdf_dma_addr_t paddr)
 {
@@ -965,9 +1068,12 @@ htt_rx_in_order_netbuf_pop(htt_pdev_handle pdev, qdf_dma_addr_t paddr)
 	paddr = htt_paddr_trim_to_37(paddr);
 	return htt_rx_hash_list_lookup(pdev, paddr);
 }
+#endif
 
-/* FIX ME: this function applies only to LL rx descs.
-   An equivalent for HL rx descs is needed. */
+/*
+ * FIX ME: this function applies only to LL rx descs.
+ * An equivalent for HL rx descs is needed.
+ */
 #ifdef CHECKSUM_OFFLOAD
 static inline
 void
@@ -987,20 +1093,20 @@ htt_set_checksum_result_ll(htt_pdev_handle pdev, qdf_nbuf_t msdu,
 		{
 			/* non-fragmented IP packet */
 			/* non TCP/UDP packet */
-			{QDF_NBUF_RX_CKSUM_NONE, QDF_NBUF_RX_CKSUM_NONE},
+			{QDF_NBUF_RX_CKSUM_ZERO, QDF_NBUF_RX_CKSUM_ZERO},
 			/* TCP packet */
 			{QDF_NBUF_RX_CKSUM_TCP, QDF_NBUF_RX_CKSUM_TCPIPV6},
 			/* UDP packet */
 			{QDF_NBUF_RX_CKSUM_UDP, QDF_NBUF_RX_CKSUM_UDPIPV6},
 			/* invalid packet type */
-			{QDF_NBUF_RX_CKSUM_NONE, QDF_NBUF_RX_CKSUM_NONE},
+			{QDF_NBUF_RX_CKSUM_ZERO, QDF_NBUF_RX_CKSUM_ZERO},
 		},
 		{
 			/* fragmented IP packet */
-			{QDF_NBUF_RX_CKSUM_NONE, QDF_NBUF_RX_CKSUM_NONE},
-			{QDF_NBUF_RX_CKSUM_NONE, QDF_NBUF_RX_CKSUM_NONE},
-			{QDF_NBUF_RX_CKSUM_NONE, QDF_NBUF_RX_CKSUM_NONE},
-			{QDF_NBUF_RX_CKSUM_NONE, QDF_NBUF_RX_CKSUM_NONE},
+			{QDF_NBUF_RX_CKSUM_ZERO, QDF_NBUF_RX_CKSUM_ZERO},
+			{QDF_NBUF_RX_CKSUM_ZERO, QDF_NBUF_RX_CKSUM_ZERO},
+			{QDF_NBUF_RX_CKSUM_ZERO, QDF_NBUF_RX_CKSUM_ZERO},
+			{QDF_NBUF_RX_CKSUM_ZERO, QDF_NBUF_RX_CKSUM_ZERO},
 		}
 	};
 
@@ -1077,7 +1183,6 @@ static inline
 void htt_set_checksum_result_ll(htt_pdev_handle pdev, qdf_nbuf_t msdu,
 			   struct htt_host_rx_desc_base *rx_desc)
 {
-	return;
 }
 
 #if defined(CONFIG_HL_SUPPORT)
@@ -1086,7 +1191,6 @@ static inline
 void htt_set_checksum_result_hl(qdf_nbuf_t msdu,
 			   struct htt_host_rx_desc_base *rx_desc)
 {
-	return;
 }
 #endif
 
@@ -1100,7 +1204,8 @@ void htt_set_checksum_result_hl(qdf_nbuf_t msdu,
 static int
 htt_rx_amsdu_pop_ll(htt_pdev_handle pdev,
 		    qdf_nbuf_t rx_ind_msg,
-		    qdf_nbuf_t *head_msdu, qdf_nbuf_t *tail_msdu)
+		    qdf_nbuf_t *head_msdu, qdf_nbuf_t *tail_msdu,
+		    uint32_t *msdu_count)
 {
 	int msdu_len, msdu_chaining = 0;
 	qdf_nbuf_t msdu;
@@ -1129,6 +1234,7 @@ htt_rx_amsdu_pop_ll(htt_pdev_handle pdev,
 	while (1) {
 		int last_msdu, msdu_len_invalid, msdu_chained;
 		int byte_offset;
+		qdf_nbuf_t next;
 
 		/*
 		 * Set the netbuf length to be the entire buffer length
@@ -1176,7 +1282,8 @@ htt_rx_amsdu_pop_ll(htt_pdev_handle pdev,
 
 			int dbg_iter = MAX_DONE_BIT_CHECK_ITER;
 
-			qdf_print("malformed frame\n");
+			QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+				  "malformed frame");
 
 			while (dbg_iter &&
 			       (!((*(uint32_t *) &rx_desc->attention) &
@@ -1187,8 +1294,9 @@ htt_rx_amsdu_pop_ll(htt_pdev_handle pdev,
 						     (void *)((char *)rx_desc +
 						 HTT_RX_STD_DESC_RESERVATION));
 
-				qdf_print("debug iter %d success %d\n",
-					  dbg_iter,
+				QDF_TRACE(QDF_MODULE_ID_HTT,
+					  QDF_TRACE_LEVEL_INFO,
+					  "debug iter %d success %d", dbg_iter,
 					  pdev->rx_ring.dbg_sync_success);
 
 				dbg_iter--;
@@ -1198,7 +1306,10 @@ htt_rx_amsdu_pop_ll(htt_pdev_handle pdev,
 					   & RX_ATTENTION_0_MSDU_DONE_MASK))) {
 
 #ifdef HTT_RX_RESTORE
-				qdf_print("RX done bit error detected!\n");
+				QDF_TRACE(QDF_MODULE_ID_HTT,
+					  QDF_TRACE_LEVEL_ERROR,
+					  "RX done bit error detected!");
+
 				qdf_nbuf_set_next(msdu, NULL);
 				*tail_msdu = msdu;
 				pdev->rx_ring.rx_reset = 1;
@@ -1210,7 +1321,8 @@ htt_rx_amsdu_pop_ll(htt_pdev_handle pdev,
 #endif
 			}
 			pdev->rx_ring.dbg_sync_success++;
-			qdf_print("debug iter %d success %d\n", dbg_iter,
+			QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
+				  "debug iter %d success %d", dbg_iter,
 				  pdev->rx_ring.dbg_sync_success);
 		}
 #else
@@ -1261,8 +1373,10 @@ htt_rx_amsdu_pop_ll(htt_pdev_handle pdev,
 			 * the RX_IND message format, then the following
 			 * assertion can be restored.
 			 */
-			/* qdf_assert((rx_ind_data[byte_offset] &
-			   FW_RX_DESC_EXT_M) == 0); */
+			/*
+			 * qdf_assert((rx_ind_data[byte_offset] &
+			 * FW_RX_DESC_EXT_M) == 0);
+			 */
 			pdev->rx_ind_msdu_byte_idx += 1;
 			/* or more, if there's ext data */
 		} else {
@@ -1309,7 +1423,7 @@ htt_rx_amsdu_pop_ll(htt_pdev_handle pdev,
 		} while (0);
 
 		while (msdu_chained--) {
-			qdf_nbuf_t next = htt_rx_netbuf_pop(pdev);
+			next = htt_rx_netbuf_pop(pdev);
 			qdf_nbuf_set_pktlen(next, HTT_RX_BUF_SIZE);
 			msdu_len -= HTT_RX_BUF_SIZE;
 			qdf_nbuf_set_next(msdu, next);
@@ -1321,8 +1435,8 @@ htt_rx_amsdu_pop_ll(htt_pdev_handle pdev,
 				 * accounting for inconsistent HW lengths
 				 * causing length overflows and underflows
 				 */
-				if (((unsigned)msdu_len) >
-				    ((unsigned)
+				if (((unsigned int)msdu_len) >
+				    ((unsigned int)
 				     (HTT_RX_BUF_SIZE - RX_STD_DESC_SIZE))) {
 					msdu_len =
 						(HTT_RX_BUF_SIZE -
@@ -1344,11 +1458,11 @@ htt_rx_amsdu_pop_ll(htt_pdev_handle pdev,
 		if (last_msdu) {
 			qdf_nbuf_set_next(msdu, NULL);
 			break;
-		} else {
-			qdf_nbuf_t next = htt_rx_netbuf_pop(pdev);
-			qdf_nbuf_set_next(msdu, next);
-			msdu = next;
 		}
+
+		next = htt_rx_netbuf_pop(pdev);
+		qdf_nbuf_set_next(msdu, next);
+		msdu = next;
 	}
 	*tail_msdu = msdu;
 
@@ -1375,7 +1489,8 @@ htt_rx_amsdu_pop_hl(
 	htt_pdev_handle pdev,
 	qdf_nbuf_t rx_ind_msg,
 	qdf_nbuf_t *head_msdu,
-	qdf_nbuf_t *tail_msdu)
+	qdf_nbuf_t *tail_msdu,
+	uint32_t *msdu_count)
 {
 	pdev->rx_desc_size_hl =
 		(qdf_nbuf_data(rx_ind_msg))
@@ -1400,7 +1515,8 @@ htt_rx_frag_pop_hl(
 	htt_pdev_handle pdev,
 	qdf_nbuf_t frag_msg,
 	qdf_nbuf_t *head_msdu,
-	qdf_nbuf_t *tail_msdu)
+	qdf_nbuf_t *tail_msdu,
+	uint32_t *msdu_count)
 {
 	qdf_nbuf_pull_head(frag_msg, HTT_RX_FRAG_IND_BYTES);
 	pdev->rx_desc_size_hl =
@@ -1446,14 +1562,15 @@ htt_rx_offload_msdu_pop_hl(htt_pdev_handle pdev,
 	*tid = HTT_RX_OFFLOAD_DELIVER_IND_MSDU_TID_GET(*msdu_hdr);
 	*fw_desc = HTT_RX_OFFLOAD_DELIVER_IND_MSDU_DESC_GET(*msdu_hdr);
 
-	qdf_nbuf_pull_head(buf, HTT_RX_OFFLOAD_DELIVER_IND_MSDU_HDR_BYTES \
+	qdf_nbuf_pull_head(buf, HTT_RX_OFFLOAD_DELIVER_IND_MSDU_HDR_BYTES
 			+ HTT_RX_OFFLOAD_DELIVER_IND_HDR_BYTES);
 
 	if (msdu_len <= qdf_nbuf_len(buf)) {
 		qdf_nbuf_set_pktlen(buf, msdu_len);
 	} else {
-		qdf_print("%s: drop frame with invalid msdu len %d %d\n",
-				__FUNCTION__, msdu_len, (int)qdf_nbuf_len(buf));
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+			  "%s: drop frame with invalid msdu len %d %d",
+			  __func__, msdu_len, (int)qdf_nbuf_len(buf));
 		qdf_nbuf_free(offload_deliver_msg);
 		ret = -1;
 	}
@@ -1476,6 +1593,12 @@ htt_rx_offload_msdu_pop_ll(htt_pdev_handle pdev,
 	uint32_t *msdu_hdr, msdu_len;
 
 	*head_buf = *tail_buf = buf = htt_rx_netbuf_pop(pdev);
+
+	if (qdf_unlikely(NULL == buf)) {
+		qdf_print("%s: netbuf pop failed!\n", __func__);
+		return 1;
+	}
+
 	/* Fake read mpdu_desc to keep desc ptr in sync */
 	htt_rx_mpdu_desc_list_next(pdev, NULL);
 	qdf_nbuf_set_pktlen(buf, HTT_RX_BUF_SIZE);
@@ -1523,7 +1646,7 @@ htt_rx_offload_paddr_msdu_pop_ll(htt_pdev_handle pdev,
 
 	if (qdf_unlikely(NULL == buf)) {
 		qdf_print("%s: netbuf pop failed!\n", __func__);
-		return 0;
+		return 1;
 	}
 	qdf_nbuf_set_pktlen(buf, HTT_RX_BUF_SIZE);
 #ifdef DEBUG_DMA_DONE
@@ -1536,8 +1659,9 @@ htt_rx_offload_paddr_msdu_pop_ll(htt_pdev_handle pdev,
 		if (HTT_RX_IN_ORD_PADDR_IND_MSDU_INFO_GET(*(curr_msdu + 1)) &
 			   FW_MSDU_INFO_FIRST_WAKEUP_M) {
 			qdf_nbuf_mark_wakeup_frame(buf);
-			qdf_print("%s: First packet after WOW Wakeup rcvd\n",
-				__func__);
+			QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
+				  "%s: First packet after WOW Wakeup rcvd",
+				  __func__);
 		}
 	}
 
@@ -1573,6 +1697,7 @@ htt_rx_offload_paddr_msdu_pop_ll(htt_pdev_handle pdev,
  * @pdev: Handle to htt_pdev_handle
  * @msg_word: Input and output variable, so pointer to HTT msg pointer
  * @amsdu_len: remaining length of all N-1 msdu msdu's
+ * @frag_cnt: number of frags handled
  *
  * This function handles the (N-1) msdu's of amsdu, N'th msdu is already
  * handled by calling function. N-1 msdu's are tied using frags_list.
@@ -1583,7 +1708,8 @@ htt_rx_offload_paddr_msdu_pop_ll(htt_pdev_handle pdev,
  */
 static
 int htt_mon_rx_handle_amsdu_packet(qdf_nbuf_t msdu, htt_pdev_handle pdev,
-				   uint32_t **msg_word, uint32_t amsdu_len)
+				   uint32_t **msg_word, uint32_t amsdu_len,
+				   uint32_t *frag_cnt)
 {
 	qdf_nbuf_t frag_nbuf;
 	qdf_nbuf_t prev_frag_nbuf;
@@ -1598,6 +1724,7 @@ int htt_mon_rx_handle_amsdu_packet(qdf_nbuf_t msdu, htt_pdev_handle pdev,
 		qdf_print("%s: netbuf pop failed!\n", __func__);
 		return 0;
 	}
+	*frag_cnt = *frag_cnt + 1;
 	last_frag = ((struct htt_rx_in_ord_paddr_ind_msdu_t *)*msg_word)->
 		msdu_info;
 	qdf_nbuf_append_ext_list(msdu, frag_nbuf, amsdu_len);
@@ -1609,7 +1736,7 @@ int htt_mon_rx_handle_amsdu_packet(qdf_nbuf_t msdu, htt_pdev_handle pdev,
 	qdf_nbuf_trim_tail(frag_nbuf, HTT_RX_BUF_SIZE - len);
 
 	HTT_PKT_DUMP(qdf_trace_hex_dump(QDF_MODULE_ID_TXRX,
-					QDF_TRACE_LEVEL_FATAL,
+					QDF_TRACE_LEVEL_INFO_HIGH,
 					qdf_nbuf_data(frag_nbuf),
 					qdf_nbuf_len(frag_nbuf)));
 	prev_frag_nbuf = frag_nbuf;
@@ -1625,6 +1752,7 @@ int htt_mon_rx_handle_amsdu_packet(qdf_nbuf_t msdu, htt_pdev_handle pdev,
 			prev_frag_nbuf->next = NULL;
 			return 0;
 		}
+		*frag_cnt = *frag_cnt + 1;
 		qdf_nbuf_set_pktlen(frag_nbuf, HTT_RX_BUF_SIZE);
 		qdf_nbuf_unmap(pdev->osdev, frag_nbuf, QDF_DMA_FROM_DEVICE);
 
@@ -1632,7 +1760,7 @@ int htt_mon_rx_handle_amsdu_packet(qdf_nbuf_t msdu, htt_pdev_handle pdev,
 		amsdu_len -= len;
 		qdf_nbuf_trim_tail(frag_nbuf, HTT_RX_BUF_SIZE - len);
 		HTT_PKT_DUMP(qdf_trace_hex_dump(QDF_MODULE_ID_TXRX,
-						QDF_TRACE_LEVEL_FATAL,
+						QDF_TRACE_LEVEL_INFO_HIGH,
 						qdf_nbuf_data(frag_nbuf),
 						qdf_nbuf_len(frag_nbuf)));
 
@@ -1643,10 +1771,110 @@ int htt_mon_rx_handle_amsdu_packet(qdf_nbuf_t msdu, htt_pdev_handle pdev,
 	return 1;
 }
 
+#define SHORT_PREAMBLE 1
+#define LONG_PREAMBLE  0
+#ifdef HELIUMPLUS
 /**
- * htt_mon_rx_get_phy_info() - Get rate interms of 500Kbps.
- * @rx_desc: Pointer to struct htt_host_rx_desc_base
- * @rx_status: Return variable updated with phy_info in rx_status
+ * htt_rx_get_rate() - get rate info in terms of 500Kbps from htt_rx_desc
+ * @l_sig_rate_select: OFDM or CCK rate
+ * @l_sig_rate:
+ *
+ * If l_sig_rate_select is 0:
+ * 0x8: OFDM 48 Mbps
+ * 0x9: OFDM 24 Mbps
+ * 0xA: OFDM 12 Mbps
+ * 0xB: OFDM 6 Mbps
+ * 0xC: OFDM 54 Mbps
+ * 0xD: OFDM 36 Mbps
+ * 0xE: OFDM 18 Mbps
+ * 0xF: OFDM 9 Mbps
+ * If l_sig_rate_select is 1:
+ * 0x1:  DSSS 1 Mbps long preamble
+ * 0x2:  DSSS 2 Mbps long preamble
+ * 0x3:  CCK 5.5 Mbps long preamble
+ * 0x4:  CCK 11 Mbps long preamble
+ * 0x5:  DSSS 2 Mbps short preamble
+ * 0x6:  CCK 5.5 Mbps
+ * 0x7:  CCK 11 Mbps short  preamble
+ *
+ * Return: rate interms of 500Kbps.
+ */
+static unsigned char htt_rx_get_rate(uint32_t l_sig_rate_select,
+					uint32_t l_sig_rate, uint8_t *preamble)
+{
+	char ret = 0x0;
+	*preamble = LONG_PREAMBLE;
+	if (l_sig_rate_select == 0) {
+		switch (l_sig_rate) {
+		case 0x8:
+			ret = 0x60;
+			break;
+		case 0x9:
+			ret = 0x30;
+			break;
+		case 0xA:
+			ret = 0x18;
+			break;
+		case 0xB:
+			ret = 0x0c;
+			break;
+		case 0xC:
+			ret = 0x6c;
+			break;
+		case 0xD:
+			ret = 0x48;
+			break;
+		case 0xE:
+			ret = 0x24;
+			break;
+		case 0xF:
+			ret = 0x12;
+			break;
+		default:
+			break;
+		}
+	} else if (l_sig_rate_select == 1) {
+		switch (l_sig_rate) {
+		case 0x1:
+			ret = 0x2;
+			*preamble = LONG_PREAMBLE;
+			break;
+		case 0x2:
+			ret = 0x4;
+			*preamble = LONG_PREAMBLE;
+			break;
+		case 0x3:
+			ret = 0xB;
+			*preamble = LONG_PREAMBLE;
+			break;
+		case 0x4:
+			ret = 0x16;
+			*preamble = LONG_PREAMBLE;
+			break;
+		case 0x5:
+			ret = 0x4;
+			*preamble = SHORT_PREAMBLE;
+			break;
+		case 0x6:
+			ret = 0xB;
+			break;
+		case 0x7:
+			ret = 0x16;
+			*preamble = SHORT_PREAMBLE;
+			break;
+		default:
+			break;
+		}
+	} else {
+		qdf_print("Invalid rate info\n");
+	}
+	return ret;
+}
+#else
+/**
+ * htt_rx_get_rate() - get rate info in terms of 500Kbps from htt_rx_desc
+ * @l_sig_rate_select: OFDM or CCK rate
+ * @l_sig_rate:
  *
  * If l_sig_rate_select is 0:
  * 0x8: OFDM 48 Mbps
@@ -1659,54 +1887,45 @@ int htt_mon_rx_handle_amsdu_packet(qdf_nbuf_t msdu, htt_pdev_handle pdev,
  * 0xF: OFDM 9 Mbps
  * If l_sig_rate_select is 1:
  * 0x8: CCK 11 Mbps long preamble
- * 0x9: CCK 5.5 Mbps long preamble
+ *  0x9: CCK 5.5 Mbps long preamble
  * 0xA: CCK 2 Mbps long preamble
  * 0xB: CCK 1 Mbps long preamble
  * 0xC: CCK 11 Mbps short preamble
  * 0xD: CCK 5.5 Mbps short preamble
  * 0xE: CCK 2 Mbps short preamble
  *
- * Return: None
+ * Return: rate interms of 500Kbps.
  */
-static void htt_mon_rx_get_phy_info(struct htt_host_rx_desc_base *rx_desc,
-				    struct mon_rx_status *rx_status)
+static unsigned char htt_rx_get_rate(uint32_t l_sig_rate_select,
+					uint32_t l_sig_rate, uint8_t *preamble)
 {
-#define SHORT_PREAMBLE 1
-#define LONG_PREAMBLE  0
-	char rate = 0x0;
-	uint8_t preamble = SHORT_PREAMBLE;
-	uint8_t preamble_type = rx_desc->ppdu_start.preamble_type;
-	uint8_t mcs = 0, nss = 0, sgi = 0, bw = 0, beamformed = 0;
-	uint16_t vht_flags = 0;
-	uint32_t l_sig_rate_select = rx_desc->ppdu_start.l_sig_rate_select;
-	uint32_t l_sig_rate = rx_desc->ppdu_start.l_sig_rate;
-	bool is_stbc = 0, ldpc = 0;
-
+	char ret = 0x0;
+	*preamble = SHORT_PREAMBLE;
 	if (l_sig_rate_select == 0) {
 		switch (l_sig_rate) {
 		case 0x8:
-			rate = 0x60;
+			ret = 0x60;
 			break;
 		case 0x9:
-			rate = 0x30;
+			ret = 0x30;
 			break;
 		case 0xA:
-			rate = 0x18;
+			ret = 0x18;
 			break;
 		case 0xB:
-			rate = 0x0c;
+			ret = 0x0c;
 			break;
 		case 0xC:
-			rate = 0x6c;
+			ret = 0x6c;
 			break;
 		case 0xD:
-			rate = 0x48;
+			ret = 0x48;
 			break;
 		case 0xE:
-			rate = 0x24;
+			ret = 0x24;
 			break;
 		case 0xF:
-			rate = 0x12;
+			ret = 0x12;
 			break;
 		default:
 			break;
@@ -1714,29 +1933,29 @@ static void htt_mon_rx_get_phy_info(struct htt_host_rx_desc_base *rx_desc,
 	} else if (l_sig_rate_select == 1) {
 		switch (l_sig_rate) {
 		case 0x8:
-			rate = 0x16;
-			preamble = LONG_PREAMBLE;
+			ret = 0x16;
+			*preamble = LONG_PREAMBLE;
 			break;
 		case 0x9:
-			rate = 0x0B;
-			preamble = LONG_PREAMBLE;
+			ret = 0x0B;
+			*preamble = LONG_PREAMBLE;
 			break;
 		case 0xA:
-			rate = 0x04;
-			preamble = LONG_PREAMBLE;
+			ret = 0x4;
+			*preamble = LONG_PREAMBLE;
 			break;
 		case 0xB:
-			rate = 0x02;
-			preamble = LONG_PREAMBLE;
+			ret = 0x02;
+			*preamble = LONG_PREAMBLE;
 			break;
 		case 0xC:
-			rate = 0x16;
+			ret = 0x16;
 			break;
 		case 0xD:
-			rate = 0x0B;
+			ret = 0x0B;
 			break;
 		case 0xE:
-			rate = 0x04;
+			ret = 0x04;
 			break;
 		default:
 			break;
@@ -1744,13 +1963,38 @@ static void htt_mon_rx_get_phy_info(struct htt_host_rx_desc_base *rx_desc,
 	} else {
 		qdf_print("Invalid rate info\n");
 	}
+	return ret;
+}
+#endif /* HELIUMPLUS */
+/**
+ * htt_mon_rx_get_phy_info() - Get phy info
+ * @rx_desc: Pointer to struct htt_host_rx_desc_base
+ * @rx_status: Return variable updated with phy_info in rx_status
+ *
+ * Return: None
+ */
+static void htt_mon_rx_get_phy_info(struct htt_host_rx_desc_base *rx_desc,
+				    struct mon_rx_status *rx_status)
+{
+	uint8_t preamble = 0;
+	uint8_t preamble_type = rx_desc->ppdu_start.preamble_type;
+	uint8_t mcs = 0, nss = 0, sgi = 0, bw = 0, beamformed = 0;
+	uint16_t vht_flags = 0, ht_flags = 0;
+	uint32_t l_sig_rate_select = rx_desc->ppdu_start.l_sig_rate_select;
+	uint32_t l_sig_rate = rx_desc->ppdu_start.l_sig_rate;
+	bool is_stbc = 0, ldpc = 0;
 
 	switch (preamble_type) {
+	case 4:
+	/* legacy */
+		rx_status->rate = htt_rx_get_rate(l_sig_rate_select, l_sig_rate,
+						&preamble);
+		break;
 	case 8:
 		is_stbc = ((VHT_SIG_A_2(rx_desc) >> 4) & 3);
 		/* fallthrough */
 	case 9:
-		vht_flags = 1;
+		ht_flags = 1;
 		sgi = (VHT_SIG_A_2(rx_desc) >> 7) & 0x01;
 		bw = (VHT_SIG_A_1(rx_desc) >> 7) & 0x01;
 		mcs = (VHT_SIG_A_1(rx_desc) & 0x7f);
@@ -1759,7 +2003,6 @@ static void htt_mon_rx_get_phy_info(struct htt_host_rx_desc_base *rx_desc,
 			(VHT_SIG_A_2(rx_desc) >> 8) & 0x1;
 		break;
 	case 0x0c:
-		vht_flags = 1;
 		is_stbc = (VHT_SIG_A_2(rx_desc) >> 3) & 1;
 		ldpc = (VHT_SIG_A_2(rx_desc) >> 2) & 1;
 		/* fallthrough */
@@ -1777,7 +2020,7 @@ static void htt_mon_rx_get_phy_info(struct htt_host_rx_desc_base *rx_desc,
 			nss = (VHT_SIG_A_1(rx_desc) >> 10) &
 				0x7;
 		} else {
-			/* SU case */
+			/* MU case */
 			uint8_t sta_user_pos =
 				(uint8_t)((rx_desc->ppdu_start.reserved_4a >> 8)
 					  & 0x3);
@@ -1798,16 +2041,22 @@ static void htt_mon_rx_get_phy_info(struct htt_host_rx_desc_base *rx_desc,
 	}
 
 	rx_status->mcs = mcs;
+	rx_status->bw = bw;
 	rx_status->nr_ant = nss;
 	rx_status->is_stbc = is_stbc;
 	rx_status->sgi = sgi;
 	rx_status->ldpc = ldpc;
 	rx_status->beamformed = beamformed;
-	rx_status->vht_flag_values3[0] = mcs << 0x4;
-	rx_status->rate = rate;
+	rx_status->vht_flag_values3[0] = mcs << 0x4 | (nss + 1);
+	rx_status->ht_flags = ht_flags;
 	rx_status->vht_flags = vht_flags;
 	rx_status->rtap_flags |= ((preamble == SHORT_PREAMBLE) ? BIT(1) : 0);
-	rx_status->vht_flag_values2 = 0x01 < bw;
+	if (bw == 0)
+		rx_status->vht_flag_values2 = 0;
+	else if (bw == 1)
+		rx_status->vht_flag_values2 = 1;
+	else if (bw == 2)
+		rx_status->vht_flag_values2 = 4;
 }
 
 /**
@@ -1894,9 +2143,10 @@ static void htt_rx_mon_get_rx_status(htt_pdev_handle pdev,
 static int htt_rx_mon_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 					       qdf_nbuf_t rx_ind_msg,
 					       qdf_nbuf_t *head_msdu,
-					       qdf_nbuf_t *tail_msdu)
+					       qdf_nbuf_t *tail_msdu,
+					       uint32_t *replenish_cnt)
 {
-	qdf_nbuf_t msdu, next;
+	qdf_nbuf_t msdu, next, prev = NULL;
 	uint8_t *rx_ind_data;
 	uint32_t *msg_word;
 	uint32_t msdu_count;
@@ -1912,8 +2162,9 @@ static int htt_rx_mon_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 	rx_ind_data = qdf_nbuf_data(rx_ind_msg);
 	msg_word = (uint32_t *)rx_ind_data;
 
+	*replenish_cnt = 0;
 	HTT_PKT_DUMP(qdf_trace_hex_dump(QDF_MODULE_ID_TXRX,
-					QDF_TRACE_LEVEL_FATAL,
+					QDF_TRACE_LEVEL_INFO_HIGH,
 					(void *)rx_ind_data,
 					(int)qdf_nbuf_len(rx_ind_msg)));
 
@@ -1924,13 +2175,15 @@ static int htt_rx_mon_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 	msg_word = (uint32_t *)(rx_ind_data +
 				 HTT_RX_IN_ORD_PADDR_IND_HDR_BYTES);
 	paddr = htt_rx_in_ord_paddr_get(msg_word);
-	(*head_msdu) = msdu = htt_rx_in_order_netbuf_pop(pdev, paddr);
+	msdu = htt_rx_in_order_netbuf_pop(pdev, paddr);
 
 	if (qdf_unlikely(NULL == msdu)) {
 		qdf_print("%s: netbuf pop failed!\n", __func__);
 		*tail_msdu = NULL;
 		return 0;
 	}
+	*replenish_cnt = *replenish_cnt + 1;
+
 	while (msdu_count > 0) {
 
 		msdu_count--;
@@ -1946,6 +2199,36 @@ static int htt_rx_mon_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 		 * qdf_nbuf_unmap
 		 */
 		rx_desc = htt_rx_desc(msdu);
+		if ((unsigned int)(*(uint32_t *)&rx_desc->attention) &
+				RX_DESC_ATTN_MPDU_LEN_ERR_BIT) {
+			qdf_nbuf_free(msdu);
+			last_frag = ((struct htt_rx_in_ord_paddr_ind_msdu_t *)
+			     msg_word)->msdu_info;
+			while (!last_frag) {
+				msg_word += HTT_RX_IN_ORD_PADDR_IND_MSDU_DWORDS;
+				paddr = htt_rx_in_ord_paddr_get(msg_word);
+				msdu = htt_rx_in_order_netbuf_pop(pdev, paddr);
+				last_frag = ((struct
+					htt_rx_in_ord_paddr_ind_msdu_t *)
+					msg_word)->msdu_info;
+				if (qdf_unlikely(!msdu)) {
+					qdf_print("%s: netbuf pop failed!\n",
+						  __func__);
+					return 0;
+				}
+				*replenish_cnt = *replenish_cnt + 1;
+				qdf_nbuf_unmap(pdev->osdev, msdu,
+					       QDF_DMA_FROM_DEVICE);
+				qdf_nbuf_free(msdu);
+			}
+			msdu = prev;
+			goto next_pop;
+		}
+
+		if (!prev)
+			(*head_msdu) = msdu;
+		prev = msdu;
+
 		HTT_PKT_DUMP(htt_print_rx_desc(rx_desc));
 		/*
 		 * Make the netbuf's data pointer point to the payload rather
@@ -1973,7 +2256,7 @@ static int htt_rx_mon_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 
 
 		HTT_PKT_DUMP(qdf_trace_hex_dump(QDF_MODULE_ID_TXRX,
-						QDF_TRACE_LEVEL_FATAL,
+						QDF_TRACE_LEVEL_INFO_HIGH,
 						qdf_nbuf_data(msdu),
 						qdf_nbuf_len(msdu)));
 		last_frag = ((struct htt_rx_in_ord_paddr_ind_msdu_t *)
@@ -1989,12 +2272,15 @@ static int htt_rx_mon_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 			 */
 			if (!htt_mon_rx_handle_amsdu_packet(msdu, pdev,
 							    &msg_word,
-							    amsdu_len)) {
+							    amsdu_len,
+							    replenish_cnt)) {
 				qdf_print("%s: failed to handle amsdu packet\n",
 					     __func__);
 				return 0;
 			}
 		}
+
+next_pop:
 		/* check if this is the last msdu */
 		if (msdu_count) {
 			msg_word += HTT_RX_IN_ORD_PADDR_IND_MSDU_DWORDS;
@@ -2006,11 +2292,14 @@ static int htt_rx_mon_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 				*tail_msdu = NULL;
 				return 0;
 			}
-			qdf_nbuf_set_next(msdu, next);
+			*replenish_cnt = *replenish_cnt + 1;
+			if (msdu)
+				qdf_nbuf_set_next(msdu, next);
 			msdu = next;
 		} else {
 			*tail_msdu = msdu;
-			qdf_nbuf_set_next(msdu, NULL);
+			if (msdu)
+				qdf_nbuf_set_next(msdu, NULL);
 		}
 	}
 
@@ -2044,10 +2333,16 @@ uint32_t htt_rx_amsdu_rx_in_order_get_pktlog(qdf_nbuf_t rx_ind_msg)
 
 #ifndef CONFIG_HL_SUPPORT
 /* Return values: 1 - success, 0 - failure */
+#define RX_DESC_DISCARD_IS_SET ((*((u_int8_t *) &rx_desc->fw_desc.u.val)) & \
+							FW_RX_DESC_DISCARD_M)
+#define RX_DESC_MIC_ERR_IS_SET ((*((u_int8_t *) &rx_desc->fw_desc.u.val)) & \
+							FW_RX_DESC_ANY_ERR_M)
+
 static int
 htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 				qdf_nbuf_t rx_ind_msg,
-				qdf_nbuf_t *head_msdu, qdf_nbuf_t *tail_msdu)
+				qdf_nbuf_t *head_msdu, qdf_nbuf_t *tail_msdu,
+				uint32_t *replenish_cnt)
 {
 	qdf_nbuf_t msdu, next, prev = NULL;
 	uint8_t *rx_ind_data;
@@ -2059,6 +2354,9 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 	struct htt_host_rx_desc_base *rx_desc;
 	enum rx_pkt_fate status = RX_PKT_FATE_SUCCESS;
 	qdf_dma_addr_t paddr;
+	qdf_mem_info_t *mem_map_table = NULL, *mem_info = NULL;
+	uint32_t num_unmapped = 0;
+	int ret = 1;
 
 	HTT_ASSERT1(htt_rx_in_order_ring_elems(pdev) != 0);
 
@@ -2074,9 +2372,17 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 	/* Get the total number of MSDUs */
 	msdu_count = HTT_RX_IN_ORD_PADDR_IND_MSDU_CNT_GET(*(msg_word + 1));
 	HTT_RX_CHECK_MSDU_COUNT(msdu_count);
+	if (qdf_mem_smmu_s1_enabled(pdev->osdev) && pdev->is_ipa_uc_enabled) {
+		mem_map_table = qdf_mem_map_table_alloc(msdu_count);
+		if (!mem_map_table) {
+			qdf_print("%s: Failed to allocate memory for mem map table\n",
+				  __func__);
+			return 0;
+		}
+		mem_info = mem_map_table;
+	}
 	ol_rx_update_histogram_stats(msdu_count, frag_ind, offload_ind);
 	htt_rx_dbg_rxbuf_httrxind(pdev, msdu_count);
-
 
 	msg_word =
 		(uint32_t *) (rx_ind_data + HTT_RX_IN_ORD_PADDR_IND_HDR_BYTES);
@@ -2084,7 +2390,8 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 		ol_rx_offload_paddr_deliver_ind_handler(pdev, msdu_count,
 							msg_word);
 		*head_msdu = *tail_msdu = NULL;
-		return 0;
+		ret = 0;
+		goto free_mem_map_table;
 	}
 
 	paddr = htt_rx_in_ord_paddr_get(msg_word);
@@ -2093,10 +2400,19 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 	if (qdf_unlikely(NULL == msdu)) {
 		qdf_print("%s: netbuf pop failed!\n", __func__);
 		*tail_msdu = NULL;
-		return 0;
+		ret = 0;
+		goto free_mem_map_table;
 	}
 
 	while (msdu_count > 0) {
+		if (qdf_mem_smmu_s1_enabled(pdev->osdev) &&
+					pdev->is_ipa_uc_enabled) {
+			qdf_update_mem_map_table(pdev->osdev, mem_info,
+						 QDF_NBUF_CB_PADDR(msdu),
+						 HTT_RX_BUF_SIZE);
+			mem_info++;
+			num_unmapped++;
+		}
 
 		/*
 		 * Set the netbuf length to be the entire buffer length
@@ -2123,7 +2439,7 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 		qdf_dp_trace_set_track(msdu, QDF_RX);
 		QDF_NBUF_CB_TX_PACKET_TRACK(msdu) = QDF_NBUF_TX_PKT_DATA_TRACK;
 		QDF_NBUF_CB_RX_CTX_ID(msdu) = rx_ctx_id;
-		ol_rx_log_packet(pdev, peer_id, msdu);
+
 		if (qdf_nbuf_is_ipv4_arp_pkt(msdu))
 			QDF_NBUF_CB_GET_PACKET_TYPE(msdu) =
 				QDF_NBUF_CB_PACKET_TYPE_ARP;
@@ -2141,27 +2457,29 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 				   HTT_RX_BUF_SIZE -
 				   (RX_STD_DESC_SIZE +
 				    HTT_RX_IN_ORD_PADDR_IND_MSDU_LEN_GET(
-					    *(msg_word + NEXT_FIELD_OFFSET_IN32))));
+				    *(msg_word + NEXT_FIELD_OFFSET_IN32))));
 #if defined(HELIUMPLUS_DEBUG)
 		ol_txrx_dump_pkt(msdu, 0, 64);
 #endif
 		*((uint8_t *) &rx_desc->fw_desc.u.val) =
-			HTT_RX_IN_ORD_PADDR_IND_FW_DESC_GET(*(msg_word + NEXT_FIELD_OFFSET_IN32));
+			HTT_RX_IN_ORD_PADDR_IND_FW_DESC_GET(*(msg_word +
+						NEXT_FIELD_OFFSET_IN32));
 #undef NEXT_FIELD_OFFSET_IN32
 
 		msdu_count--;
 
 		/* calling callback function for packet logging */
 		if (pdev->rx_pkt_dump_cb) {
-			if (qdf_unlikely((*((u_int8_t *)
-				   &rx_desc->fw_desc.u.val)) &
-				   FW_RX_DESC_ANY_ERR_M))
+			if (qdf_unlikely(RX_DESC_MIC_ERR_IS_SET &&
+						!RX_DESC_DISCARD_IS_SET))
 				status = RX_PKT_FATE_FW_DROP_INVALID;
 			pdev->rx_pkt_dump_cb(msdu, peer_id, status);
 		}
-
-		if (qdf_unlikely((*((u_int8_t *) &rx_desc->fw_desc.u.val)) &
-				    FW_RX_DESC_ANY_ERR_M)) {
+		/* if discard flag is set (SA is self MAC), then
+		 * don't check mic failure.
+		 */
+		if (qdf_unlikely(RX_DESC_MIC_ERR_IS_SET &&
+					!RX_DESC_DISCARD_IS_SET)) {
 			uint8_t tid =
 				HTT_RX_IN_ORD_PADDR_IND_EXT_TID_GET(
 					*(u_int32_t *)rx_ind_data);
@@ -2174,12 +2492,12 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 				/* if this is the only msdu */
 				if (!prev) {
 					*head_msdu = *tail_msdu = NULL;
-					return 0;
-				} else {
-					*tail_msdu = prev;
-					qdf_nbuf_set_next(prev, NULL);
-					return 1;
+					ret = 0;
+					goto free_mem_map_table;
 				}
+				*tail_msdu = prev;
+				qdf_nbuf_set_next(prev, NULL);
+				goto free_mem_map_table;
 			} else { /* if this is not the last msdu */
 				/* get the next msdu */
 				msg_word += HTT_RX_IN_ORD_PADDR_IND_MSDU_DWORDS;
@@ -2189,7 +2507,8 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 					qdf_print("%s: netbuf pop failed!\n",
 								 __func__);
 					*tail_msdu = NULL;
-					return 0;
+					ret = 0;
+					goto free_mem_map_table;
 				}
 
 				/* if this is not the first msdu, update the
@@ -2198,9 +2517,9 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 				if (prev) {
 					qdf_nbuf_set_next(prev, next);
 				} else {
-				/* if this is the first msdu, update the
-				 * head pointer
-				 */
+					/* if this is the first msdu, update the
+					 * head pointer
+					 */
 					*head_msdu = next;
 				}
 				msdu = next;
@@ -2220,7 +2539,8 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 				qdf_print("%s: netbuf pop failed!\n",
 					  __func__);
 				*tail_msdu = NULL;
-				return 0;
+				ret = 0;
+				goto free_mem_map_table;
 			}
 			qdf_nbuf_set_next(msdu, next);
 			prev = msdu;
@@ -2231,7 +2551,14 @@ htt_rx_amsdu_rx_in_order_pop_ll(htt_pdev_handle pdev,
 		}
 	}
 
-	return 1;
+free_mem_map_table:
+	if (qdf_mem_smmu_s1_enabled(pdev->osdev) && pdev->is_ipa_uc_enabled) {
+		if (num_unmapped)
+			cds_smmu_map_unmap(false, num_unmapped,
+					   mem_map_table);
+		qdf_mem_free(mem_map_table);
+	}
+	return ret;
 }
 #endif
 
@@ -2264,22 +2591,22 @@ htt_rx_parse_ppdu_start_status(struct htt_host_rx_desc_base *rx_desc,
 	rs->rs_rssi = ppdu_start->rssi_comb;
 
 	/* PHY rate */
-	/* rs_ratephy coding
-	   [b3 - b0]
-	   0 -> OFDM
-	   1 -> CCK
-	   2 -> HT
-	   3 -> VHT
-	   OFDM / CCK
-	   [b7  - b4 ] => LSIG rate
-	   [b23 - b8 ] => service field
-	   (b'12 static/dynamic,
-	   b'14..b'13 BW for VHT)
-	   [b31 - b24 ] => Reserved
-	   HT / VHT
-	   [b15 - b4 ] => SIG A_2 12 LSBs
-	   [b31 - b16] => SIG A_1 16 LSBs
-
+	/*
+	 * rs_ratephy coding
+	 * [b3 - b0]
+	 * 0 -> OFDM
+	 * 1 -> CCK
+	 * 2 -> HT
+	 * 3 -> VHT
+	 * OFDM / CCK
+	 * [b7  - b4 ] => LSIG rate
+	 * [b23 - b8 ] => service field
+	 * (b'12 static/dynamic,
+	 * b'14..b'13 BW for VHT)
+	 * [b31 - b24 ] => Reserved
+	 * HT / VHT
+	 * [b15 - b4 ] => SIG A_2 12 LSBs
+	 * [b31 - b16] => SIG A_1 16 LSBs
 	 */
 	if (ppdu_start->preamble_type == 0x4) {
 		rs->rs_ratephy = ppdu_start->l_sig_rate_select;
@@ -2298,8 +2625,6 @@ htt_rx_parse_ppdu_start_status(struct htt_host_rx_desc_base *rx_desc,
 			(ppdu_start->ht_sig_vht_sig_a_1 & 0xFFFF) << 16;
 #endif
 	}
-
-	return;
 }
 
 /* This function is used by montior mode code to restitch an MSDU list
@@ -2309,11 +2634,11 @@ qdf_nbuf_t
 htt_rx_restitch_mpdu_from_msdus(htt_pdev_handle pdev,
 				qdf_nbuf_t head_msdu,
 				struct ieee80211_rx_status *rx_status,
-				unsigned clone_not_reqd)
+				unsigned int clone_not_reqd)
 {
 
 	qdf_nbuf_t msdu, mpdu_buf, prev_buf, msdu_orig, head_frag_list_cloned;
-	unsigned decap_format, wifi_hdr_len, sec_hdr_len, msdu_llc_len,
+	unsigned int decap_format, wifi_hdr_len, sec_hdr_len, msdu_llc_len,
 		 mpdu_buf_len, decap_hdr_pull_bytes, frag_list_sum_len, dir,
 		 is_amsdu, is_first_frag, amsdu_pad, msdu_len;
 	struct htt_host_rx_desc_base *rx_desc;
@@ -2355,9 +2680,6 @@ htt_rx_restitch_mpdu_from_msdus(htt_pdev_handle pdev,
 			mpdu_buf = htt_rx_qdf_noclone_buf(head_msdu);
 		else
 			mpdu_buf = qdf_nbuf_clone(head_msdu);
-
-		if (!mpdu_buf)
-			goto mpdu_stitch_fail;
 
 		if (!mpdu_buf)
 			goto mpdu_stitch_fail;
@@ -2531,12 +2853,15 @@ htt_rx_restitch_mpdu_from_msdus(htt_pdev_handle pdev,
 		frag_list_sum_len +=
 			msdu_llc_len + qdf_nbuf_len(msdu) + amsdu_pad;
 
-		/* Set up intra-AMSDU pad to be added to start of next buffer -
-		 * AMSDU pad is 4 byte pad on AMSDU subframe */
+		/*
+		 * Set up intra-AMSDU pad to be added to start of next buffer -
+		 * AMSDU pad is 4 byte pad on AMSDU subframe
+		 */
 		amsdu_pad = (msdu_llc_len + qdf_nbuf_len(msdu)) & 0x3;
 		amsdu_pad = amsdu_pad ? (4 - amsdu_pad) : 0;
 
-		/* TODO FIXME How do we handle MSDUs that have fraglist - Should
+		/*
+		 * TODO FIXME How do we handle MSDUs that have fraglist - Should
 		 * probably iterate all the frags cloning them along the way and
 		 * and also updating the prev_buf pointer
 		 */
@@ -2621,7 +2946,8 @@ int16_t htt_rx_mpdu_desc_rssi_dbm(htt_pdev_handle pdev, void *mpdu_desc)
  */
 int (*htt_rx_amsdu_pop)(htt_pdev_handle pdev,
 			qdf_nbuf_t rx_ind_msg,
-			qdf_nbuf_t *head_msdu, qdf_nbuf_t *tail_msdu);
+			qdf_nbuf_t *head_msdu, qdf_nbuf_t *tail_msdu,
+			uint32_t *msdu_count);
 
 /*
  * htt_rx_frag_pop -
@@ -2630,7 +2956,8 @@ int (*htt_rx_amsdu_pop)(htt_pdev_handle pdev,
  */
 int (*htt_rx_frag_pop)(htt_pdev_handle pdev,
 		       qdf_nbuf_t rx_ind_msg,
-		       qdf_nbuf_t *head_msdu, qdf_nbuf_t *tail_msdu);
+		       qdf_nbuf_t *head_msdu, qdf_nbuf_t *tail_msdu,
+		       uint32_t *msdu_count);
 
 int
 (*htt_rx_offload_msdu_pop)(htt_pdev_handle pdev,
@@ -2644,8 +2971,7 @@ int
 void * (*htt_rx_mpdu_desc_list_next)(htt_pdev_handle pdev,
 				    qdf_nbuf_t rx_ind_msg);
 
-bool (*htt_rx_mpdu_desc_retry)(
-    htt_pdev_handle pdev, void *mpdu_desc);
+bool (*htt_rx_mpdu_desc_retry)(htt_pdev_handle pdev, void *mpdu_desc);
 
 uint16_t (*htt_rx_mpdu_desc_seq_num)(htt_pdev_handle pdev, void *mpdu_desc);
 
@@ -2653,8 +2979,7 @@ void (*htt_rx_mpdu_desc_pn)(htt_pdev_handle pdev,
 			    void *mpdu_desc,
 			    union htt_rx_pn_t *pn, int pn_len_bits);
 
-uint8_t (*htt_rx_mpdu_desc_tid)(
-    htt_pdev_handle pdev, void *mpdu_desc);
+uint8_t (*htt_rx_mpdu_desc_tid)(htt_pdev_handle pdev, void *mpdu_desc);
 
 bool (*htt_rx_msdu_desc_completes_mpdu)(htt_pdev_handle pdev, void *msdu_desc);
 
@@ -2679,6 +3004,7 @@ void *htt_rx_mpdu_desc_list_next_ll(htt_pdev_handle pdev, qdf_nbuf_t rx_ind_msg)
 {
 	int idx = pdev->rx_ring.sw_rd_idx.msdu_desc;
 	qdf_nbuf_t netbuf = pdev->rx_ring.buf.netbufs_ring[idx];
+
 	pdev->rx_ring.sw_rd_idx.msdu_desc = pdev->rx_ring.sw_rd_idx.msdu_payld;
 	return (void *)htt_rx_desc(netbuf);
 }
@@ -2936,13 +3262,13 @@ void htt_rx_msdu_desc_free(htt_pdev_handle htt_pdev, qdf_nbuf_t msdu)
  */
 static inline void htt_rx_fill_ring_count(htt_pdev_handle pdev)
 {
-	return;
 }
 #else
 
 static void htt_rx_fill_ring_count(htt_pdev_handle pdev)
 {
 	int num_to_fill;
+
 	num_to_fill = pdev->rx_ring.fill_level - pdev->rx_ring.fill_cnt;
 	htt_rx_ring_fill_n(pdev, num_to_fill /* okay if <= 0 */);
 }
@@ -2980,17 +3306,17 @@ int htt_rx_msdu_buff_in_order_replenish(htt_pdev_handle pdev, uint32_t num)
 	pdev->rx_buff_fill_n_invoked++;
 	filled = htt_rx_ring_fill_n(pdev, num);
 
-	qdf_spin_unlock_bh(&(pdev->rx_ring.refill_lock));
-
 	if (filled > num) {
 		/* we served ourselves and some other debt */
 		/* sub is safer than  = 0 */
 		qdf_atomic_sub(filled - num, &pdev->rx_ring.refill_debt);
+	} else {
+		qdf_atomic_add(num - filled, &pdev->rx_ring.refill_debt);
 	}
+	qdf_spin_unlock_bh(&(pdev->rx_ring.refill_lock));
 
 	return filled;
 }
-#endif
 
 #define AR600P_ASSEMBLE_HW_RATECODE(_rate, _nss, _pream)     \
 	(((_pream) << 6) | ((_nss) << 4) | (_rate))
@@ -3065,15 +3391,17 @@ static inline void htt_list_remove(struct htt_list_node *node)
 #define HTT_RX_HASH_COUNT_RESET(hash_bucket)    /* no-op */
 #endif /* RX_HASH_DEBUG */
 
-/* Inserts the given "physical address - network buffer" pair into the
-   hash table for the given pdev. This function will do the following:
-   1. Determine which bucket to insert the pair into
-   2. First try to allocate the hash entry for this pair from the pre-allocated
-      entries list
-   3. If there are no more entries in the pre-allocated entries list, allocate
-      the hash entry from the hash memory pool
-   Note: this function is not thread-safe
-   Returns 0 - success, 1 - failure */
+/*
+ * Inserts the given "physical address - network buffer" pair into the
+ * hash table for the given pdev. This function will do the following:
+ * 1. Determine which bucket to insert the pair into
+ * 2. First try to allocate the hash entry for this pair from the pre-allocated
+ *    entries list
+ * 3. If there are no more entries in the pre-allocated entries list, allocate
+ *    the hash entry from the hash memory pool
+ * Note: this function is not thread-safe
+ * Returns 0 - success, 1 - failure
+ */
 int
 htt_rx_hash_list_insert(struct htt_pdev_t *pdev,
 			qdf_dma_addr_t paddr,
@@ -3123,7 +3451,7 @@ htt_rx_hash_list_insert(struct htt_pdev_t *pdev,
 	htt_list_add_tail(&pdev->rx_ring.hash_table[i]->listhead,
 			  &hash_element->listnode);
 
-	RX_HASH_LOG(qdf_print("rx hash: %s: paddr 0x%x netbuf %p bucket %d\n",
+	RX_HASH_LOG(qdf_print("rx hash: %s: paddr 0x%x netbuf %pK bucket %d\n",
 			      __func__, paddr, netbuf, (int)i));
 
 	HTT_RX_HASH_COUNT_INCR(pdev->rx_ring.hash_table[i]);
@@ -3149,6 +3477,11 @@ qdf_nbuf_t htt_rx_hash_list_lookup(struct htt_pdev_t *pdev,
 
 	qdf_spin_lock_bh(&(pdev->rx_ring.rx_hash_lock));
 
+	if (!pdev->rx_ring.hash_table) {
+		qdf_spin_unlock_bh(&(pdev->rx_ring.rx_hash_lock));
+		return NULL;
+	}
+
 	i = RX_HASH_FUNCTION(paddr);
 
 	HTT_LIST_ITER_FWD(list_iter, &pdev->rx_ring.hash_table[i]->listhead) {
@@ -3161,13 +3494,20 @@ qdf_nbuf_t htt_rx_hash_list_lookup(struct htt_pdev_t *pdev,
 		if (hash_entry->paddr == paddr) {
 			/* Found the entry corresponding to paddr */
 			netbuf = hash_entry->netbuf;
+			/* set netbuf to NULL to trace if freed entry
+			 * is getting unmapped in hash deinit.
+			 */
+			hash_entry->netbuf = NULL;
 			htt_list_remove(&hash_entry->listnode);
 			HTT_RX_HASH_COUNT_DECR(pdev->rx_ring.hash_table[i]);
-			/* if the rx entry is from the pre-allocated list,
-			   return it */
+			/*
+			 * if the rx entry is from the pre-allocated list,
+			 * return it
+			 */
 			if (hash_entry->fromlist)
-				htt_list_add_tail(&pdev->rx_ring.hash_table[i]->freepool,
-						  &hash_entry->listnode);
+				htt_list_add_tail(
+					&pdev->rx_ring.hash_table[i]->freepool,
+					&hash_entry->listnode);
 			else
 				qdf_mem_free(hash_entry);
 
@@ -3176,25 +3516,31 @@ qdf_nbuf_t htt_rx_hash_list_lookup(struct htt_pdev_t *pdev,
 		}
 	}
 
-	RX_HASH_LOG(qdf_print("rx hash: %s: paddr 0x%x, netbuf %p, bucket %d\n",
+	RX_HASH_LOG(qdf_print("rx hash: %s: paddr 0x%x, netbuf %pK, bucket %d\n",
 			      __func__, paddr, netbuf, (int)i));
 	HTT_RX_HASH_COUNT_PRINT(pdev->rx_ring.hash_table[i]);
 
 	qdf_spin_unlock_bh(&(pdev->rx_ring.rx_hash_lock));
 
 	if (netbuf == NULL) {
-		qdf_print("rx hash: %s: no entry found for %p!\n",
+		qdf_print("rx hash: %s: no entry found for %pK!\n",
 			  __func__, (void *)paddr);
-		HTT_ASSERT_ALWAYS(0);
+		if (cds_is_self_recovery_enabled())
+			cds_trigger_recovery(CDS_RX_HASH_NO_ENTRY_FOUND);
+		else
+			HTT_ASSERT_ALWAYS(0);
 	}
 
 	return netbuf;
 }
+#endif
 
 #ifndef CONFIG_HL_SUPPORT
-/* Initialization function of the rx buffer hash table. This function will
-   allocate a hash table of a certain pre-determined size and initialize all
-   the elements */
+/*
+ * Initialization function of the rx buffer hash table. This function will
+ * allocate a hash table of a certain pre-determined size and initialize all
+ * the elements
+ */
 static int htt_rx_hash_init(struct htt_pdev_t *pdev)
 {
 	int i, j;
@@ -3256,9 +3602,10 @@ static int htt_rx_hash_init(struct htt_pdev_t *pdev)
 		/* initialize the free list with pre-allocated entries */
 		for (j = 0; j < RX_ENTRIES_SIZE; j++) {
 			pdev->rx_ring.hash_table[i]->entries[j].fromlist = 1;
-			htt_list_add_tail(&pdev->rx_ring.hash_table[i]->freepool,
-					  &pdev->rx_ring.hash_table[i]->
-					  entries[j].listnode);
+			htt_list_add_tail(
+				&pdev->rx_ring.hash_table[i]->freepool,
+				&pdev->rx_ring.hash_table[i]->entries[j].
+				listnode);
 		}
 	}
 
@@ -3331,13 +3678,13 @@ int htt_rx_attach(struct htt_pdev_t *pdev)
 	pdev->rx_ring.size_mask = pdev->rx_ring.size - 1;
 
 	/*
-	* Set the initial value for the level to which the rx ring
-	* should be filled, based on the max throughput and the worst
-	* likely latency for the host to fill the rx ring.
-	* In theory, this fill level can be dynamically adjusted from
-	* the initial value set here to reflect the actual host latency
-	* rather than a conservative assumption.
-	*/
+	 * Set the initial value for the level to which the rx ring
+	 * should be filled, based on the max throughput and the worst
+	 * likely latency for the host to fill the rx ring.
+	 * In theory, this fill level can be dynamically adjusted from
+	 * the initial value set here to reflect the actual host latency
+	 * rather than a conservative assumption.
+	 */
 	pdev->rx_ring.fill_level = htt_rx_ring_fill_level(pdev);
 
 	if (pdev->cfg.is_full_reorder_offload) {
@@ -3386,9 +3733,9 @@ int htt_rx_attach(struct htt_pdev_t *pdev)
 	*pdev->rx_ring.alloc_idx.vaddr = 0;
 
 	/*
-	* Initialize the Rx refill reference counter to be one so that
-	* only one thread is allowed to refill the Rx ring.
-	*/
+	 * Initialize the Rx refill reference counter to be one so that
+	 * only one thread is allowed to refill the Rx ring.
+	 */
 	qdf_atomic_init(&pdev->rx_ring.refill_ref_cnt);
 	qdf_atomic_inc(&pdev->rx_ring.refill_ref_cnt);
 
@@ -3417,7 +3764,8 @@ int htt_rx_attach(struct htt_pdev_t *pdev)
 	htt_rx_ring_fill_n(pdev, pdev->rx_ring.fill_level);
 
 	if (pdev->cfg.is_full_reorder_offload) {
-		qdf_print("HTT: full reorder offload enabled\n");
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO,
+			"HTT: full reorder offload enabled");
 		htt_rx_amsdu_pop = htt_rx_amsdu_rx_in_order_pop_ll;
 		htt_rx_frag_pop = htt_rx_amsdu_rx_in_order_pop_ll;
 		htt_rx_mpdu_desc_list_next =
@@ -3491,52 +3839,61 @@ fail1:
 static int htt_rx_ipa_uc_alloc_wdi2_rsc(struct htt_pdev_t *pdev,
 			 unsigned int rx_ind_ring_elements)
 {
-	/* Allocate RX2 indication ring */
-	/* RX2 IND ring element
+	/*
+	 * Allocate RX2 indication ring
+	 * RX2 IND ring element
 	 *   4bytes: pointer
 	 *   2bytes: VDEV ID
-	 *   2bytes: length */
-	/* RX indication ring size, by bytes */
-	pdev->ipa_uc_rx_rsc.rx2_ind_ring_size =
-		rx_ind_ring_elements * sizeof(target_paddr_t);
-	pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.vaddr =
-		qdf_mem_alloc_consistent(
-			pdev->osdev, pdev->osdev->dev,
-			pdev->ipa_uc_rx_rsc.rx2_ind_ring_size,
-			&pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.paddr);
-	if (!pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.vaddr) {
-		qdf_print("%s: RX IND RING alloc fail", __func__);
-		return -ENOBUFS;
+	 *   2bytes: length
+	 *
+	 * RX indication ring size, by bytes
+	 */
+	pdev->ipa_uc_rx_rsc.rx2_ind_ring =
+		qdf_mem_shared_mem_alloc(pdev->osdev,
+					 rx_ind_ring_elements *
+					 sizeof(qdf_dma_addr_t));
+	if (!pdev->ipa_uc_rx_rsc.rx2_ind_ring) {
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+			  "%s: Unable to allocate memory for IPA rx2 ind ring",
+			  __func__);
+		return 1;
 	}
 
-	qdf_mem_zero(pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.vaddr,
-		     pdev->ipa_uc_rx_rsc.rx2_ind_ring_size);
-
-	/* Allocate RX process done index */
-	pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx.vaddr =
-		qdf_mem_alloc_consistent(
-			pdev->osdev, pdev->osdev->dev, 4,
-			&pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx.paddr);
-	if (!pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx.vaddr) {
-		qdf_print("%s: RX PROC DONE IND alloc fail", __func__);
-		qdf_mem_free_consistent(
-			pdev->osdev, pdev->osdev->dev,
-			pdev->ipa_uc_rx_rsc.rx2_ind_ring_size,
-			pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.vaddr,
-			pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.paddr,
-			qdf_get_dma_mem_context((&pdev->ipa_uc_rx_rsc.
-						 rx2_ind_ring_base),
-						memctx));
-		return -ENOBUFS;
+	pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx =
+		qdf_mem_shared_mem_alloc(pdev->osdev, 4);
+	if (!pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx) {
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+			  "%s: Unable to allocate memory for IPA rx proc done index",
+			  __func__);
+		qdf_mem_shared_mem_free(pdev->osdev,
+					pdev->ipa_uc_rx_rsc.rx2_ind_ring);
+		return 1;
 	}
-	qdf_mem_zero(pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx.vaddr, 4);
+
 	return 0;
+}
+
+/**
+ * htt_rx_ipa_uc_free_wdi2_rsc() - Free WDI2.0 resources
+ * @pdev: htt context
+ *
+ * Return: None
+ */
+static void htt_rx_ipa_uc_free_wdi2_rsc(struct htt_pdev_t *pdev)
+{
+	qdf_mem_shared_mem_free(pdev->osdev, pdev->ipa_uc_rx_rsc.rx2_ind_ring);
+	qdf_mem_shared_mem_free(pdev->osdev,
+				pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx);
 }
 #else
 static int htt_rx_ipa_uc_alloc_wdi2_rsc(struct htt_pdev_t *pdev,
 			 unsigned int rx_ind_ring_elements)
 {
 	return 0;
+}
+
+static void htt_rx_ipa_uc_free_wdi2_rsc(struct htt_pdev_t *pdev)
+{
 }
 #endif
 
@@ -3552,115 +3909,49 @@ int htt_rx_ipa_uc_attach(struct htt_pdev_t *pdev,
 {
 	int ret = 0;
 
-	/* Allocate RX indication ring */
-	/* RX IND ring element
+	/*
+	 * Allocate RX indication ring
+	 * RX IND ring element
 	 *   4bytes: pointer
 	 *   2bytes: VDEV ID
-	 *   2bytes: length */
-	pdev->ipa_uc_rx_rsc.rx_ind_ring_base.vaddr =
-		qdf_mem_alloc_consistent(
-			pdev->osdev,
-			pdev->osdev->dev,
-			rx_ind_ring_elements *
-			sizeof(struct ipa_uc_rx_ring_elem_t),
-			&pdev->ipa_uc_rx_rsc.rx_ind_ring_base.paddr);
-	if (!pdev->ipa_uc_rx_rsc.rx_ind_ring_base.vaddr) {
-		qdf_print("%s: RX IND RING alloc fail", __func__);
-		return -ENOBUFS;
+	 *   2bytes: length
+	 */
+	pdev->ipa_uc_rx_rsc.rx_ind_ring =
+		qdf_mem_shared_mem_alloc(pdev->osdev,
+					 rx_ind_ring_elements *
+					 sizeof(struct ipa_uc_rx_ring_elem_t));
+	if (!pdev->ipa_uc_rx_rsc.rx_ind_ring) {
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+			  "%s: Unable to allocate memory for IPA rx ind ring",
+			  __func__);
+		return 1;
 	}
 
-	/* RX indication ring size, by bytes */
-	pdev->ipa_uc_rx_rsc.rx_ind_ring_size =
-		rx_ind_ring_elements * sizeof(struct ipa_uc_rx_ring_elem_t);
-	qdf_mem_zero(pdev->ipa_uc_rx_rsc.rx_ind_ring_base.vaddr,
-		pdev->ipa_uc_rx_rsc.rx_ind_ring_size);
-
-	/* Allocate RX process done index */
-	pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx.vaddr =
-		qdf_mem_alloc_consistent(
-			pdev->osdev, pdev->osdev->dev, 4,
-			&pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx.paddr);
-	if (!pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx.vaddr) {
-		qdf_print("%s: RX PROC DONE IND alloc fail", __func__);
-		qdf_mem_free_consistent(
-			pdev->osdev, pdev->osdev->dev,
-			pdev->ipa_uc_rx_rsc.rx_ind_ring_size,
-			pdev->ipa_uc_rx_rsc.rx_ind_ring_base.vaddr,
-			pdev->ipa_uc_rx_rsc.rx_ind_ring_base.paddr,
-			qdf_get_dma_mem_context((&pdev->ipa_uc_rx_rsc.
-						 rx_ind_ring_base),
-						memctx));
-		return -ENOBUFS;
+	pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx =
+		qdf_mem_shared_mem_alloc(pdev->osdev, 4);
+	if (!pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx) {
+		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+			  "%s: Unable to allocate memory for IPA rx proc done index",
+			  __func__);
+		qdf_mem_shared_mem_free(pdev->osdev,
+					pdev->ipa_uc_rx_rsc.rx_ind_ring);
+		return 1;
 	}
-	qdf_mem_zero(pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx.vaddr, 4);
 
 	ret = htt_rx_ipa_uc_alloc_wdi2_rsc(pdev, rx_ind_ring_elements);
+	if (ret) {
+		qdf_mem_shared_mem_free(pdev->osdev, pdev->ipa_uc_rx_rsc.rx_ind_ring);
+		qdf_mem_shared_mem_free(pdev->osdev,
+					pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx);
+	}
 	return ret;
 }
 
-#ifdef QCA_WIFI_3_0
-/**
- * htt_rx_ipa_uc_free_wdi2_rsc() - Free WDI2.0 resources
- * @pdev: htt context
- *
- * Return: None
- */
-static void htt_rx_ipa_uc_free_wdi2_rsc(struct htt_pdev_t *pdev)
-{
-	if (pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.vaddr) {
-		qdf_mem_free_consistent(
-			pdev->osdev, pdev->osdev->dev,
-			pdev->ipa_uc_rx_rsc.rx2_ind_ring_size,
-			pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.vaddr,
-			pdev->ipa_uc_rx_rsc.rx2_ind_ring_base.paddr,
-			qdf_get_dma_mem_context((&pdev->ipa_uc_rx_rsc.
-						 rx2_ind_ring_base),
-						memctx));
-	}
-
-	if (pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx.vaddr) {
-		qdf_mem_free_consistent(
-			pdev->osdev, pdev->osdev->dev,
-			4,
-			pdev->ipa_uc_rx_rsc.
-			rx2_ipa_prc_done_idx.vaddr,
-			pdev->ipa_uc_rx_rsc.rx2_ipa_prc_done_idx.paddr,
-			qdf_get_dma_mem_context((&pdev->ipa_uc_rx_rsc.
-						 rx2_ipa_prc_done_idx),
-						memctx));
-	}
-}
-#else
-static void htt_rx_ipa_uc_free_wdi2_rsc(struct htt_pdev_t *pdev)
-{
-	return;
-}
-#endif
-
 int htt_rx_ipa_uc_detach(struct htt_pdev_t *pdev)
 {
-	if (pdev->ipa_uc_rx_rsc.rx_ind_ring_base.vaddr) {
-		qdf_mem_free_consistent(
-			pdev->osdev, pdev->osdev->dev,
-			pdev->ipa_uc_rx_rsc.rx_ind_ring_size,
-			pdev->ipa_uc_rx_rsc.rx_ind_ring_base.vaddr,
-			pdev->ipa_uc_rx_rsc.rx_ind_ring_base.paddr,
-			qdf_get_dma_mem_context((&pdev->ipa_uc_rx_rsc.
-						 rx_ind_ring_base),
-						memctx));
-	}
-
-	if (pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx.vaddr) {
-		qdf_mem_free_consistent(
-			pdev->osdev, pdev->osdev->dev,
-			4,
-			pdev->ipa_uc_rx_rsc.
-			rx_ipa_prc_done_idx.vaddr,
-			pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx.paddr,
-			qdf_get_dma_mem_context((&pdev->ipa_uc_rx_rsc.
-						 rx2_ipa_prc_done_idx),
-						memctx));
-	}
+	qdf_mem_shared_mem_free(pdev->osdev, pdev->ipa_uc_rx_rsc.rx_ind_ring);
+	qdf_mem_shared_mem_free(pdev->osdev,
+				pdev->ipa_uc_rx_rsc.rx_ipa_prc_done_idx);
 
 	htt_rx_ipa_uc_free_wdi2_rsc(pdev);
 	return 0;
@@ -3685,8 +3976,10 @@ void htt_register_rx_pkt_dump_callback(struct htt_pdev_t *pdev,
 				tp_rx_pkt_dump_cb callback)
 {
 	if (!pdev) {
-		qdf_print("%s: htt pdev is NULL, rx packet status callback register unsuccessful\n",
-						__func__);
+		qdf_print("%s: %s, %s",
+			__func__,
+			"htt pdev is NULL",
+			"rx packet status callback register unsuccessful\n");
 		return;
 	}
 	pdev->rx_pkt_dump_cb = callback;
@@ -3707,8 +4000,10 @@ void htt_register_rx_pkt_dump_callback(struct htt_pdev_t *pdev,
 void htt_deregister_rx_pkt_dump_callback(struct htt_pdev_t *pdev)
 {
 	if (!pdev) {
-		qdf_print("%s: htt pdev is NULL, rx packet status callback deregister unsuccessful\n",
-						__func__);
+		qdf_print("%s: %s, %s",
+			__func__,
+			"htt pdev is NULL",
+			"rx packet status callback deregister unsuccessful\n");
 		return;
 	}
 	pdev->rx_pkt_dump_cb = NULL;

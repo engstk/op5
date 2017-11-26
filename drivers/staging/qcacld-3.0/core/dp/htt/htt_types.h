@@ -48,7 +48,8 @@
 #endif
 #endif /* QCA_TX_HTT2_SUPPORT */
 
-/* Set the base misclist size to the size of the htt tx copy engine
+/*
+ * Set the base misclist size to the size of the htt tx copy engine
  * to guarantee that a packet on the misclist wont be freed while it
  * is sitting in the copy engine.
  */
@@ -120,49 +121,35 @@ struct htt_rx_hash_bucket {
 #endif
 };
 
-/* IPA micro controller
-   wlan host driver
-   firmware shared memory structure */
-struct uc_shared_mem_t {
-	uint32_t *vaddr;
-	qdf_dma_addr_t paddr;
-	qdf_dma_mem_context(memctx);
-};
-
-/* Micro controller datapath offload
- * WLAN TX resources */
+/*
+ * Micro controller datapath offload
+ * WLAN TX resources
+ */
 struct htt_ipa_uc_tx_resource_t {
-	struct uc_shared_mem_t tx_ce_idx;
-	struct uc_shared_mem_t tx_comp_base;
+	qdf_shared_mem_t *tx_ce_idx;
+	qdf_shared_mem_t *tx_comp_ring;
 
 	uint32_t tx_comp_idx_paddr;
-	void **tx_buf_pool_vaddr_strg;
-	qdf_dma_addr_t *paddr_strg;
+	qdf_shared_mem_t **tx_buf_pool_strg;
 	uint32_t alloc_tx_buf_cnt;
 };
 
 /**
  * struct htt_ipa_uc_rx_resource_t
  * @rx_rdy_idx_paddr: rx ready index physical address
- * @rx_ind_ring_base: rx indication ring base memory info
+ * @rx_ind_ring: rx indication ring memory info
  * @rx_ipa_prc_done_idx: rx process done index memory info
- * @rx_ind_ring_size: rx process done ring size
- * @rx2_rdy_idx_paddr: rx process done index physical address
- * @rx2_ind_ring_base: rx process done indication ring base memory info
- * @rx2_ipa_prc_done_idx: rx process done index memory info
- * @rx2_ind_ring_size: rx process done ring size
+ * @rx2_ind_ring: rx2 indication ring memory info
+ * @rx2_ipa_prc_done_idx: rx2 process done index memory info
  */
 struct htt_ipa_uc_rx_resource_t {
 	qdf_dma_addr_t rx_rdy_idx_paddr;
-	struct uc_shared_mem_t rx_ind_ring_base;
-	struct uc_shared_mem_t rx_ipa_prc_done_idx;
-	uint32_t rx_ind_ring_size;
+	qdf_shared_mem_t *rx_ind_ring;
+	qdf_shared_mem_t *rx_ipa_prc_done_idx;
 
 	/* 2nd RX ring */
-	qdf_dma_addr_t rx2_rdy_idx_paddr;
-	struct uc_shared_mem_t rx2_ind_ring_base;
-	struct uc_shared_mem_t rx2_ipa_prc_done_idx;
-	uint32_t rx2_ind_ring_size;
+	qdf_shared_mem_t *rx2_ind_ring;
+	qdf_shared_mem_t *rx2_ipa_prc_done_idx;
 };
 
 /**
@@ -171,11 +158,19 @@ struct htt_ipa_uc_rx_resource_t {
  * @vdev_id: virtual interface id
  * @rx_packet_leng: packet length
  */
+#if HTT_PADDR64
 struct ipa_uc_rx_ring_elem_t {
 	target_paddr_t rx_packet_paddr;
 	uint32_t vdev_id;
 	uint32_t rx_packet_leng;
 };
+#else
+struct ipa_uc_rx_ring_elem_t {
+	target_paddr_t rx_packet_paddr;
+	uint16_t vdev_id;
+	uint16_t rx_packet_leng;
+};
+#endif
 
 struct htt_tx_credit_t {
 	qdf_atomic_t bus_delta;
@@ -207,19 +202,19 @@ struct msdu_ext_desc_t {
 	struct qdf_tso_flags_t tso_flags;
 	struct msdu_ext_frag_desc frags[6];
 /*
-	u_int32_t frag_ptr0;
-	u_int32_t frag_len0;
-	u_int32_t frag_ptr1;
-	u_int32_t frag_len1;
-	u_int32_t frag_ptr2;
-	u_int32_t frag_len2;
-	u_int32_t frag_ptr3;
-	u_int32_t frag_len3;
-	u_int32_t frag_ptr4;
-	u_int32_t frag_len4;
-	u_int32_t frag_ptr5;
-	u_int32_t frag_len5;
-*/
+ *	u_int32_t frag_ptr0;
+ *	u_int32_t frag_len0;
+ *	u_int32_t frag_ptr1;
+ *	u_int32_t frag_len1;
+ *	u_int32_t frag_ptr2;
+ *	u_int32_t frag_len2;
+ *	u_int32_t frag_ptr3;
+ *	u_int32_t frag_len3;
+ *	u_int32_t frag_ptr4;
+ *	u_int32_t frag_len4;
+ *	u_int32_t frag_ptr5;
+ *	u_int32_t frag_len5;
+ */
 };
 #endif  /* defined(HELIUMPLUS) */
 
@@ -298,8 +293,8 @@ struct htt_pdev_t {
 		 * than a CPU address.
 		 */
 		qdf_dma_addr_t base_paddr;
-		int32_t  size;       /* how many elems in the ring (power of 2) */
-		uint32_t size_mask;  /* size - 1, at least 16 bits long */
+		int32_t  size;	/* how many elems in the ring (power of 2) */
+		uint32_t size_mask;	/* size - 1, at least 16 bits long */
 
 		int fill_level; /* how many rx buffers to keep in the ring */
 		int fill_cnt;   /* # of rx buffers (full+empty) in the ring */
@@ -334,11 +329,13 @@ struct htt_pdev_t {
 			qdf_dma_mem_context(memctx);
 		} alloc_idx;
 
-		/* sw_rd_idx -
-		 * where HTT SW has processed bufs filled by rx MAC DMA */
+		/*
+		 * sw_rd_idx -
+		 * where HTT SW has processed bufs filled by rx MAC DMA
+		 */
 		struct {
-			unsigned msdu_desc;
-			unsigned msdu_payld;
+			unsigned int msdu_desc;
+			unsigned int msdu_payld;
 		} sw_rd_idx;
 
 		/*
@@ -413,6 +410,7 @@ struct htt_pdev_t {
 
 	struct htt_ipa_uc_tx_resource_t ipa_uc_tx_rsc;
 	struct htt_ipa_uc_rx_resource_t ipa_uc_rx_rsc;
+	int is_ipa_uc_enabled;
 
 	struct htt_tx_credit_t htt_tx_credit;
 
