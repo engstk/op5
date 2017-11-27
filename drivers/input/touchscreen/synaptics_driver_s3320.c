@@ -58,6 +58,8 @@
 #include <linux/project_info.h>
 #include "synaptics_baseline.h"
 
+#include <linux/moduleparam.h>
+
 /*----------------------Global Define--------------------------------*/
 
 #define TP_UNKNOWN 0
@@ -172,9 +174,10 @@ int Wgestrue_gesture;/* W */
 int Mgestrue_gesture;/* M */
 int Sgestrue_gesture;/* S */
 static int gesture_switch;
-
-int DisableGestureHaptic = 0;
 #endif
+
+bool haptic_feedback_disable = false;
+module_param(haptic_feedback_disable, bool, 0644);
 
 /*********************for Debug LOG switch*******************/
 #define TPD_ERR(a, arg...)  pr_debug(TPD_DEVICE ": " a, ##arg)
@@ -1281,7 +1284,7 @@ static void gesture_judge(struct synaptics_ts_data *ts)
 		input_report_key(ts->input_dev, keyCode, 0);
 		input_sync(ts->input_dev);
 		
-		if (DisableGestureHaptic)
+		if (haptic_feedback_disable)
 			qpnp_hap_ignore_next_request();
 	} else {
 		ret = i2c_smbus_read_i2c_block_data(ts->client,
@@ -1834,27 +1837,6 @@ const char __user *page, size_t count, loff_t *ppos)
 }
 
 /******************************start****************************/
-static ssize_t haptic_feedback_disable_read_func(struct file *file, char __user *user_buf, size_t count, loff_t *ppos)
-{
-	int ret = 0;
-	char page[PAGESIZE];
-
-	ret = sprintf(page, "%d\n", DisableGestureHaptic);
-	ret = simple_read_from_buffer(user_buf, count, ppos, page, strlen(page));
-
-	return ret;
-}
-
-static ssize_t haptic_feedback_disable_write_func(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
-{
-	int ret = 0;
-
-	sscanf(buf, "%d", &ret);
-	DisableGestureHaptic = ret;
-
-	return count;
-}
-
 static const struct file_operations tp_gesture_proc_fops = {
 	.write = tp_gesture_write_func,
 	.read =  tp_gesture_read_func,
@@ -1871,13 +1853,6 @@ static const struct file_operations gesture_switch_proc_fops = {
 
 static const struct file_operations coordinate_proc_fops = {
 	.read =  coordinate_proc_read_func,
-	.open = simple_open,
-	.owner = THIS_MODULE,
-};
-
-static const struct file_operations haptic_feedback_disable_proc_fops = {
-	.write = haptic_feedback_disable_write_func,
-	.read =  haptic_feedback_disable_read_func,
 	.open = simple_open,
 	.owner = THIS_MODULE,
 };
@@ -3828,12 +3803,6 @@ static int init_synaptics_proc(void)
 	if (prEntry_tmp == NULL) {
 		ret = -ENOMEM;
 		TPD_ERR("Couldn't create coordinate\n");
-	}
-
-	prEntry_tmp = proc_create("haptic_feedback_disable", 0666, prEntry_tp, &haptic_feedback_disable_proc_fops);
-	if(prEntry_tmp == NULL){
-		ret = -ENOMEM;
-		TPD_ERR("Couldn't create haptic_feedback_disable\n");
 	}
 #endif
 
