@@ -105,7 +105,7 @@
 	  //qcom,mdss-tear-check-sync-threshold-continue = <4>;
 	  //qcom,mdss-tear-check-start-pos= <1920>; /* Height */
 	  //qcom,mdss-tear-check-rd-ptr-trigger-intr= <1921>; /* Height + 1 */
-		qcom,mdss-brightness-max-level = <1023>;
+		qcom,mdss-brightness-max-level = <255>;
 		qcom,mdss-dsi-high-brightness-panel;
 		qcom,mdss-dsi-panel-acl-command = [15 01 00 00 00 00 02 55 00];
 		qcom,mdss-dsi-acl-command-state = "dsi_hs_mode";
