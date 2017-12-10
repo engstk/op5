@@ -53,6 +53,12 @@
 
 #include "../fingerprint_detect/fingerprint_detect.h"
 
+#include <linux/moduleparam.h>
+
+bool screen_state = true;
+bool haptic_feedback_disable_fprg = false;
+module_param(haptic_feedback_disable_fprg, bool, 0644);
+
 #define VER_MAJOR   1
 #define VER_MINOR   2
 #define PATCH_LEVEL 1
@@ -75,6 +81,8 @@ static LIST_HEAD(device_list);
 static DEFINE_MUTEX(device_list_lock);
 static struct wake_lock fp_wakelock;
 static struct gf_dev gf;
+
+void qpnp_hap_ignore_next_request(void);
 
 struct gf_key_map maps[] = {
 	{ EV_KEY, GF_KEY_INPUT_HOME },
@@ -504,6 +512,9 @@ static irqreturn_t gf_irq(int irq, void *handle)
 		kill_fasync(&gf_dev->async, SIGIO, POLL_IN);
 #endif
 
+	if (!screen_state && haptic_feedback_disable_fprg)
+		qpnp_hap_ignore_next_request();
+
 	return IRQ_HANDLED;
 }
 
@@ -635,6 +646,7 @@ static int goodix_fb_state_chg_callback(struct notifier_block *nb,
 				}
 #endif
 			}
+			screen_state = false;
 			set_fingerprintd_nicer(-1);
 			break;
 		case FB_BLANK_UNBLANK:
@@ -650,6 +662,7 @@ static int goodix_fb_state_chg_callback(struct notifier_block *nb,
 				}
 #endif
 			}
+			screen_state = true;
 			set_fingerprintd_nicer(0);
 			break;
 		default:
