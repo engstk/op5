@@ -55,8 +55,13 @@
 #include <linux/project_info.h>
 #include "../fingerprint_detect/fingerprint_detect.h"
 
+#include <linux/moduleparam.h>
+
 static unsigned int ignor_home_for_ESD = 0;
 module_param(ignor_home_for_ESD, uint, S_IRUGO | S_IWUSR);
+
+bool haptic_feedback_disable_fpr = false;
+module_param(haptic_feedback_disable_fpr, bool, 0644);
 
 #define FPC1020_RESET_LOW_US 1000
 #define FPC1020_RESET_HIGH1_US 100
@@ -67,6 +72,8 @@ module_param(ignor_home_for_ESD, uint, S_IRUGO | S_IWUSR);
 #define KEY_FINGERPRINT 0x2ee
 
 #define ONEPLUS_EDIT  //Onplus modify for msm8996 platform and 15801 HW
+
+void qpnp_hap_ignore_next_request(void);
 
 struct fpc1020_data {
 	struct device *dev;
@@ -513,6 +520,20 @@ static void fpc1020_suspend_resume(struct work_struct *work)
 				dev_attr_screen_state.attr.name);
 }
 
+static void set_fingerprintd_nice(int nice)
+{
+	struct task_struct *p;
+
+	read_lock(&tasklist_lock);
+	for_each_process(p) {
+		if (!memcmp(p->comm, "fingerprintd", 13)) {
+			set_user_nice(p, nice);
+			break;
+		}
+	}
+	read_unlock(&tasklist_lock);
+}
+
 #if defined(CONFIG_FB)
 static int fb_notifier_callback(struct notifier_block *self, unsigned long event, void *data)
 {
@@ -526,9 +547,11 @@ static int fb_notifier_callback(struct notifier_block *self, unsigned long event
 	if (*blank == FB_BLANK_UNBLANK) {
 		fpc1020->screen_state = 1;
 		queue_work(system_highpri_wq, &fpc1020->pm_work);
+		set_fingerprintd_nice(0);
 	} else if (*blank == FB_BLANK_POWERDOWN) {
 		fpc1020->screen_state = 0;
 		queue_work(system_highpri_wq, &fpc1020->pm_work);
+		set_fingerprintd_nice(-1);
 	}
 
 	return 0;
@@ -543,6 +566,8 @@ static irqreturn_t fpc1020_irq_handler(int irq, void *handle)
 
 	if (fpc1020->screen_state)
 		return IRQ_HANDLED;
+	else if (haptic_feedback_disable_fpr)
+			qpnp_hap_ignore_next_request();
 
 	wake_lock_timeout(&fpc1020->ttw_wl, msecs_to_jiffies(FPC_TTW_HOLD_TIME));
 
