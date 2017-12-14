@@ -55,6 +55,7 @@
 
 #include <linux/moduleparam.h>
 
+bool screen_state = true;
 bool haptic_feedback_disable_fprg = false;
 module_param(haptic_feedback_disable_fprg, bool, 0644);
 
@@ -509,7 +510,7 @@ static irqreturn_t gf_irq(int irq, void *handle)
 		kill_fasync(&gf_dev->async, SIGIO, POLL_IN);
 #endif
 
-	if (haptic_feedback_disable_fprg)
+	if (!screen_state && haptic_feedback_disable_fprg)
 		qpnp_hap_ignore_next_request();
 
 	return IRQ_HANDLED;
@@ -643,6 +644,7 @@ static int goodix_fb_state_chg_callback(struct notifier_block *nb,
 				}
 #endif
 			}
+			screen_state = false;
 			set_fingerprintd_nicer(-1);
 			break;
 		case FB_BLANK_UNBLANK:
@@ -658,6 +660,7 @@ static int goodix_fb_state_chg_callback(struct notifier_block *nb,
 				}
 #endif
 			}
+			screen_state = true;
 			set_fingerprintd_nicer(0);
 			break;
 		default:

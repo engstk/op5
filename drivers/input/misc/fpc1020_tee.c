@@ -356,7 +356,7 @@ static irqreturn_t fpc1020_irq_handler(int irq, void *handle)
 	sysfs_notify(&fpc1020->dev->kobj, NULL, dev_attr_irq.attr.name);
 	//dev_err(fpc1020->dev, "%s after sysfs_notify\n", __func__);
 
-	if (haptic_feedback_disable_fpr)
+	if (!fpc1020->screen_state && haptic_feedback_disable_fpr)
 		qpnp_hap_ignore_next_request();
 
 	return IRQ_HANDLED;
