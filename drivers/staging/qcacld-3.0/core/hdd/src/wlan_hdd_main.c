@@ -12116,7 +12116,7 @@ void hdd_pld_ipa_uc_shutdown_pipes(void)
 module_init(hdd_module_init);
 module_exit(hdd_module_exit);
 #else
-late_initcall(hdd_module_init);
+device_initcall(hdd_module_init);
 #endif
 
 MODULE_LICENSE("Dual BSD/GPL");
