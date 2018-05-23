@@ -51,6 +51,9 @@
 #define BATT_REMOVE_TEMP              -400
 #define BATT_TEMP_HYST                20
 
+const union power_supply_propval otg_on = {1,};
+const union power_supply_propval otg_off = {0,};
+
 struct smb_charger *g_chg;
 struct qpnp_pon *pm_pon;
 
@@ -5225,11 +5228,10 @@ static void set_prop_batt_health(struct smb_charger *chg, int batt_health)
 static void set_usb_switch(struct smb_charger *chg, bool enable)
 {
 	int retrger_time;
-	const union power_supply_propval otg_on = {1,};
-	const union power_supply_propval otg_off = {0,};
 
 	if (!fast_charger) {
 		pr_err("no fast_charger register found\n");
+		op_set_prop_otg_switch(chg, &otg_on);
 		return;
 	}
 
@@ -7546,6 +7548,8 @@ int smblib_init(struct smb_charger *chg)
 		smblib_err(chg, "Unsupported mode %d\n", chg->mode);
 		return -EINVAL;
 	}
+
+	op_set_prop_otg_switch(chg, &otg_on);
 
 	return rc;
 }
