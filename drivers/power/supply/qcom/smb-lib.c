@@ -51,6 +51,9 @@
 #define BATT_REMOVE_TEMP              -400
 #define BATT_TEMP_HYST                20
 
+const union power_supply_propval otg_on = {1,};
+const union power_supply_propval otg_off = {0,};
+
 struct smb_charger *g_chg;
 struct qpnp_pon *pm_pon;
 
@@ -5243,11 +5246,15 @@ static void set_usb_switch(struct smb_charger *chg, bool enable)
 
 	if (!fast_charger) {
 		pr_err("no fast_charger register found\n");
+		// Enable otg feature when not connected to dash charger
+		op_set_prop_otg_switch(chg, &otg_on);
 		return;
 	}
 
 	if (enable) {
 		pr_err("switch on fastchg\n");
+		// Disable otg feature when connected to dash charger
+		op_set_prop_otg_switch(chg, &otg_off);
 		if (chg->boot_usb_present && chg->re_trigr_dash_done) {
 			vote(chg->usb_icl_votable, AICL_RERUN_VOTER,
 					true, 0);
@@ -5271,6 +5278,8 @@ static void set_usb_switch(struct smb_charger *chg, bool enable)
 		pr_err("switch off fastchg\n");
 		usb_sw_gpio_set(0);
 		mcu_en_gpio_set(1);
+		// Enable otg feature when disconnected from dash charger
+		op_set_prop_otg_switch(chg, &otg_on);
 	}
 }
 
@@ -7553,6 +7562,9 @@ int smblib_init(struct smb_charger *chg)
 		smblib_err(chg, "Unsupported mode %d\n", chg->mode);
 		return -EINVAL;
 	}
+
+	// Enable otg feature on init
+	op_set_prop_otg_switch(chg, &otg_on);
 
 	return rc;
 }
