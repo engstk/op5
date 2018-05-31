@@ -20,10 +20,6 @@ unsigned int sysctl_sched_cfs_boost __read_mostly;
 extern struct reciprocal_value schedtune_spc_rdiv;
 extern struct target_nrg schedtune_target_nrg;
 
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-unsigned int top_app_idx = 0;
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
-
 /* Performance Boost region (B) threshold params */
 static int perf_boost_idx;
 
@@ -671,11 +667,6 @@ int schedtune_cpu_boost(int cpu)
 	struct boost_groups *bg;
 
 	bg = &per_cpu(cpu_boost_groups, cpu);
-
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-	if (allocated_group[top_app_idx] != NULL && bg->group[top_app_idx].tasks > 0 && sched_dynamic_stune_boost > bg->boost_max)
-		return sched_dynamic_stune_boost;
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
 	return bg->boost_max;
 }
 
@@ -838,18 +829,6 @@ schedtune_boostgroup_init(struct schedtune *st)
 		bg->group[st->idx].boost = 0;
 		bg->group[st->idx].tasks = 0;
 	}
-
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-    /* 
-     * Assume confidently that the index of top-app is the last assigned index.
-     * This observation is likely due to SchedTune cgroups being initialized in alphabetical order.
-     * E.g. background, foreground, system-background, top-app (last)
-     */
-	if (st->idx > top_app_idx)
-		top_app_idx = st->idx;
-
-	pr_info("STUNE INIT: top app idx: %d\n", top_app_idx);
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
 
 	return 0;
 }

@@ -38,13 +38,6 @@ static bool input_boost_enabled;
 static unsigned int input_boost_ms = 40;
 module_param(input_boost_ms, uint, 0644);
 
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-static int dynamic_stune_boost = 0;
-module_param(dynamic_stune_boost, uint, 0644);
-
-int sched_dynamic_stune_boost = 0;
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
-
 static bool sched_boost_on_input;
 module_param(sched_boost_on_input, bool, 0644);
 
@@ -197,11 +190,6 @@ static void do_input_boost_rem(struct work_struct *work)
 		i_sync_info->input_boost_min = 0;
 	}
 
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-	/* Reset dynamic stune boost value to lowest schedtune.boost value allowed */
-	sched_dynamic_stune_boost = -100;
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
-
 	/* Update policies for all online CPUs */
 	update_policy_online();
 
@@ -233,11 +221,6 @@ static void do_input_boost(struct work_struct *work)
 		i_sync_info = &per_cpu(sync_info, i);
 		i_sync_info->input_boost_min = i_sync_info->input_boost_freq;
 	}
-
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-	/* Set dynamic stune boost value */
-	sched_dynamic_stune_boost = dynamic_stune_boost;
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
 
 	/* Update policies for all online CPUs */
 	update_policy_online();
