@@ -277,18 +277,6 @@ config CPU_FREQ_GOV_SCHEDUTIL
 
 comment "CPU frequency scaling drivers"
 
-config DYNAMIC_STUNE_BOOST
-	tristate "Event base short term SchedTune top-app boost"
-	depends on CPU_BOOST && SCHED_TUNE
-	help
-	  This driver extends the CPU Boost driver and increases the
-	  SchedTune top-app boost value of one or more CPUs based on
-	  various events that might occur in the system. As of now, the
-	  events it reacts to are:
-	  - Migration of important threads from one CPU to another.
-
-	  If in doubt, say N.
-
 config CPUFREQ_DT
 	tristate "Generic DT based cpufreq driver"
 	depends on HAVE_CLK && OF
