@@ -302,9 +302,6 @@ struct qpnp_hap {
 	enum qpnp_hap_high_z		lra_high_z;
 	u32				timeout_ms;
 	u32				vmax_mv;
-	u32 				vtg_min;
-	u32 				vtg_max;
-	u32 				vtg_default;
 	u32				ilim_ma;
 	u32				sc_deb_cycles;
 	u32				int_pwm_freq_khz;
@@ -706,16 +703,16 @@ static int qpnp_hap_vmax_config(struct qpnp_hap *hap)
 	u8 reg = 0;
 	int rc, temp;
 
-	if (hap->vmax_mv < hap->vtg_min)
-		hap->vmax_mv = hap->vtg_min;
-	else if (hap->vmax_mv > hap->vtg_max)
-		hap->vmax_mv = hap->vtg_max;
+	if (hap->vmax_mv < QPNP_HAP_VMAX_MIN_MV)
+		hap->vmax_mv = QPNP_HAP_VMAX_MIN_MV;
+	else if (hap->vmax_mv > QPNP_HAP_VMAX_MAX_MV)
+		hap->vmax_mv = QPNP_HAP_VMAX_MAX_MV;
 
 	rc = qpnp_hap_read_reg(hap, &reg, QPNP_HAP_VMAX_REG(hap->base));
 	if (rc < 0)
 		return rc;
 	reg &= QPNP_HAP_VMAX_MASK;
-	temp = hap->vmax_mv / hap->vtg_min;
+	temp = hap->vmax_mv / QPNP_HAP_VMAX_MIN_MV;
 	reg |= (temp << QPNP_HAP_VMAX_SHIFT);
 
 	rc = qpnp_hap_write_reg(hap, &reg, QPNP_HAP_VMAX_REG(hap->base));
@@ -1077,10 +1074,10 @@ static ssize_t qpnp_hap_vmax_store(struct device *dev,
 	if (rc)
 		return rc;
 
-	if (data < hap->vtg_min)
-		data = hap->vtg_min;
-	else if (data > hap->vtg_max)
-		data = hap->vtg_max;
+	if (data < QPNP_HAP_VMAX_MIN_MV)
+		data = QPNP_HAP_VMAX_MIN_MV;
+	else if (data > QPNP_HAP_VMAX_MAX_MV)
+		data = QPNP_HAP_VMAX_MAX_MV;
 
 	rc = qpnp_hap_read_reg(hap, &reg, QPNP_HAP_VMAX_REG(hap->base));
 	if (rc < 0)
@@ -1405,56 +1402,14 @@ static ssize_t qpnp_hap_ramp_test_data_show(struct device *dev,
 
 }
 
-static ssize_t qpnp_hap_min_show(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
-{
-	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
-	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
-					 timed_dev);
-
-	return scnprintf(buf, PAGE_SIZE, "%d\n", hap->vtg_min);
-}
-
-static ssize_t qpnp_hap_max_show(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
-{
-	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
-	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
-					 timed_dev);
-
-	return scnprintf(buf, PAGE_SIZE, "%d\n", hap->vtg_max);
-}
-
-static ssize_t qpnp_hap_default_show(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
-{
-	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
-	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
-					 timed_dev);
-
-	return scnprintf(buf, PAGE_SIZE, "%d\n", hap->vtg_default);
-}
-
 /* sysfs attributes */
 static struct device_attribute qpnp_hap_attrs[] = {
 	__ATTR(rf_hz, (S_IRUGO | S_IWUSR | S_IWGRP),
 			qpnp_hap_rf_hz_show,
 			qpnp_hap_rf_hz_store),
-	__ATTR(vtg_level, (S_IRUGO | S_IWUSR | S_IWGRP),
+	__ATTR(vmax, (S_IRUGO | S_IWUSR | S_IWGRP),
 			qpnp_hap_vmax_show,
 			qpnp_hap_vmax_store),
-	__ATTR(vtg_min, S_IRUGO,
-			qpnp_hap_min_show,
-			NULL),
-	__ATTR(vtg_max, S_IRUGO,
-			qpnp_hap_max_show,
-			NULL),
-	__ATTR(vtg_default, S_IRUGO,
-			qpnp_hap_default_show,
-			NULL),
 	__ATTR(wf_s0, 0664, qpnp_hap_wf_s0_show, qpnp_hap_wf_s0_store),
 	__ATTR(wf_s1, 0664, qpnp_hap_wf_s1_show, qpnp_hap_wf_s1_store),
 	__ATTR(wf_s2, 0664, qpnp_hap_wf_s2_show, qpnp_hap_wf_s2_store),
@@ -2259,33 +2214,6 @@ static int qpnp_hap_parse_dt(struct qpnp_hap *hap)
 		dev_err(&pdev->dev, "Unable to read vmax\n");
 		return rc;
 	}
-
-	hap->vtg_min = QPNP_HAP_VMAX_MIN_MV;
-	rc = of_property_read_u32(pdev->dev.of_node,
-			"qcom,hap-vtg-min-mv", &temp);
-	if (!rc) {
-		hap->vtg_min = temp;
-	} else if (rc != -EINVAL) {
-		dev_err(&pdev->dev, "Unable to read vtg_min\n");
-		return rc;
-	}
-
-	hap->vtg_max = QPNP_HAP_VMAX_MAX_MV;
-	rc = of_property_read_u32(pdev->dev.of_node,
-			"qcom,hap-vtg-max-mv", &temp);
-	if (!rc) {
-		hap->vtg_max = temp;
-	} else if (rc != -EINVAL) {
-		dev_err(&pdev->dev, "Unable to read vtg_max\n");
-		return rc;
-	}
-
-	if (hap->vmax_mv < hap->vtg_min)
-		hap->vmax_mv = hap->vtg_min;
-	else if (hap->vmax_mv > hap->vtg_max)
-		hap->vmax_mv = hap->vtg_max;
-
-	hap->vtg_default = hap->vmax_mv;
 
 	hap->ilim_ma = QPNP_HAP_ILIM_MIN_MV;
 	rc = of_property_read_u32(pdev->dev.of_node, "qcom,ilim-ma", &temp);
