@@ -103,6 +103,10 @@ enum sched_boost_policy sched_boost_policy(void)
 	return boost_policy;
 }
 
+#ifdef CONFIG_DYNAMIC_STUNE_BOOST
+static int boost_slot;
+#endif // CONFIG_DYNAMIC_STUNE_BOOST
+
 static bool verify_boost_params(int old_val, int new_val)
 {
 	/*
@@ -202,9 +206,9 @@ int sched_boost_handler(struct ctl_table *table, int write,
 	if (verify_boost_params(old_val, *data)) {
 		_sched_set_boost(old_val, *data);
 		if (*data > 0)
-			stune_boost("top-app");
+			do_stune_sched_boost("top-app", &boost_slot);
 		else
-			reset_stune_boost("top-app");
+			reset_stune_boost("top-app", boost_slot);
 	} else {
 		*data = old_val;
 		ret = -EINVAL;
