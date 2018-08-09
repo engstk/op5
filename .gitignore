@@ -110,6 +110,9 @@ x509.genkey
 # Kconfig presets
 all.config
 
+# Object directory
+out/
+
 # Kdevelop4
 *.kdev4
 
