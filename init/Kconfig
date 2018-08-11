@@ -1970,6 +1970,14 @@ menuconfig MODULES
 
 	  If unsure, say Y.
 
+config MODULE_NOOP_SYSCALLS
+	bool
+	default y if !MODULES
+	help
+	  Defines the init_module and finit_module syscalls as no-ops so
+	  that userspace still thinks that modules are loaded (like the
+	  Wi-Fi driver)
+
 if MODULES
 
 config MODULE_FORCE_LOAD
