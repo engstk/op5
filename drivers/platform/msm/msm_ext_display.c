@@ -370,7 +370,7 @@ static int msm_ext_disp_hpd(struct platform_device *pdev,
 			goto end;
 	} else {
 		if (!msm_ext_disp_validate_disconnect(ext_disp, type, flags)) {
-			pr_err("Display interface (%s) not connected\n",
+			pr_debug("Display interface (%s) not connected\n",
 				msm_ext_disp_name(type));
 			ret = -EINVAL;
 			goto end;
