@@ -619,8 +619,6 @@ static void kick_sm(struct usbpd *pd, int ms)
 static void phy_sig_received(struct usbpd *pd, enum pd_sig_type sig)
 {
 	union power_supply_propval val = {1};
-	usbpd_info(&pd->dev, "%s return by oem\n", __func__);
-	return;
 
 	if (sig != HARD_RESET_SIG) {
 		usbpd_err(&pd->dev, "invalid signal (%d) received\n", sig);
@@ -766,6 +764,7 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 			 */
 		}
 
+                dual_role_instance_changed(pd->dual_role);
 
 		/* Set CC back to DRP toggle for the next disconnect */
 		val.intval = POWER_SUPPLY_TYPEC_PR_DUAL;
@@ -926,13 +925,12 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 			if (pd->psy_type == POWER_SUPPLY_TYPE_USB ||
 				pd->psy_type == POWER_SUPPLY_TYPE_USB_CDP ||
 				pd->psy_type == POWER_SUPPLY_TYPE_USB_FLOAT ||
-				usb_compliance_mode){
-				usbpd_err(&pd->dev, "sink start:pd start peripheral\n");
-				start_usb_peripheral(pd);
-			}
+                                usb_compliance_mode)
+                                start_usb_peripheral(pd);
 		}
 
 
+                dual_role_instance_changed(pd->dual_role);
 		ret = power_supply_get_property(pd->usb_psy,
 				POWER_SUPPLY_PROP_PD_ALLOWED, &val);
 		if (ret) {
@@ -1028,7 +1026,6 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 
 	case PE_SNK_TRANSITION_TO_DEFAULT:
 		if (pd->current_dr != DR_UFP) {
-			usbpd_err(&pd->dev, "to default:pd start peripheral\n");
 			stop_usb_host(pd);
 			start_usb_peripheral(pd);
 			pd->current_dr = DR_UFP;
@@ -1728,25 +1725,41 @@ static void usbpd_sm(struct work_struct *w)
 		break;
 
 	case PE_SRC_SEND_CAPABILITIES:
-		ret = pd_send_msg(pd, MSG_PS_RDY, NULL, 0, SOP_MSG);
+                ret = pd_send_msg(pd, MSG_SOURCE_CAPABILITIES, default_src_caps,
+                                ARRAY_SIZE(default_src_caps), SOP_MSG);
 		if (ret) {
 			pd->caps_count++;
 
-/* david.liu@bsp, 201710523 Fix C2C swap failed with Pixel */
-			if (pd->caps_count < 10 && pd->current_dr == DR_DFP) {
-				start_usb_host(pd, true);
-			} else if (pd->caps_count >= 10) {
-				usbpd_set_state(pd, PE_SRC_DISABLED);
-				break;
-			}
+                        if (pd->caps_count == 10 && pd->current_dr == DR_DFP) {
+                                /* Likely not PD-capable, start host now */
+                                start_usb_host(pd, true);
+                        } else if (pd->caps_count >= PD_CAPS_COUNT) {
+                                usbpd_dbg(&pd->dev, "Src CapsCounter exceeded, disabling PD\n");
+                                usbpd_set_state(pd, PE_SRC_DISABLED);
+ 
+                                val.intval = 0;
+                                power_supply_set_property(pd->usb_psy,
+                                                POWER_SUPPLY_PROP_PD_ACTIVE,
+                                                &val);
+                                break;
+                        }
+
 			kick_sm(pd, SRC_CAP_TIME);
 			break;
 		}
 
-/* david.liu@bsp, 201710523 Fix C2C swap failed with Pixel */
-		usbpd_info(&pd->dev, "Start host snd msg ok\n");
-		if (pd->current_dr == DR_DFP)
-			start_usb_host(pd, true);
+                /* transmit was successful if GoodCRC was received */
+                pd->caps_count = 0;
+                pd->hard_reset_count = 0;
+                pd->pd_connected = true; /* we know peer is PD capable */
+ 
+                /* wait for REQUEST */
+                pd->current_state = PE_SRC_SEND_CAPABILITIES_WAIT;
+                kick_sm(pd, SENDER_RESPONSE_TIME);
+ 
+                val.intval = 1;
+                power_supply_set_property(pd->usb_psy,
+                                POWER_SUPPLY_PROP_PD_ACTIVE, &val);
 		break;
 
 	case PE_SRC_SEND_CAPABILITIES_WAIT:
@@ -2156,7 +2169,6 @@ static void usbpd_sm(struct work_struct *w)
 		break;
 
 	case PE_SNK_TRANSITION_TO_DEFAULT:
-		usbpd_err(&pd->dev, "default: sink startup\n");
 		usbpd_set_state(pd, PE_SNK_STARTUP);
 		break;
 
@@ -2438,6 +2450,7 @@ static int psy_changed(struct notifier_block *nb, unsigned long evt, void *ptr)
 	if (pd->typec_mode == typec_mode)
 		return 0;
 
+#ifdef VENDOR_EDIT
 	if ((typec_mode == POWER_SUPPLY_TYPEC_SOURCE_DEFAULT) ||
 		(typec_mode == POWER_SUPPLY_TYPEC_SOURCE_MEDIUM) ||
 		(typec_mode == POWER_SUPPLY_TYPEC_SOURCE_HIGH)) {
@@ -2447,7 +2460,7 @@ static int psy_changed(struct notifier_block *nb, unsigned long evt, void *ptr)
 			return 0;
 		}
 	}
-
+#endif
 	pd->typec_mode = typec_mode;
 
 	usbpd_err(&pd->dev, "typec mode:%d present:%d type:%d orientation:%d\n",
