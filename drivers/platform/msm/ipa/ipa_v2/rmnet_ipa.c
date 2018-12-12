@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -53,6 +53,7 @@
 
 #define IPA_WWAN_DEV_NAME "rmnet_ipa%d"
 #define IPA_UPSTEAM_WLAN_IFACE_NAME "wlan0"
+#define IPA_UPSTEAM_WLAN1_IFACE_NAME "wlan1"
 
 #define IPA_WWAN_DEVICE_COUNT (1)
 
@@ -76,6 +77,8 @@ static bool egress_set, a7_ul_flt_set;
 static struct workqueue_struct *ipa_rm_q6_workqueue; /* IPA_RM workqueue*/
 static atomic_t is_initialized;
 static atomic_t is_ssr;
+static atomic_t is_after_powerup_cmpltd;
+static struct completion is_after_shutdown_cmpltd;
 static void *subsys_notify_handle;
 
 u32 apps_to_ipa_hdl, ipa_to_apps_hdl; /* get handler from ipa */
@@ -133,6 +136,14 @@ struct wwan_private {
 	struct completion resource_granted_completion;
 	enum wwan_device_status device_status;
 	struct napi_struct napi;
+};
+
+static int ssr_notifier_cb(struct notifier_block *this,
+			   unsigned long code,
+			   void *data);
+
+static struct notifier_block ssr_notifier = {
+	.notifier_call = ssr_notifier_cb,
 };
 
 /**
@@ -773,7 +784,7 @@ static int find_vchannel_name_index(const char *vchannel_name)
 {
 	int i;
 
-	for (i = 0; i < MAX_NUM_OF_MUX_CHANNEL; i++) {
+	for (i = 0; i < rmnet_index; i++) {
 		if (0 == strcmp(mux_channel[i].vchannel_name, vchannel_name))
 			return i;
 	}
@@ -790,7 +801,8 @@ static enum ipa_upstream_type find_upstream_type(const char *upstreamIface)
 			return IPA_UPSTEAM_MODEM;
 	}
 
-	if (strcmp(IPA_UPSTEAM_WLAN_IFACE_NAME, upstreamIface) == 0)
+	if ((strcmp(IPA_UPSTEAM_WLAN_IFACE_NAME, upstreamIface) == 0) ||
+		(strcmp(IPA_UPSTEAM_WLAN1_IFACE_NAME, upstreamIface) == 0))
 		return IPA_UPSTEAM_WLAN;
 	else
 		return IPA_UPSTEAM_MAX;
@@ -1432,6 +1444,8 @@ static int ipa_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 
 	/*  Extended IOCTLs  */
 	case RMNET_IOCTL_EXTENDED:
+		if (!ns_capable(dev_net(dev)->user_ns, CAP_NET_ADMIN))
+			return -EPERM;
 		IPAWANDBG("get ioctl: RMNET_IOCTL_EXTENDED\n");
 		if (copy_from_user(&extend_ioctl_data,
 			(u8 *)ifr->ifr_ifru.ifru_data,
@@ -1660,6 +1674,7 @@ static int ipa_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 				IPAWANERR("Failed to allocate memory.\n");
 				return -ENOMEM;
 			}
+			extend_ioctl_data.u.if_name[IFNAMSIZ-1] = '\0';
 			len = sizeof(wan_msg->upstream_ifname) >
 			sizeof(extend_ioctl_data.u.if_name) ?
 				sizeof(extend_ioctl_data.u.if_name) :
@@ -1955,15 +1970,34 @@ static void ipa_rm_notify(void *dev, enum ipa_rm_event event,
 	}
 }
 
+/**
+* q6_cleanup_cb() - IPA q6 cleanup
+*
+* This function is called in the sequence
+* of ipa platform shutdown
+*/
+
+static int q6_cleanup_cb(void)
+{
+	int ret = 0;
+
+	IPAWANERR("Start\n");
+	if (atomic_read(&is_initialized) &&
+		atomic_read(&is_after_powerup_cmpltd)) {
+		pr_info("Wait for q6 cleanup\n");
+		wait_for_completion(&is_after_shutdown_cmpltd);
+		pr_info("q6_cleanup_cb: Q6 SSR cleanup is taken care\n");
+	} else {
+		if (!atomic_read(&is_initialized))
+			pr_info("RmNET IPA driver is not inited\n");
+		if (!atomic_read(&is_after_powerup_cmpltd))
+			pr_info("Modem is not up\n");
+	}
+	IPAWANERR("END\n");
+	return ret;
+}
+
 /* IPA_RM related functions end*/
-
-static int ssr_notifier_cb(struct notifier_block *this,
-			   unsigned long code,
-			   void *data);
-
-static struct notifier_block ssr_notifier = {
-	.notifier_call = ssr_notifier_cb,
-};
 
 static int get_ipa_rmnet_dts_configuration(struct platform_device *pdev,
 		struct ipa_rmnet_plat_drv_res *ipa_rmnet_drv_res)
@@ -2176,6 +2210,8 @@ static int ipa_wwan_probe(struct platform_device *pdev)
 		ipa2_proxy_clk_unvote();
 	}
 	atomic_set(&is_ssr, 0);
+	atomic_set(&is_after_powerup_cmpltd, 0);
+	init_completion(&is_after_shutdown_cmpltd);
 
 	pr_info("rmnet_ipa completed initialization\n");
 	return 0;
@@ -2218,6 +2254,7 @@ setup_dflt_wan_rt_tables_err:
 setup_a7_qmap_hdr_err:
 	ipa_qmi_service_exit();
 	atomic_set(&is_ssr, 0);
+	atomic_set(&is_after_powerup_cmpltd, 0);
 	return ret;
 }
 
@@ -2406,6 +2443,7 @@ static int ssr_notifier_cb(struct notifier_block *this,
 			if (atomic_read(&is_ssr))
 				ipa_q6_post_shutdown_cleanup();
 			pr_info("IPA AFTER_SHUTDOWN handling is complete\n");
+			complete(&is_after_shutdown_cmpltd);
 			return NOTIFY_DONE;
 		}
 		if (SUBSYS_AFTER_POWERUP == code) {
@@ -2413,6 +2451,7 @@ static int ssr_notifier_cb(struct notifier_block *this,
 			if (!atomic_read(&is_initialized)
 				&& atomic_read(&is_ssr))
 				platform_driver_register(&rmnet_ipa_driver);
+			atomic_set(&is_after_powerup_cmpltd, 1);
 			pr_info("IPA AFTER_POWERUP handling is complete\n");
 			return NOTIFY_DONE;
 		}
@@ -2807,7 +2846,8 @@ static int rmnet_ipa_query_tethering_stats_wifi(
 	if (rc) {
 		kfree(sap_stats);
 		return rc;
-	} else if (reset) {
+	} else if (data == NULL) {
+		IPAWANDBG("only reset wlan stats\n");
 		kfree(sap_stats);
 		return 0;
 	}
@@ -2867,7 +2907,7 @@ int rmnet_ipa_query_tethering_stats_modem(
 	if (reset) {
 		req->reset_stats_valid = true;
 		req->reset_stats = true;
-		IPAWANERR("reset the pipe stats\n");
+		IPAWANDBG("reset the pipe stats\n");
 	} else {
 		/* print tethered-client enum */
 		IPAWANDBG("Tethered-client enum(%d)\n", data->ipa_client);
@@ -2880,6 +2920,7 @@ int rmnet_ipa_query_tethering_stats_modem(
 		kfree(resp);
 		return rc;
 	} else if (data == NULL) {
+		IPAWANDBG("only reset modem stats\n");
 		kfree(req);
 		kfree(resp);
 		return 0;
@@ -3074,10 +3115,7 @@ int rmnet_ipa_query_tethering_stats_all(
 int rmnet_ipa_reset_tethering_stats(struct wan_ioctl_reset_tether_stats *data)
 {
 	enum ipa_upstream_type upstream_type;
-	struct wan_ioctl_query_tether_stats tether_stats;
 	int rc = 0;
-
-	memset(&tether_stats, 0, sizeof(struct wan_ioctl_query_tether_stats));
 
 	/* prevent string buffer overflows */
 	data->upstreamIface[IFNAMSIZ-1] = '\0';
@@ -3099,7 +3137,7 @@ int rmnet_ipa_reset_tethering_stats(struct wan_ioctl_reset_tether_stats *data)
 	} else {
 		IPAWANDBG(" reset modem-backhaul stats\n");
 		rc = rmnet_ipa_query_tethering_stats_modem(
-			&tether_stats, true);
+			NULL, true);
 		if (rc) {
 			IPAWANERR("reset MODEM stats failed\n");
 			return rc;
@@ -3220,6 +3258,7 @@ void ipa_q6_handshake_complete(bool ssr_bootup)
 
 static int __init ipa_wwan_init(void)
 {
+	int ret = 0;
 	atomic_set(&is_initialized, 0);
 	atomic_set(&is_ssr, 0);
 
@@ -3228,6 +3267,11 @@ static int __init ipa_wwan_init(void)
 	ipa_to_apps_hdl = -1;
 
 	ipa_qmi_init();
+
+	IPAWANERR("Registering for q6_cleanup_cb\n");
+	ret = register_ipa_platform_cb(&q6_cleanup_cb);
+	if (ret == -EAGAIN)
+		IPAWANERR("Register for q6_cleanup_cb is un-successful\n");
 
 	/* Register for Modem SSR */
 	subsys_notify_handle = subsys_notif_register_notifier(SUBSYS_MODEM,

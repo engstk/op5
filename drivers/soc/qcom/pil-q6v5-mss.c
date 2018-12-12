@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -82,7 +82,6 @@ static irqreturn_t modem_err_fatal_intr_handler(int irq, void *dev_id)
 	if (drv->crash_shutdown)
 		return IRQ_HANDLED;
 
-	pr_err("Fatal error on the modem.\n");
 	subsys_set_crash_status(drv->subsys, CRASH_STATUS_ERR_FATAL);
 	restart_modem(drv);
 	return IRQ_HANDLED;

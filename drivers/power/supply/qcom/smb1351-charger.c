@@ -1417,6 +1417,7 @@ static enum power_supply_property smb1351_parallel_properties[] = {
 	POWER_SUPPLY_PROP_CHARGE_TYPE,
 	POWER_SUPPLY_PROP_PARALLEL_MODE,
 	POWER_SUPPLY_PROP_INPUT_SUSPEND,
+	POWER_SUPPLY_PROP_MODEL_NAME,
 };
 
 static int smb1351_parallel_set_chg_suspend(struct smb1351_charger *chip,
@@ -1710,6 +1711,9 @@ static int smb1351_parallel_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
 		val->intval = chip->parallel_charger_suspended;
+		break;
+	case POWER_SUPPLY_PROP_MODEL_NAME:
+		val->strval = "smb1351";
 		break;
 	default:
 		return -EINVAL;
@@ -3260,6 +3264,14 @@ static int smb1351_charger_remove(struct i2c_client *client)
 	return 0;
 }
 
+static void smb1351_charger_shutdown(struct i2c_client *client)
+{
+	struct smb1351_charger *chip = i2c_get_clientdata(client);
+
+	if (!chip->parallel_charger_suspended)
+		smb1351_usb_suspend(chip, USER, true);
+}
+
 static int smb1351_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -3339,6 +3351,7 @@ static struct i2c_driver smb1351_charger_driver = {
 	},
 	.probe		= smb1351_charger_probe,
 	.remove		= smb1351_charger_remove,
+	.shutdown	= smb1351_charger_shutdown,
 	.id_table	= smb1351_charger_id,
 };
 

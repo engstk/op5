@@ -2119,6 +2119,8 @@ void resume_console(void)
 	console_unlock();
 }
 
+#ifdef CONFIG_CONSOLE_FLUSH_ON_HOTPLUG
+
 /**
  * console_cpu_notify - print deferred console messages after CPU hotplug
  * @self: notifier struct
@@ -2147,6 +2149,8 @@ static int console_cpu_notify(struct notifier_block *self,
 	}
 	return NOTIFY_OK;
 }
+
+#endif
 
 /**
  * console_lock - lock the console system for exclusive use.
@@ -2712,7 +2716,9 @@ static int __init printk_late_init(void)
 			unregister_console(con);
 		}
 	}
+#ifdef CONFIG_CONSOLE_FLUSH_ON_HOTPLUG
 	hotcpu_notifier(console_cpu_notify, 0);
+#endif
 	return 0;
 }
 late_initcall(printk_late_init);
@@ -3180,9 +3186,8 @@ void show_regs_print_info(const char *log_lvl)
 {
 	dump_stack_print_info(log_lvl);
 
-	printk("%stask: %p ti: %p task.ti: %p\n",
-	       log_lvl, current, current_thread_info(),
-	       task_thread_info(current));
+	printk("%stask: %p task.stack: %p\n",
+	       log_lvl, current, task_stack_page(current));
 }
 
 #endif

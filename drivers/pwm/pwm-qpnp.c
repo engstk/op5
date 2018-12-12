@@ -1324,6 +1324,15 @@ static int _pwm_enable(struct qpnp_pwm_chip *chip)
 		chip->qpnp_lpg_registers[QPNP_ENABLE_CONTROL]) ||
 			chip->flags & QPNP_PWM_LUT_NOT_SUPPORTED) {
 		rc = qpnp_lpg_configure_pwm_state(chip, QPNP_PWM_ENABLE);
+		if (rc) {
+			pr_err("Failed to enable PWM mode, rc=%d\n", rc);
+			return rc;
+		}
+		rc = qpnp_lpg_glitch_removal(chip, true);
+		if (rc) {
+			pr_err("Failed to enable glitch removal, rc=%d\n", rc);
+			return rc;
+		}
 	} else if (!(chip->flags & QPNP_PWM_LUT_NOT_SUPPORTED)) {
 		rc = qpnp_lpg_configure_lut_state(chip, QPNP_LUT_ENABLE);
 	}
@@ -1475,7 +1484,7 @@ static void qpnp_pwm_disable(struct pwm_chip *pwm_chip,
  */
 int pwm_change_mode(struct pwm_device *pwm, enum pm_pwm_mode mode)
 {
-	int rc;
+	int rc = 0;
 	unsigned long flags;
 	struct qpnp_pwm_chip *chip;
 

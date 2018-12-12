@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -44,7 +44,7 @@
 #define SDE_HW_VER_172	SDE_HW_VER(1, 7, 2) /* 8996 v3.0 */
 #define SDE_HW_VER_300	SDE_HW_VER(3, 0, 0) /* 8998 v1.0 */
 #define SDE_HW_VER_301	SDE_HW_VER(3, 0, 1) /* 8998 v1.1 */
-#define SDE_HW_VER_400	SDE_HW_VER(4, 0, 0) /* msmskunk v1.0 */
+#define SDE_HW_VER_400	SDE_HW_VER(4, 0, 0) /* sdm845 v1.0 */
 
 #define IS_MSMSKUNK_TARGET(rev) IS_SDE_MAJOR_MINOR_SAME((rev), SDE_HW_VER_400)
 
@@ -119,12 +119,18 @@ enum {
  * @SDE_MIXER_LAYER           Layer mixer layer blend configuration,
  * @SDE_MIXER_SOURCESPLIT     Layer mixer supports source-split configuration
  * @SDE_MIXER_GC              Gamma correction block
+ * @SDE_DISP_PRIMARY_PREF     Primary display prefers this mixer
+ * @SDE_DISP_SECONDARY_PREF   Secondary display prefers this mixer
+ * @SDE_DISP_TERTIARY_PREF    Tertiary display prefers this mixer
  * @SDE_MIXER_MAX             maximum value
  */
 enum {
 	SDE_MIXER_LAYER = 0x1,
 	SDE_MIXER_SOURCESPLIT,
 	SDE_MIXER_GC,
+	SDE_DISP_PRIMARY_PREF,
+	SDE_DISP_SECONDARY_PREF,
+	SDE_DISP_TERTIARY_PREF,
 	SDE_MIXER_MAX
 };
 
@@ -180,11 +186,17 @@ enum {
  * CTL sub-blocks
  * @SDE_CTL_SPLIT_DISPLAY       CTL supports video mode split display
  * @SDE_CTL_PINGPONG_SPLIT      CTL supports pingpong split
+ * @SDE_CTL_PRIMARY_PREF        Primary display perfers this CTL
+ * @SDE_CTL_SECONDARY_PREF      Secondary display perfers this CTL
+ * @SDE_CTL_TERTIARY_PREF       Tertiary display perfers this CTL
  * @SDE_CTL_MAX
  */
 enum {
 	SDE_CTL_SPLIT_DISPLAY = 0x1,
 	SDE_CTL_PINGPONG_SPLIT,
+	SDE_CTL_PRIMARY_PREF,
+	SDE_CTL_SECONDARY_PREF,
+	SDE_CTL_TERTIARY_PREF,
 	SDE_CTL_MAX
 };
 

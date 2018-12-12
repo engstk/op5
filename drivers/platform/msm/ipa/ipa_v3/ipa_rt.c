@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -50,6 +50,8 @@ static int ipa_generate_rt_hw_rule(enum ipa_ip_type ip,
 	struct ipa3_rt_entry *entry, u8 *buf)
 {
 	struct ipahal_rt_rule_gen_params gen_params;
+	struct ipa3_hdr_entry *hdr_entry;
+	struct ipa3_hdr_proc_ctx_entry *hdr_proc_entry;
 	int res = 0;
 
 	memset(&gen_params, 0, sizeof(gen_params));
@@ -67,6 +69,25 @@ static int ipa_generate_rt_hw_rule(enum ipa_ip_type ip,
 				gen_params.dst_pipe_idx, entry->rule.dst);
 		WARN_ON_RATELIMIT_IPA(1);
 		return -EPERM;
+	}
+
+	/* Adding check to confirm still
+	 * header entry present in header table or not
+	 */
+
+	if (entry->hdr) {
+		hdr_entry = ipa3_id_find(entry->rule.hdr_hdl);
+		if (!hdr_entry || hdr_entry->cookie != IPA_HDR_COOKIE) {
+			IPAERR_RL("Header entry already deleted\n");
+			return -EPERM;
+		}
+	} else if (entry->proc_ctx) {
+		hdr_proc_entry = ipa3_id_find(entry->rule.hdr_proc_ctx_hdl);
+		if (!hdr_proc_entry ||
+			hdr_proc_entry->cookie != IPA_PROC_HDR_COOKIE) {
+			IPAERR_RL("Proc header entry already deleted\n");
+			return -EPERM;
+		}
 	}
 
 	if (entry->proc_ctx || (entry->hdr && entry->hdr->is_hdr_proc_ctx)) {
@@ -887,6 +908,20 @@ static int __ipa_del_rt_tbl(struct ipa3_rt_tbl *entry)
 	return 0;
 }
 
+static int __ipa_rt_validate_rule_id(u16 rule_id)
+{
+	if (!rule_id)
+		return 0;
+
+	if ((rule_id < ipahal_get_rule_id_hi_bit()) ||
+		(rule_id >= ((ipahal_get_rule_id_hi_bit()<<1)-1))) {
+		IPAERR_RL("Invalid rule_id provided 0x%x\n",
+			rule_id);
+		return -EPERM;
+	}
+
+	return 0;
+}
 static int __ipa_rt_validate_hndls(const struct ipa_rt_rule *rule,
 				struct ipa3_hdr_entry **hdr,
 				struct ipa3_hdr_proc_ctx_entry **proc_ctx)
@@ -918,7 +953,8 @@ static int __ipa_rt_validate_hndls(const struct ipa_rt_rule *rule,
 static int __ipa_create_rt_entry(struct ipa3_rt_entry **entry,
 		const struct ipa_rt_rule *rule,
 		struct ipa3_rt_tbl *tbl, struct ipa3_hdr_entry *hdr,
-		struct ipa3_hdr_proc_ctx_entry *proc_ctx)
+		struct ipa3_hdr_proc_ctx_entry *proc_ctx,
+		u16 rule_id, bool user)
 {
 	int id;
 
@@ -933,13 +969,19 @@ static int __ipa_create_rt_entry(struct ipa3_rt_entry **entry,
 	(*(entry))->tbl = tbl;
 	(*(entry))->hdr = hdr;
 	(*(entry))->proc_ctx = proc_ctx;
-	id = ipa3_alloc_rule_id(&tbl->rule_ids);
-	if (id < 0) {
-		IPAERR_RL("failed to allocate rule id\n");
-		WARN_ON_RATELIMIT_IPA(1);
-		goto alloc_rule_id_fail;
+	if (rule_id) {
+		id = rule_id;
+		(*(entry))->rule_id_valid = 1;
+	} else {
+		id = ipa3_alloc_rule_id(&tbl->rule_ids);
+		if (id < 0) {
+			IPAERR_RL("failed to allocate rule id\n");
+			WARN_ON_RATELIMIT_IPA(1);
+			goto alloc_rule_id_fail;
+		}
 	}
 	(*(entry))->rule_id = id;
+	(*(entry))->ipacm_installed = user;
 
 	return 0;
 
@@ -984,7 +1026,8 @@ ipa_insert_failed:
 }
 
 static int __ipa_add_rt_rule(enum ipa_ip_type ip, const char *name,
-		const struct ipa_rt_rule *rule, u8 at_rear, u32 *rule_hdl)
+		const struct ipa_rt_rule *rule, u8 at_rear, u32 *rule_hdl,
+		u16 rule_id, bool user)
 {
 	struct ipa3_rt_tbl *tbl;
 	struct ipa3_rt_entry *entry;
@@ -994,6 +1037,8 @@ static int __ipa_add_rt_rule(enum ipa_ip_type ip, const char *name,
 	if (__ipa_rt_validate_hndls(rule, &hdr, &proc_ctx))
 		goto error;
 
+	if (__ipa_rt_validate_rule_id(rule_id))
+		goto error;
 
 	tbl = __ipa_add_rt_tbl(ip, name);
 	if (tbl == NULL || (tbl->cookie != IPA_RT_TBL_COOKIE)) {
@@ -1012,7 +1057,8 @@ static int __ipa_add_rt_rule(enum ipa_ip_type ip, const char *name,
 		goto error;
 	}
 
-	if (__ipa_create_rt_entry(&entry, rule, tbl, hdr, proc_ctx))
+	if (__ipa_create_rt_entry(&entry, rule, tbl, hdr, proc_ctx,
+		rule_id, user))
 		goto error;
 
 	if (at_rear)
@@ -1043,7 +1089,7 @@ static int __ipa_add_rt_rule_after(struct ipa3_rt_tbl *tbl,
 	if (__ipa_rt_validate_hndls(rule, &hdr, &proc_ctx))
 		goto error;
 
-	if (__ipa_create_rt_entry(&entry, rule, tbl, hdr, proc_ctx))
+	if (__ipa_create_rt_entry(&entry, rule, tbl, hdr, proc_ctx, 0, true))
 		goto error;
 
 	list_add(&entry->link, &((*add_after_entry)->link));
@@ -1072,7 +1118,23 @@ error:
  *
  * Note:	Should not be called from atomic context
  */
+
 int ipa3_add_rt_rule(struct ipa_ioc_add_rt_rule *rules)
+{
+	return ipa3_add_rt_rule_usr(rules, false);
+}
+/**
+ * ipa3_add_rt_rule_usr() - Add the specified routing rules to SW and optionally
+ * commit to IPA HW
+ * @rules:		[inout] set of routing rules to add
+ * @user_only:	[in] indicate installed by userspace module
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+
+int ipa3_add_rt_rule_usr(struct ipa_ioc_add_rt_rule *rules, bool user_only)
 {
 	int i;
 	int ret;
@@ -1087,8 +1149,55 @@ int ipa3_add_rt_rule(struct ipa_ioc_add_rt_rule *rules)
 		if (__ipa_add_rt_rule(rules->ip, rules->rt_tbl_name,
 					&rules->rules[i].rule,
 					rules->rules[i].at_rear,
-					&rules->rules[i].rt_rule_hdl)) {
-			IPAERR_RL("failed to add rt rule %d\n", i);
+					&rules->rules[i].rt_rule_hdl,
+					0,
+					user_only)) {
+			IPAERR("failed to add rt rule %d\n", i);
+			rules->rules[i].status = IPA_RT_STATUS_OF_ADD_FAILED;
+		} else {
+			rules->rules[i].status = 0;
+		}
+	}
+
+	if (rules->commit)
+		if (ipa3_ctx->ctrl->ipa3_commit_rt(rules->ip)) {
+			ret = -EPERM;
+			goto bail;
+		}
+
+	ret = 0;
+bail:
+	mutex_unlock(&ipa3_ctx->lock);
+	return ret;
+}
+
+/**
+ * ipa3_add_rt_rule_ext() - Add the specified routing rules to SW with rule id
+ * and optionally commit to IPA HW
+ * @rules:	[inout] set of routing rules to add
+ *
+ * Returns:	0 on success, negative on failure
+ *
+ * Note:	Should not be called from atomic context
+ */
+int ipa3_add_rt_rule_ext(struct ipa_ioc_add_rt_rule_ext *rules)
+{
+	int i;
+	int ret;
+
+	if (rules == NULL || rules->num_rules == 0 || rules->ip >= IPA_IP_MAX) {
+		IPAERR("bad parm\n");
+		return -EINVAL;
+	}
+
+	mutex_lock(&ipa3_ctx->lock);
+	for (i = 0; i < rules->num_rules; i++) {
+		if (__ipa_add_rt_rule(rules->ip, rules->rt_tbl_name,
+					&rules->rules[i].rule,
+					rules->rules[i].at_rear,
+					&rules->rules[i].rt_rule_hdl,
+					rules->rules[i].rule_id, true)) {
+			IPAERR("failed to add rt rule %d\n", i);
 			rules->rules[i].status = IPA_RT_STATUS_OF_ADD_FAILED;
 		} else {
 			rules->rules[i].status = 0;
@@ -1214,6 +1323,8 @@ int __ipa3_del_rt_rule(u32 rule_hdl)
 {
 	struct ipa3_rt_entry *entry;
 	int id;
+	struct ipa3_hdr_entry *hdr_entry;
+	struct ipa3_hdr_proc_ctx_entry *hdr_proc_entry;
 
 	entry = ipa3_id_find(rule_hdl);
 
@@ -1227,6 +1338,34 @@ int __ipa3_del_rt_rule(u32 rule_hdl)
 		return -EINVAL;
 	}
 
+	if (!strcmp(entry->tbl->name, IPA_DFLT_RT_TBL_NAME)) {
+		IPADBG("Deleting rule from default rt table idx=%u\n",
+			entry->tbl->idx);
+		if (entry->tbl->rule_cnt == 1) {
+			IPAERR_RL("Default tbl last rule cannot be deleted\n");
+			return -EINVAL;
+		}
+	}
+
+	/* Adding check to confirm still
+	 * header entry present in header table or not
+	 */
+
+	if (entry->hdr) {
+		hdr_entry = ipa3_id_find(entry->rule.hdr_hdl);
+		if (!hdr_entry || hdr_entry->cookie != IPA_HDR_COOKIE) {
+			IPAERR_RL("Header entry already deleted\n");
+			return -EINVAL;
+		}
+	} else if (entry->proc_ctx) {
+		hdr_proc_entry = ipa3_id_find(entry->rule.hdr_proc_ctx_hdl);
+		if (!hdr_proc_entry ||
+			hdr_proc_entry->cookie != IPA_PROC_HDR_COOKIE) {
+			IPAERR_RL("Proc header entry already deleted\n");
+			return -EINVAL;
+		}
+	}
+
 	if (entry->hdr)
 		__ipa3_release_hdr(entry->hdr->id);
 	else if (entry->proc_ctx)
@@ -1236,7 +1375,9 @@ int __ipa3_del_rt_rule(u32 rule_hdl)
 	IPADBG("del rt rule tbl_idx=%d rule_cnt=%d rule_id=%d\n ref_cnt=%u",
 		entry->tbl->idx, entry->tbl->rule_cnt,
 		entry->rule_id, entry->tbl->ref_cnt);
-	idr_remove(&entry->tbl->rule_ids, entry->rule_id);
+		/* if rule id was allocated from idr, remove it */
+	if (!entry->rule_id_valid)
+		idr_remove(&entry->tbl->rule_ids, entry->rule_id);
 	if (entry->tbl->rule_cnt == 0 && entry->tbl->ref_cnt == 0) {
 		if (__ipa_del_rt_tbl(entry->tbl))
 			IPAERR_RL("fail to del RT tbl\n");
@@ -1332,13 +1473,14 @@ bail:
 /**
  * ipa3_reset_rt() - reset the current SW routing table of specified type
  * (does not commit to HW)
- * @ip:	The family of routing tables
+ * @ip:			[in] The family of routing tables
+ * @user_only:	[in] indicate delete rules installed by userspace
  *
  * Returns:	0 on success, negative on failure
  *
  * Note:	Should not be called from atomic context
  */
-int ipa3_reset_rt(enum ipa_ip_type ip)
+int ipa3_reset_rt(enum ipa_ip_type ip, bool user_only)
 {
 	struct ipa3_rt_tbl *tbl;
 	struct ipa3_rt_tbl *tbl_next;
@@ -1348,6 +1490,7 @@ int ipa3_reset_rt(enum ipa_ip_type ip)
 	struct ipa3_rt_tbl_set *rset;
 	u32 apps_start_idx;
 	int id;
+	bool tbl_user = false;
 
 	if (ip >= IPA_IP_MAX) {
 		IPAERR_RL("bad parm\n");
@@ -1365,7 +1508,7 @@ int ipa3_reset_rt(enum ipa_ip_type ip)
 	 * issue a reset on the filtering module of same IP type since
 	 * filtering rules point to routing tables
 	 */
-	if (ipa3_reset_flt(ip))
+	if (ipa3_reset_flt(ip, user_only))
 		IPAERR_RL("fail to reset flt ip=%d\n", ip);
 
 	set = &ipa3_ctx->rt_tbl_set[ip];
@@ -1373,6 +1516,7 @@ int ipa3_reset_rt(enum ipa_ip_type ip)
 	mutex_lock(&ipa3_ctx->lock);
 	IPADBG("reset rt ip=%d\n", ip);
 	list_for_each_entry_safe(tbl, tbl_next, &set->head_rt_tbl_list, link) {
+		tbl_user = false;
 		list_for_each_entry_safe(rule, rule_next,
 					 &tbl->head_rt_rule_list, link) {
 			if (ipa3_id_find(rule->id) == NULL) {
@@ -1381,6 +1525,12 @@ int ipa3_reset_rt(enum ipa_ip_type ip)
 				return -EFAULT;
 			}
 
+			/* indicate if tbl used for user-specified rules*/
+			if (rule->ipacm_installed) {
+				IPADBG("tbl_user %d, tbl-index %d\n",
+				tbl_user, tbl->id);
+				tbl_user = true;
+			}
 			/*
 			 * for the "default" routing tbl, remove all but the
 			 *  last rule
@@ -1388,19 +1538,23 @@ int ipa3_reset_rt(enum ipa_ip_type ip)
 			if (tbl->idx == apps_start_idx && tbl->rule_cnt == 1)
 				continue;
 
-			list_del(&rule->link);
-			tbl->rule_cnt--;
-			if (rule->hdr)
-				__ipa3_release_hdr(rule->hdr->id);
-			else if (rule->proc_ctx)
-				__ipa3_release_hdr_proc_ctx(rule->proc_ctx->id);
-			rule->cookie = 0;
-			idr_remove(&tbl->rule_ids, rule->rule_id);
-			id = rule->id;
-			kmem_cache_free(ipa3_ctx->rt_rule_cache, rule);
+			if (!user_only ||
+				rule->ipacm_installed) {
+				list_del(&rule->link);
+				tbl->rule_cnt--;
+				if (rule->hdr)
+					__ipa3_release_hdr(rule->hdr->id);
+				else if (rule->proc_ctx)
+					__ipa3_release_hdr_proc_ctx(
+						rule->proc_ctx->id);
+				rule->cookie = 0;
+				idr_remove(&tbl->rule_ids, rule->rule_id);
+				id = rule->id;
+				kmem_cache_free(ipa3_ctx->rt_rule_cache, rule);
 
-			/* remove the handle from the database */
-			ipa3_id_remove(id);
+				/* remove the handle from the database */
+				ipa3_id_remove(id);
+			}
 		}
 
 		if (ipa3_id_find(tbl->id) == NULL) {
@@ -1412,27 +1566,40 @@ int ipa3_reset_rt(enum ipa_ip_type ip)
 
 		/* do not remove the "default" routing tbl which has index 0 */
 		if (tbl->idx != apps_start_idx) {
-			idr_destroy(&tbl->rule_ids);
-			if (tbl->in_sys[IPA_RULE_HASHABLE] ||
-				tbl->in_sys[IPA_RULE_NON_HASHABLE]) {
-				list_move(&tbl->link, &rset->head_rt_tbl_list);
-				clear_bit(tbl->idx,
+			if (!user_only || tbl_user) {
+				idr_destroy(&tbl->rule_ids);
+				if (tbl->in_sys[IPA_RULE_HASHABLE] ||
+					tbl->in_sys[IPA_RULE_NON_HASHABLE]) {
+					list_move(&tbl->link,
+						&rset->head_rt_tbl_list);
+					clear_bit(tbl->idx,
 					  &ipa3_ctx->rt_idx_bitmap[ip]);
-				set->tbl_cnt--;
-				IPADBG("rst sys rt tbl_idx=%d tbl_cnt=%d\n",
+					set->tbl_cnt--;
+					IPADBG("rst tbl_idx=%d cnt=%d\n",
 						tbl->idx, set->tbl_cnt);
-			} else {
-				list_del(&tbl->link);
-				set->tbl_cnt--;
-				clear_bit(tbl->idx,
+				} else {
+					list_del(&tbl->link);
+					set->tbl_cnt--;
+					clear_bit(tbl->idx,
 					  &ipa3_ctx->rt_idx_bitmap[ip]);
-				IPADBG("rst rt tbl_idx=%d tbl_cnt=%d\n",
+					IPADBG("rst rt tbl_idx=%d tbl_cnt=%d\n",
 						tbl->idx, set->tbl_cnt);
-				kmem_cache_free(ipa3_ctx->rt_tbl_cache, tbl);
+					kmem_cache_free(ipa3_ctx->rt_tbl_cache,
+						tbl);
+				}
+				/* remove the handle from the database */
+				ipa3_id_remove(id);
 			}
-			/* remove the handle from the database */
-			ipa3_id_remove(id);
 		}
+	}
+
+	/* commit the change to IPA-HW */
+	if (ipa3_ctx->ctrl->ipa3_commit_rt(IPA_IP_v4) ||
+		ipa3_ctx->ctrl->ipa3_commit_rt(IPA_IP_v6)) {
+		IPAERR("fail to commit rt-rule\n");
+		WARN_ON_RATELIMIT_IPA(1);
+		mutex_unlock(&ipa3_ctx->lock);
+		return -EPERM;
 	}
 	mutex_unlock(&ipa3_ctx->lock);
 
@@ -1544,6 +1711,8 @@ static int __ipa_mdfy_rt_rule(struct ipa_rt_rule_mdfy *rtrule)
 	struct ipa3_rt_entry *entry;
 	struct ipa3_hdr_entry *hdr = NULL;
 	struct ipa3_hdr_proc_ctx_entry *proc_ctx = NULL;
+	struct ipa3_hdr_entry *hdr_entry;
+	struct ipa3_hdr_proc_ctx_entry *hdr_proc_entry;
 
 	if (rtrule->rule.hdr_hdl) {
 		hdr = ipa3_id_find(rtrule->rule.hdr_hdl);
@@ -1569,6 +1738,25 @@ static int __ipa_mdfy_rt_rule(struct ipa_rt_rule_mdfy *rtrule)
 	if (entry->cookie != IPA_RT_RULE_COOKIE) {
 		IPAERR_RL("bad params\n");
 		goto error;
+	}
+
+	/* Adding check to confirm still
+	 * header entry present in header table or not
+	 */
+
+	if (entry->hdr) {
+		hdr_entry = ipa3_id_find(entry->rule.hdr_hdl);
+		if (!hdr_entry || hdr_entry->cookie != IPA_HDR_COOKIE) {
+			IPAERR_RL("Header entry already deleted\n");
+			return -EPERM;
+		}
+	} else if (entry->proc_ctx) {
+		hdr_proc_entry = ipa3_id_find(entry->rule.hdr_proc_ctx_hdl);
+		if (!hdr_proc_entry ||
+			hdr_proc_entry->cookie != IPA_PROC_HDR_COOKIE) {
+			IPAERR_RL("Proc header entry already deleted\n");
+			return -EPERM;
+		}
 	}
 
 	if (entry->hdr)

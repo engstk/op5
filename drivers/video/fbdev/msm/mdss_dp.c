@@ -3056,7 +3056,6 @@ static void mdss_dp_mainlink_push_idle(struct mdss_panel_data *pdata)
 		if (mdss_dp_aux_send_psm_request(dp_drv, true))
 			pr_err("Failed to enter low power mode\n");
 	}
-
 	reinit_completion(&dp_drv->idle_comp);
 	mdss_dp_state_ctrl(&dp_drv->ctrl_io, ST_PUSH_IDLE);
 	if (!wait_for_completion_timeout(&dp_drv->idle_comp,
