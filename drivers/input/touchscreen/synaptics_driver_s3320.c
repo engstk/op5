@@ -57,6 +57,8 @@
 #include <linux/project_info.h>
 #include "synaptics_baseline.h"
 
+#include <linux/moduleparam.h>
+
 /*----------------------Global Define--------------------------------*/
 
 #define TP_UNKNOWN 0
@@ -178,14 +180,17 @@ struct test_header {
 #define KEY_BUTTON_LEFT     KEY_BACK
 #define KEY_BUTTON_RIGHT    KEY_APPSELECT
 
+bool haptic_feedback_disable = false;
+module_param(haptic_feedback_disable, bool, 0644);
+
 /*********************for Debug LOG switch*******************/
-#define TPD_ERR(a, arg...)  pr_err(TPD_DEVICE ": " a, ##arg)
-#define TPDTM_DMESG(a, arg...)  printk(TPD_DEVICE ": " a, ##arg)
+#define TPD_ERR(a, arg...)  pr_debug(TPD_DEVICE ": " a, ##arg)
+#define TPDTM_DMESG(a, arg...)  pr_debug(TPD_DEVICE ": " a, ##arg)
 
 #define TPD_DEBUG(a, arg...)\
 	do {\
 		if (tp_debug)\
-		pr_err(TPD_DEVICE ": " a, ##arg);\
+		pr_debug(TPD_DEVICE ": " a, ##arg);\
 	} while (0)
 
 /*-------------------------------Global Variable-----------------------------*/
@@ -221,6 +226,8 @@ static struct synaptics_ts_data *ts_g = NULL;
 static struct workqueue_struct *synaptics_wq = NULL;
 static struct workqueue_struct *synaptics_report = NULL;
 static struct workqueue_struct *get_base_report = NULL;
+
+void qpnp_hap_ignore_next_request(void);
 
 #ifdef SUPPORT_GESTURE
 static uint32_t clockwise;
@@ -1322,6 +1329,9 @@ static void gesture_judge(struct synaptics_ts_data *ts)
 		input_sync(ts->input_dev);
 		input_report_key(ts->input_dev, keyCode, 0);
 		input_sync(ts->input_dev);
+
+		if (haptic_feedback_disable)
+			qpnp_hap_ignore_next_request();
 	} else {
 		ret = i2c_smbus_read_i2c_block_data(ts->client, F12_2D_CTRL20, 3, &(reportbuf[0x0]));
 		ret = reportbuf[2] & 0x20;
@@ -1342,7 +1352,6 @@ static void gesture_judge(struct synaptics_ts_data *ts)
 }
 #endif
 /***************end****************/
-static char prlog_count;
 #ifdef REPORT_2D_PRESSURE
 static unsigned char pres_value;
 #endif
@@ -1538,8 +1547,6 @@ void int_touch(void)
 	last_status = current_status & 0x02;
 
 	if (finger_num == 0/* && last_status && (check_key <= 1)*/) {
-		if (3 == (++prlog_count % 6))
-			TPD_ERR("all finger up\n");
 		input_report_key(ts->input_dev, BTN_TOOL_FINGER, 0);
 #ifndef TYPE_B_PROTOCOL
 		input_mt_sync(ts->input_dev);
