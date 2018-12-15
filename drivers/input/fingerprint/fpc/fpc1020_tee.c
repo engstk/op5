@@ -55,8 +55,13 @@
 #include <linux/project_info.h>
 #include "../fingerprint_detect/fingerprint_detect.h"
 
+#include <linux/moduleparam.h>
+
 static unsigned int ignor_home_for_ESD = 0;
 module_param(ignor_home_for_ESD, uint, S_IRUGO | S_IWUSR);
+
+bool haptic_feedback_disable_fpr = false;
+module_param(haptic_feedback_disable_fpr, bool, 0644);
 
 #define FPC1020_RESET_LOW_US 1000
 #define FPC1020_RESET_HIGH1_US 100
@@ -64,6 +69,8 @@ module_param(ignor_home_for_ESD, uint, S_IRUGO | S_IWUSR);
 #define FPC_TTW_HOLD_TIME 1000
 
 #define ONEPLUS_EDIT  //Onplus modify for msm8996 platform and 15801 HW
+
+void qpnp_hap_ignore_next_request(void);
 
 struct fpc1020_data {
 	struct device *dev;
@@ -514,6 +521,9 @@ static irqreturn_t fpc1020_irq_handler(int irq, void *handle)
 	sysfs_notify(&fpc1020->dev->kobj, NULL, dev_attr_irq.attr.name);
 	//dev_err(fpc1020->dev, "%s after sysfs_notify\n", __func__);
 
+	if (fpc1020->screen_state == 0 && haptic_feedback_disable_fpr)
+		qpnp_hap_ignore_next_request();
+	
 	return IRQ_HANDLED;
 }
 
