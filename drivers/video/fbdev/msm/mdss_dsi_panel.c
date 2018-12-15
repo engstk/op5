@@ -1391,6 +1391,21 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 
 	pr_debug("%s: ndx=%d cmd_cnt=%d\n", __func__,
 			ctrl->ndx, on_cmds->cmd_cnt);
+
+#if defined(CONFIG_IRIS2P_FULL_SUPPORT)
+#if !defined(WITHOUT_IRIS)
+        iris_init(ctrl);
+#endif
+         if (on_cmds->cmd_cnt)
+                 mdss_dsi_panel_cmds_send(ctrl, on_cmds, CMD_REQ_COMMIT);
+#if !defined(WITHOUT_IRIS)
+        iris_lightup(ctrl);
+#endif
+#else
+        if (on_cmds->cmd_cnt)
+                mdss_dsi_panel_cmds_send(ctrl, on_cmds, CMD_REQ_COMMIT);
+#endif
+
 	mutex_lock(&ctrl->panel_mode_lock);
 	ctrl->is_panel_on = true;
 	mutex_unlock(&ctrl->panel_mode_lock);
@@ -1424,21 +1439,6 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 		   mdss_dsi_panel_get_adaption_mode(ctrl));
 	}
 
-#if defined(CONFIG_IRIS2P_FULL_SUPPORT)
-#if !defined(WITHOUT_IRIS)
-	iris_init(ctrl);
-#endif
-	 if (on_cmds->cmd_cnt)
-		 mdss_dsi_panel_cmds_send(ctrl, on_cmds, CMD_REQ_COMMIT);
-#if !defined(WITHOUT_IRIS)
-	iris_lightup(ctrl);
-#endif
-#else
-	if (on_cmds->cmd_cnt)
-		mdss_dsi_panel_cmds_send(ctrl, on_cmds, CMD_REQ_COMMIT);
-#endif
- 
- 
 	 if (pinfo->compression_mode == COMPRESSION_DSC)
 		 mdss_dsi_panel_dsc_pps_send(ctrl, pinfo);
  
