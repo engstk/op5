@@ -1409,7 +1409,7 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 	mutex_lock(&ctrl->panel_mode_lock);
 	ctrl->is_panel_on = true;
 	mutex_unlock(&ctrl->panel_mode_lock);
-
+/*
 	if (mdss_dsi_panel_get_srgb_mode(ctrl)) {
 		mdss_dsi_panel_set_srgb_mode(ctrl,
 			mdss_dsi_panel_get_srgb_mode(ctrl));
@@ -1438,6 +1438,7 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 		mdss_dsi_panel_set_adaption_mode(ctrl,
 		   mdss_dsi_panel_get_adaption_mode(ctrl));
 	}
+*/
 
 	 if (pinfo->compression_mode == COMPRESSION_DSC)
 		 mdss_dsi_panel_dsc_pps_send(ctrl, pinfo);
@@ -1451,6 +1452,34 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
  end:
 	 pr_debug("%s:-\n", __func__);
     pr_err("%s end\n", __func__);
+    if (mdss_dsi_panel_get_srgb_mode(ctrl)) {
+		mdss_dsi_panel_set_srgb_mode(ctrl,
+			mdss_dsi_panel_get_srgb_mode(ctrl));
+	}
+
+	if (mdss_dsi_panel_get_adobe_rgb_mode(ctrl)) {
+		mdss_dsi_panel_set_adobe_rgb_mode(ctrl,
+			mdss_dsi_panel_get_adobe_rgb_mode(ctrl));
+	}
+
+	if (mdss_dsi_panel_get_dci_p3_mode(ctrl)) {
+		mdss_dsi_panel_set_dci_p3_mode(ctrl,
+			mdss_dsi_panel_get_dci_p3_mode(ctrl));
+	}
+
+	if (mdss_dsi_panel_get_night_mode(ctrl)) {
+		mdss_dsi_panel_set_night_mode(ctrl,
+		mdss_dsi_panel_get_night_mode(ctrl));
+	}
+	if (mdss_dsi_panel_get_oneplus_mode(ctrl)) {
+		mdss_dsi_panel_set_oneplus_mode(ctrl,
+			mdss_dsi_panel_get_oneplus_mode(ctrl));
+	}
+
+	if (mdss_dsi_panel_get_adaption_mode(ctrl)) {
+		mdss_dsi_panel_set_adaption_mode(ctrl,
+		   mdss_dsi_panel_get_adaption_mode(ctrl));
+	}
 	 return ret;
 }
  
