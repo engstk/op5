@@ -586,6 +586,9 @@ struct mdss_dsi_ctrl_pdata {
 	int disp_vci_en_gpio;
 	int disp_poc_en_gpio;
 
+	struct dsi_panel_cmds hbm_on_cmds;
+	struct dsi_panel_cmds hbm_off_cmds;
+	int hbm_mode;
 
 	bool is_panel_on;
 	bool setting_mode_loaded;
@@ -650,6 +653,8 @@ struct dsi_status_data {
 int mdss_dsi_panel_set_srgb_mode(struct mdss_dsi_ctrl_pdata *ctrl, int level);
 int mdss_dsi_panel_get_srgb_mode(struct mdss_dsi_ctrl_pdata *ctrl);
 
+int mdss_dsi_panel_set_hbm_mode(struct mdss_dsi_ctrl_pdata *ctrl, int level);
+int mdss_dsi_panel_get_hbm_mode(struct mdss_dsi_ctrl_pdata *ctrl);
 
 int mdss_dsi_panel_set_adobe_rgb_mode
 	(struct mdss_dsi_ctrl_pdata *ctrl, int level);
