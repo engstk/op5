@@ -98,6 +98,10 @@ struct fpc1020_data {
 	#if defined(CONFIG_FB)
 	struct notifier_block fb_notif;
     #endif
+        struct work_struct pm_work;
+        int proximity_state; /* 0:far 1:near */
+        bool irq_enabled;
+	spinlock_t irq_lock;
 };
 
 static int fpc1020_request_named_gpio(struct fpc1020_data *fpc1020,
@@ -270,7 +274,14 @@ static ssize_t irq_get(struct device* device,
 			     char* buffer)
 {
 	struct fpc1020_data* fpc1020 = dev_get_drvdata(device);
-	int irq = gpio_get_value(fpc1020->irq_gpio);
+        bool irq_enabled;
+	int irq;
+
+	spin_lock(&fpc1020->irq_lock);
+	irq_enabled = fpc1020->irq_enabled;
+	spin_unlock(&fpc1020->irq_lock);
+
+	irq = irq_enabled && gpio_get_value(fpc1020->irq_gpio);
 	return scnprintf(buffer, PAGE_SIZE, "%i\n", irq);
 }
 
@@ -289,6 +300,24 @@ static ssize_t irq_ack(struct device* device,
 }
 static DEVICE_ATTR(irq, S_IRUSR | S_IWUSR, irq_get, irq_ack);
 
+
+static void set_fpc_irq(struct fpc1020_data *fpc1020, bool enable)
+{
+	bool irq_enabled;
+
+	spin_lock(&fpc1020->irq_lock);
+	irq_enabled = fpc1020->irq_enabled;
+	fpc1020->irq_enabled = enable;
+	spin_unlock(&fpc1020->irq_lock);
+
+	if (enable == irq_enabled)
+		return;
+
+	if (enable)
+		enable_irq(gpio_to_irq(fpc1020->irq_gpio));
+	else
+		disable_irq(gpio_to_irq(fpc1020->irq_gpio));
+}
 
 static ssize_t report_home_set(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
@@ -368,6 +397,27 @@ static ssize_t sensor_version_get(struct device* device,
 
 static DEVICE_ATTR(sensor_version, S_IRUSR , sensor_version_get, NULL);
 */
+
+static ssize_t proximity_state_set(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct  fpc1020_data *fpc1020 = dev_get_drvdata(dev);
+	int rc, val;
+
+	rc = kstrtoint(buf, 10, &val);
+	if (rc)
+		return -EINVAL;
+
+	fpc1020->proximity_state = !!val;
+
+	if (!fpc1020->screen_state)
+		set_fpc_irq(fpc1020, !fpc1020->proximity_state);
+
+	return count;
+}
+
+static DEVICE_ATTR(proximity_state, S_IWUSR, NULL, proximity_state_set);
+
 static struct attribute *attributes[] = {
 	//&dev_attr_hw_reset.attr,
 	&dev_attr_irq.attr,
@@ -376,6 +426,7 @@ static struct attribute *attributes[] = {
 	&dev_attr_screen_state.attr,
 	/*&dev_attr_sensor_version.attr,*/
 	&dev_attr_report_key.attr,
+        &dev_attr_proximity_state.attr,
 	NULL
 };
 
@@ -440,6 +491,19 @@ void fpc1020_input_destroy(struct fpc1020_data *fpc1020)
 
 	if (fpc1020->input_dev != NULL)
 		input_free_device(fpc1020->input_dev);
+}
+
+static void fpc1020_suspend_resume(struct work_struct *work)
+{
+	struct fpc1020_data *fpc1020 =
+		container_of(work, typeof(*fpc1020), pm_work);
+
+ 	if (fpc1020->screen_state) {
+		set_fpc_irq(fpc1020, true);
+        }
+
+	sysfs_notify(&fpc1020->dev->kobj, NULL,
+				dev_attr_screen_state.attr.name);
 }
 
 #if defined(CONFIG_FB)
@@ -599,11 +663,13 @@ static int fpc1020_probe(struct platform_device *pdev)
 	rc = fpc1020_pinctrl_select(fpc1020, true);
 	if (rc)
 		goto exit;
-		
+
     #endif
     rc = fpc1020_input_init(fpc1020);
     if (rc)
-		goto exit;
+                goto exit;
+
+    INIT_WORK(&fpc1020->pm_work, fpc1020_suspend_resume);
 
     #if defined(CONFIG_FB)
 	fpc1020->fb_notif.notifier_call = fb_notifier_callback;
@@ -612,6 +678,9 @@ static int fpc1020_probe(struct platform_device *pdev)
 		dev_err(fpc1020->dev, "Unable to register fb_notifier: %d\n", rc);
     fpc1020->screen_state = 1;
     #endif
+
+    spin_lock_init(&fpc1020->irq_lock);
+    fpc1020->irq_enabled = true;
 
 	irqf = IRQF_TRIGGER_RISING | IRQF_ONESHOT;
 	mutex_init(&fpc1020->lock);
