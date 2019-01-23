@@ -546,13 +546,18 @@ static irqreturn_t fpc1020_irq_handler(int irq, void *handle)
 		wake_lock_timeout(&fpc1020->ttw_wl, msecs_to_jiffies(FPC_TTW_HOLD_TIME));
 	}
 */
-	wake_lock_timeout(&fpc1020->ttw_wl, msecs_to_jiffies(FPC_TTW_HOLD_TIME));//changhua add for KeyguardUpdateMonitor: fingerprint acquired, grabbing fp wakelock
+
     //dev_err(fpc1020->dev, "%s before sysfs_notify\n", __func__);
 
 	sysfs_notify(&fpc1020->dev->kobj, NULL, dev_attr_irq.attr.name);
 	//dev_err(fpc1020->dev, "%s after sysfs_notify\n", __func__);
+	
+	if (fpc1020->screen_state)
+		return IRQ_HANDLED;
 
-	if (fpc1020->screen_state == 0 && haptic_feedback_disable_fpr)
+	wake_lock_timeout(&fpc1020->ttw_wl, msecs_to_jiffies(FPC_TTW_HOLD_TIME));//changhua add for KeyguardUpdateMonitor: fingerprint acquired, grabbing fp wakelock
+
+	if (haptic_feedback_disable_fpr)
 		qpnp_hap_ignore_next_request();
 	
 	return IRQ_HANDLED;
