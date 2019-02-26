@@ -343,7 +343,7 @@ static ssize_t daytime_r_show(struct device *dev,
 static ssize_t daytime_r_dump(struct device *dev,
     struct device_attribute *attr, const char *buf, size_t count)
 {
-    int tmpval = 0;
+    unsigned int tmpval = 0;
 
     if (!sscanf(buf, "%u", &tmpval))
       return -EINVAL;
@@ -378,7 +378,7 @@ static ssize_t daytime_g_show(struct device *dev,
 static ssize_t daytime_g_dump(struct device *dev,
     struct device_attribute *attr, const char *buf, size_t count)
 {
-    int tmpval = 0;
+    unsigned int tmpval = 0;
 
     if (!sscanf(buf, "%u", &tmpval))
         return -EINVAL;
@@ -413,7 +413,7 @@ static ssize_t daytime_b_show(struct device *dev,
 static ssize_t daytime_b_dump(struct device *dev,
     struct device_attribute *attr, const char *buf, size_t count)
 {
-    int tmpval = 0;
+    unsigned int tmpval = 0;
 
     if (!sscanf(buf, "%u", &tmpval))
         return -EINVAL;
@@ -448,7 +448,7 @@ static ssize_t target_r_show(struct device *dev,
 static ssize_t target_r_dump(struct device *dev,
     struct device_attribute *attr, const char *buf, size_t count)
 {
-    int tmpval = 0;
+    unsigned int tmpval = 0;
 
     if (!sscanf(buf, "%u", &tmpval))
       return -EINVAL;
@@ -481,7 +481,7 @@ static ssize_t target_g_show(struct device *dev,
 static ssize_t target_g_dump(struct device *dev,
     struct device_attribute *attr, const char *buf, size_t count)
 {
-    int tmpval = 0;
+    unsigned int tmpval = 0;
 
     if (!sscanf(buf, "%u", &tmpval))
       return -EINVAL;
@@ -514,7 +514,7 @@ static ssize_t target_b_show(struct device *dev,
 static ssize_t target_b_dump(struct device *dev,
     struct device_attribute *attr, const char *buf, size_t count)
 {
-    int tmpval = 0;
+    unsigned int tmpval = 0;
 
     if (!sscanf(buf, "%u", &tmpval))
       return -EINVAL;
