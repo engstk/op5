@@ -33,6 +33,10 @@
 
 #include "mdss_mdp.h"
 
+#ifdef CONFIG_KLAPSE
+#include "klapse.h"
+#endif
+
 #define DEF_PCC 0x100
 #define DEF_PA 0xff
 #define PCC_ADJ 0x80
@@ -233,6 +237,42 @@ static void mdss_mdp_kcal_update_pcc(struct kcal_lut_data *lut_data)
 	mdss_mdp_pcc_config(fb0_ctl->mfd, &pcc_config, &copyback);
 	kfree(payload);
 }
+
+#ifdef CONFIG_KLAPSE
+static struct platform_device kcal_ctrl_device;
+
+void kcal_ext_apply_values(int red, int green, int blue)
+{
+	struct kcal_lut_data *lut_data =
+				platform_get_drvdata(&kcal_ctrl_device);
+
+	lut_data->red = red;
+	lut_data->green = green;
+	lut_data->blue = blue;
+
+	if (mdss_mdp_kcal_is_panel_on())
+		mdss_mdp_kcal_update_pcc(lut_data);
+	else
+		lut_data->queue_changes = true;
+}
+
+int kcal_ext_get_value(int color)
+{
+	struct kcal_lut_data *lut_data =
+				platform_get_drvdata(&kcal_ctrl_device);
+
+	switch (color) {
+		case KCAL_RED:
+			return lut_data->red;
+		case KCAL_GREEN:
+			return lut_data->green;
+		case KCAL_BLUE:
+			return lut_data->blue;
+		default:
+			return -1;
+	}
+}
+#endif
 
 static void mdss_mdp_kcal_update_pa(struct kcal_lut_data *lut_data)
 {
