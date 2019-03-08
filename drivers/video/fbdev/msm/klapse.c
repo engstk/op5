@@ -22,7 +22,7 @@
 #define SCALE_VAL_MIN   20
 
 // MAX_BRIGHTNESS : Maximum value of the display brightness/backlight
-#define MAX_BRIGHTNESS  1023
+#define MAX_BRIGHTNESS  255
 
 // MIN_BRIGHTNESS : Minimum value of the display brightness/backlight
 #define MIN_BRIGHTNESS  2
@@ -984,7 +984,7 @@ static void values_setup(void)
     brightness_factor_auto_enable = 0;
     backlight_lower = LOWER_BL_LVL;
     backlight_upper = UPPER_BL_LVL;
-    last_bl = 1023;
+    last_bl = 255;
     pulse_freq = 30000;
     fadeback_minutes = 60;
     calc_active_minutes();
