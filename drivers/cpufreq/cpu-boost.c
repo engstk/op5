@@ -38,13 +38,6 @@ static bool input_boost_enabled;
 static unsigned int input_boost_ms = 40;
 module_param(input_boost_ms, uint, 0644);
 
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-static int dynamic_stune_boost;
-module_param(dynamic_stune_boost, uint, 0644);
-static bool stune_boost_active;
-static int boost_slot;
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
-
 static bool sched_boost_on_input;
 module_param(sched_boost_on_input, bool, 0644);
 
@@ -197,14 +190,6 @@ static void do_input_boost_rem(struct work_struct *work)
 		i_sync_info->input_boost_min = 0;
 	}
 
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-	/* Reset dynamic stune boost value to the default value */
-	if (stune_boost_active) {
-		reset_stune_boost("top-app", boost_slot);
-		stune_boost_active = false;
-	}
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
-
 	/* Update policies for all online CPUs */
 	update_policy_online();
 
@@ -230,13 +215,6 @@ static void do_input_boost(struct work_struct *work)
 		sched_boost_active = false;
 	}
 
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-	if (stune_boost_active) {
-		reset_stune_boost("top-app", boost_slot);
-		stune_boost_active = false;
-	}
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
-
 	/* Set the input_boost_min for all CPUs in the system */
 	pr_debug("Setting input boost min for all CPUs\n");
 	for_each_possible_cpu(i) {
@@ -255,13 +233,6 @@ static void do_input_boost(struct work_struct *work)
 		else
 			sched_boost_active = true;
 	}
-
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-	/* Set dynamic stune boost value */
-	ret = do_stune_boost("top-app", dynamic_stune_boost, &boost_slot);
-	if (!ret)
-		stune_boost_active = true;
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
 
 	queue_delayed_work(cpu_boost_wq, &input_boost_rem,
 					msecs_to_jiffies(input_boost_ms));
@@ -318,11 +289,6 @@ err2:
 
 static void cpuboost_input_disconnect(struct input_handle *handle)
 {
-#ifdef CONFIG_DYNAMIC_STUNE_BOOST
-	/* Reset dynamic stune boost value to the default value */
-	reset_stune_boost("top-app", boost_slot);
-#endif /* CONFIG_DYNAMIC_STUNE_BOOST */
-
 	input_close_device(handle);
 	input_unregister_handle(handle);
 	kfree(handle);
