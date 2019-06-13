@@ -2,7 +2,7 @@
 #define _KLAPSE_H
 
 /* KLAPSE_MDSS : Use 1 if using with MDSS */
-#define KLAPSE_MDSS 0
+#define KLAPSE_MDSS 1
 
 /* set_rgb_slider : Interface function for brightness-mode */
 typedef u32 bl_type_t;
