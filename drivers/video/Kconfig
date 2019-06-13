@@ -52,11 +52,7 @@ if FB || SGI_NEWPORT_CONSOLE
 
 endif
 
-config KLAPSE
-    bool
-    default n
-    help
-        A simple rgb dynamic lapsing module similar to LineageOS' livedisplay
+source "drivers/video/klapse/Kconfig"
 
 
 endmenu
