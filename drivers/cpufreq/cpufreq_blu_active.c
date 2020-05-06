@@ -2,7 +2,7 @@
  * drivers/cpufreq/cpufreq_blu_active.c
  *
  * Copyright (C) 2010 Google, Inc.
- * Copyright (C) 2014-2017 engstk (changes for blu_active)
+ * Copyright (C) 2014-2020 engstk (changes for blu_active)
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -1006,7 +1006,7 @@ show_store_gov_pol_sys(fastlane);
 show_store_gov_pol_sys(fastlane_threshold);
 
 #define gov_sys_attr_rw(_name)						\
-static struct global_attr _name##_gov_sys =				\
+static struct kobj_attribute _name##_gov_sys =				\
 __ATTR(_name, 0644, show_##_name##_gov_sys, store_##_name##_gov_sys)
 
 #define gov_pol_attr_rw(_name)						\
