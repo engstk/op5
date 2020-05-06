@@ -224,6 +224,8 @@ static inline void unix_release_addr(struct unix_address *addr)
 
 static int unix_mkname(struct sockaddr_un *sunaddr, int len, unsigned int *hashp)
 {
+	*hashp = 0;
+
 	if (len <= sizeof(short) || len > sizeof(*sunaddr))
 		return -EINVAL;
 	if (!sunaddr || sunaddr->sun_family != AF_UNIX)
@@ -890,7 +892,7 @@ retry:
 	addr->hash ^= sk->sk_type;
 
 	__unix_remove_socket(sk);
-	u->addr = addr;
+	smp_store_release(&u->addr, addr);
 	__unix_insert_socket(&unix_socket_table[addr->hash], sk);
 	spin_unlock(&unix_table_lock);
 	err = 0;
@@ -1060,7 +1062,7 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 
 	err = 0;
 	__unix_remove_socket(sk);
-	u->addr = addr;
+	smp_store_release(&u->addr, addr);
 	__unix_insert_socket(list, sk);
 
 out_unlock:
@@ -1331,15 +1333,29 @@ restart:
 	RCU_INIT_POINTER(newsk->sk_wq, &newu->peer_wq);
 	otheru = unix_sk(other);
 
-	/* copy address information from listening to new sock*/
-	if (otheru->addr) {
-		atomic_inc(&otheru->addr->refcnt);
-		newu->addr = otheru->addr;
-	}
+	/* copy address information from listening to new sock
+	 *
+	 * The contents of *(otheru->addr) and otheru->path
+	 * are seen fully set up here, since we have found
+	 * otheru in hash under unix_table_lock.  Insertion
+	 * into the hash chain we'd found it in had been done
+	 * in an earlier critical area protected by unix_table_lock,
+	 * the same one where we'd set *(otheru->addr) contents,
+	 * as well as otheru->path and otheru->addr itself.
+	 *
+	 * Using smp_store_release() here to set newu->addr
+	 * is enough to make those stores, as well as stores
+	 * to newu->path visible to anyone who gets newu->addr
+	 * by smp_load_acquire().  IOW, the same warranties
+	 * as for unix_sock instances bound in unix_bind() or
+	 * in unix_autobind().
+	 */
 	if (otheru->path.dentry) {
 		path_get(&otheru->path);
 		newu->path = otheru->path;
 	}
+	atomic_inc(&otheru->addr->refcnt);
+	smp_store_release(&newu->addr, otheru->addr);
 
 	/* Set credentials */
 	copy_peercred(sk, other);
@@ -1452,7 +1468,7 @@ out:
 static int unix_getname(struct socket *sock, struct sockaddr *uaddr, int *uaddr_len, int peer)
 {
 	struct sock *sk = sock->sk;
-	struct unix_sock *u;
+	struct unix_address *addr;
 	DECLARE_SOCKADDR(struct sockaddr_un *, sunaddr, uaddr);
 	int err = 0;
 
@@ -1467,19 +1483,15 @@ static int unix_getname(struct socket *sock, struct sockaddr *uaddr, int *uaddr_
 		sock_hold(sk);
 	}
 
-	u = unix_sk(sk);
-	unix_state_lock(sk);
-	if (!u->addr) {
+	addr = smp_load_acquire(&unix_sk(sk)->addr);
+	if (!addr) {
 		sunaddr->sun_family = AF_UNIX;
 		sunaddr->sun_path[0] = 0;
 		*uaddr_len = sizeof(short);
 	} else {
-		struct unix_address *addr = u->addr;
-
 		*uaddr_len = addr->len;
 		memcpy(sunaddr, addr->name, *uaddr_len);
 	}
-	unix_state_unlock(sk);
 	sock_put(sk);
 out:
 	return err;
@@ -1531,7 +1543,6 @@ static int unix_attach_fds(struct scm_cookie *scm, struct sk_buff *skb)
 {
 	int i;
 	unsigned char max_level = 0;
-	int unix_sock_count = 0;
 
 	if (too_many_unix_fds(current))
 		return -ETOOMANYREFS;
@@ -1539,11 +1550,9 @@ static int unix_attach_fds(struct scm_cookie *scm, struct sk_buff *skb)
 	for (i = scm->fp->count - 1; i >= 0; i--) {
 		struct sock *sk = unix_get_socket(scm->fp->fp[i]);
 
-		if (sk) {
-			unix_sock_count++;
+		if (sk)
 			max_level = max(max_level,
 					unix_sk(sk)->recursion_level);
-		}
 	}
 	if (unlikely(max_level > MAX_RECURSION_LEVEL))
 		return -ETOOMANYREFS;
@@ -2096,11 +2105,11 @@ static int unix_seqpacket_recvmsg(struct socket *sock, struct msghdr *msg,
 
 static void unix_copy_addr(struct msghdr *msg, struct sock *sk)
 {
-	struct unix_sock *u = unix_sk(sk);
+	struct unix_address *addr = smp_load_acquire(&unix_sk(sk)->addr);
 
-	if (u->addr) {
-		msg->msg_namelen = u->addr->len;
-		memcpy(msg->msg_name, u->addr->name, u->addr->len);
+	if (addr) {
+		msg->msg_namelen = addr->len;
+		memcpy(msg->msg_name, addr->name, addr->len);
 	}
 }
 
@@ -2823,7 +2832,7 @@ static int unix_seq_show(struct seq_file *seq, void *v)
 			(s->sk_state == TCP_ESTABLISHED ? SS_CONNECTING : SS_DISCONNECTING),
 			sock_i_ino(s));
 
-		if (u->addr) {
+		if (u->addr) {	// under unix_table_lock here
 			int i, len;
 			seq_putc(seq, ' ');
 

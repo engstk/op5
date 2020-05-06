@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -14,6 +14,11 @@
 #define _NET_CNSS2_H
 
 #include <linux/pci.h>
+#include <linux/usb.h>
+#include <linux/mmc/sdio_func.h>
+#ifdef CONFIG_SDIO_QCN
+#include <linux/qcn_sdio_al.h>
+#endif
 
 #define CNSS_MAX_FILE_NAME		20
 #define CNSS_MAX_TIMESTAMP_LEN		32
@@ -50,6 +55,13 @@ struct cnss_fw_files {
 	char evicted_data[CNSS_MAX_FILE_NAME];
 };
 
+struct cnss_device_version {
+	u32 family_number;
+	u32 device_number;
+	u32 major_version;
+	u32 minor_version;
+};
+
 struct cnss_soc_info {
 	void __iomem *va;
 	phys_addr_t pa;
@@ -59,6 +71,7 @@ struct cnss_soc_info {
 	uint32_t soc_id;
 	uint32_t fw_version;
 	char fw_build_timestamp[CNSS_MAX_TIMESTAMP_LEN + 1];
+	struct cnss_device_version device_version;
 };
 
 struct cnss_wlan_runtime_ops {
@@ -70,6 +83,9 @@ struct cnss_wlan_driver {
 	char *name;
 	int  (*probe)(struct pci_dev *pdev, const struct pci_device_id *id);
 	void (*remove)(struct pci_dev *pdev);
+	int (*idle_restart)(struct pci_dev *pdev,
+			    const struct pci_device_id *id);
+	int  (*idle_shutdown)(struct pci_dev *pdev);
 	int  (*reinit)(struct pci_dev *pdev, const struct pci_device_id *id);
 	void (*shutdown)(struct pci_dev *pdev);
 	void (*crash_shutdown)(struct pci_dev *pdev);
@@ -82,6 +98,37 @@ struct cnss_wlan_driver {
 	struct cnss_wlan_runtime_ops *runtime_ops;
 	const struct pci_device_id *id_table;
 };
+
+struct cnss_usb_wlan_driver {
+	char *name;
+	int  (*probe)(struct usb_interface *pintf, const struct usb_device_id
+		      *id);
+	void (*remove)(struct usb_interface *pintf);
+	int  (*reinit)(struct usb_interface *pintf, const struct usb_device_id
+		       *id);
+	void (*shutdown)(struct usb_interface *pintf);
+	void (*crash_shutdown)(struct usb_interface *pintf);
+	int  (*suspend)(struct usb_interface *pintf, pm_message_t state);
+	int  (*resume)(struct usb_interface *pintf);
+	int  (*reset_resume)(struct usb_interface *pintf);
+	void (*update_status)(struct usb_interface *pintf, uint32_t status);
+	const struct usb_device_id *id_table;
+};
+
+#ifdef CONFIG_SDIO_QCN
+struct cnss_sdio_wlan_driver {
+	const char *name;
+	const struct sdio_device_id *id_table;
+	int (*probe)(struct sdio_func *, const struct sdio_device_id *);
+	void (*remove)(struct sdio_func *);
+	int (*reinit)(struct sdio_func *, const struct sdio_device_id *);
+	void (*shutdown)(struct sdio_func *);
+	void (*crash_shutdown)(struct sdio_func *);
+	int (*suspend)(struct device *);
+	int (*resume)(struct device *);
+	void (*update_status)(struct sdio_func *, uint32_t status);
+};
+#endif
 
 enum cnss_driver_status {
 	CNSS_UNINITIALIZED,
@@ -173,6 +220,12 @@ extern void cnss_schedule_recovery(struct device *dev,
 extern int cnss_self_recovery(struct device *dev,
 			      enum cnss_recovery_reason reason);
 extern int cnss_force_fw_assert(struct device *dev);
+extern int cnss_force_collect_rddm(struct device *dev);
+extern int cnss_qmi_send_get(struct device *dev);
+extern int cnss_qmi_send_put(struct device *dev);
+extern int cnss_qmi_send(struct device *dev, int type, void *cmd,
+			 int cmd_len, void *cb_ctx,
+			 int (*cb)(void *ctx, void *event, int event_len));
 extern void *cnss_get_virt_ramdump_mem(struct device *dev, unsigned long *size);
 extern int cnss_get_fw_files_for_target(struct device *dev,
 					struct cnss_fw_files *pfw_files,
@@ -186,12 +239,21 @@ extern int cnss_get_soc_info(struct device *dev, struct cnss_soc_info *info);
 extern int cnss_request_bus_bandwidth(struct device *dev, int bandwidth);
 extern int cnss_power_up(struct device *dev);
 extern int cnss_power_down(struct device *dev);
+extern int cnss_idle_restart(struct device *dev);
+extern int cnss_idle_shutdown(struct device *dev);
 extern void cnss_request_pm_qos(struct device *dev, u32 qos_val);
 extern void cnss_remove_pm_qos(struct device *dev);
 extern void cnss_lock_pm_sem(struct device *dev);
 extern void cnss_release_pm_sem(struct device *dev);
+extern void cnss_pci_lock_reg_window(struct device *dev, unsigned long *flags);
+extern void cnss_pci_unlock_reg_window(struct device *dev,
+				       unsigned long *flags);
 extern int cnss_auto_suspend(struct device *dev);
 extern int cnss_auto_resume(struct device *dev);
+extern int cnss_pci_is_drv_connected(struct device *dev);
+extern int cnss_pci_force_wake_request(struct device *dev);
+extern int cnss_pci_is_device_awake(struct device *dev);
+extern int cnss_pci_force_wake_release(struct device *dev);
 extern int cnss_get_user_msi_assignment(struct device *dev, char *user_name,
 					int *num_vectors,
 					uint32_t *user_base_data,
@@ -212,5 +274,46 @@ extern int cnss_athdiag_write(struct device *dev, uint32_t offset,
 			      uint32_t mem_type, uint32_t data_len,
 			      uint8_t *input);
 extern int cnss_set_fw_log_mode(struct device *dev, uint8_t fw_log_mode);
+extern int cnss_usb_wlan_register_driver(struct cnss_usb_wlan_driver *driver);
+extern void cnss_usb_wlan_unregister_driver(struct cnss_usb_wlan_driver *
+					    driver);
+extern int cnss_usb_is_device_down(struct device *dev);
+#ifdef CONFIG_SDIO_QCN
+extern int cnss_sdio_wlan_register_driver(struct cnss_sdio_wlan_driver *
+					  driver_ops);
+extern void cnss_sdio_wlan_unregister_driver(struct cnss_sdio_wlan_driver *
+					     driver_ops);
+extern struct sdio_al_client_handle *cnss_sdio_wlan_get_sdio_al_client_handle(
+						       struct sdio_func *func);
+extern struct sdio_al_channel_handle *cnss_sdio_wlan_register_sdio_al_channel(
+				    struct sdio_al_channel_data *channel_data);
+extern void cnss_sdio_wlan_unregister_sdio_al_channel(
+	     struct sdio_al_channel_handle *ch_handle);
+#else
+extern inline int cnss_sdio_wlan_register_driver(void *driver_ops)
+{
+	return 0;
+}
+
+extern inline void cnss_sdio_wlan_unregister_driver(void *driver_ops)
+{
+
+}
+
+extern inline void *cnss_sdio_wlan_get_sdio_al_client_handle(void *func)
+{
+	return NULL;
+}
+
+extern inline void *cnss_sdio_wlan_register_sdio_al_channel(void *channel_data)
+{
+	return NULL;
+}
+
+extern inline void cnss_sdio_wlan_unregister_sdio_al_channel(void *ch_handle)
+{
+
+}
+#endif
 
 #endif /* _NET_CNSS2_H */

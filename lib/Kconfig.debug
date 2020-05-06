@@ -529,7 +529,7 @@ config DEBUG_KMEMLEAK_EARLY_LOG_SIZE
 	int "Maximum kmemleak early log entries"
 	depends on DEBUG_KMEMLEAK
 	range 200 40000
-	default 400
+	default 16000
 	help
 	  Kmemleak must track all the memory allocations to avoid
 	  reporting false positives. Since memory may be allocated or
@@ -585,6 +585,14 @@ config DEBUG_VM_RB
 	depends on DEBUG_VM
 	help
 	  Enable VM red-black tree debugging information and extra validations.
+
+	  If unsure, say N.
+
+config DEBUG_VM_PGFLAGS
+	bool "Debug page-flags operations"
+	depends on DEBUG_VM
+	help
+	  Enables extra validation on page flags operations.
 
 	  If unsure, say N.
 
@@ -1837,6 +1845,16 @@ config TEST_RHASHTABLE
 
 	  If unsure, say N.
 
+config TEST_HASH
+	tristate "Perform selftest on hash functions"
+	default n
+	help
+	  Enable this option to test the kernel's siphash (<linux/siphash.h>)
+	  hash functions on boot (or module load).
+
+	  This is intended to help people writing architecture-specific
+	  optimized versions.  If unsure, say N.
+
 endmenu # runtime tests
 
 config PROVIDE_OHCI1394_DMA_INIT
@@ -1999,6 +2017,16 @@ config PANIC_ON_DATA_CORRUPTION
 	 Select this option to upgrade warnings for potentially
 	 recoverable data corruption scenarios to system-halting panics,
 	 for easier detection and debug.
+
+config BUG_ON_DATA_CORRUPTION
+	bool "Trigger a BUG when data corruption is detected"
+	select CONFIG_DEBUG_LIST
+	help
+	  Select this option if the kernel should BUG when it encounters
+	  data corruption in kernel memory structures when they get checked
+	  for validity.
+
+	  If unsure, say N.
 
 source "samples/Kconfig"
 

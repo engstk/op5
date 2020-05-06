@@ -640,21 +640,20 @@ static inline unsigned long qdio_aob_for_buffer(struct qdio_output_q *q,
 	unsigned long phys_aob = 0;
 
 	if (!q->use_cq)
-		goto out;
+		return 0;
 
 	if (!q->aobs[bufnr]) {
 		struct qaob *aob = qdio_allocate_aob();
 		q->aobs[bufnr] = aob;
 	}
 	if (q->aobs[bufnr]) {
-		q->sbal_state[bufnr].flags = QDIO_OUTBUF_STATE_FLAG_NONE;
 		q->sbal_state[bufnr].aob = q->aobs[bufnr];
 		q->aobs[bufnr]->user1 = (u64) q->sbal_state[bufnr].user;
 		phys_aob = virt_to_phys(q->aobs[bufnr]);
 		WARN_ON_ONCE(phys_aob & 0xFF);
 	}
 
-out:
+	q->sbal_state[bufnr].flags = 0;
 	return phys_aob;
 }
 
@@ -753,6 +752,7 @@ static int get_outbound_buffer_frontier(struct qdio_q *q)
 
 	switch (state) {
 	case SLSB_P_OUTPUT_EMPTY:
+	case SLSB_P_OUTPUT_PENDING:
 		/* the adapter got it */
 		DBF_DEV_EVENT(DBF_INFO, q->irq_ptr,
 			"out empty:%1d %02x", q->nr, count);
@@ -1576,13 +1576,13 @@ static int handle_outbound(struct qdio_q *q, unsigned int callflags,
 		rc = qdio_kick_outbound_q(q, phys_aob);
 	} else if (need_siga_sync(q)) {
 		rc = qdio_siga_sync_q(q);
+	} else if (count < QDIO_MAX_BUFFERS_PER_Q &&
+		   get_buf_state(q, prev_buf(bufnr), &state, 0) > 0 &&
+		   state == SLSB_CU_OUTPUT_PRIMED) {
+		/* The previous buffer is not processed yet, tack on. */
+		qperf_inc(q, fast_requeue);
 	} else {
-		/* try to fast requeue buffers */
-		get_buf_state(q, prev_buf(bufnr), &state, 0);
-		if (state != SLSB_CU_OUTPUT_PRIMED)
-			rc = qdio_kick_outbound_q(q, 0);
-		else
-			qperf_inc(q, fast_requeue);
+		rc = qdio_kick_outbound_q(q, 0);
 	}
 
 	/* in case of SIGA errors we must process the error immediately */

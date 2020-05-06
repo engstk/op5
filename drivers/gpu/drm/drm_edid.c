@@ -158,6 +158,9 @@ static struct edid_quirk {
 	/* Medion MD 30217 PG */
 	{ "MED", 0x7b8, EDID_QUIRK_PREFER_LARGE_75 },
 
+	/* Lenovo G50 */
+	{ "SDC", 18514, EDID_QUIRK_FORCE_6BPC },
+
 	/* Panel in Samsung NP700G7A-S01PL notebook reports 6bpc */
 	{ "SEC", 0xd033, EDID_QUIRK_FORCE_8BPC },
 
@@ -1501,6 +1504,10 @@ drm_do_probe_ddc_edid(void *data, u8 *buf, unsigned int block, size_t len)
  * level, drivers must make all reasonable efforts to expose it as an I2C
  * adapter and use drm_get_edid() instead of abusing this function.
  *
+ * The EDID may be overridden using debugfs override_edid or firmare EDID
+ * (drm_load_edid_firmware() and drm.edid_firmware parameter), in this priority
+ * order. Having either of them bypasses actual EDID reads.
+ *
  * Return: Pointer to valid EDID or NULL if we couldn't find any.
  */
 struct edid *drm_do_get_edid(struct drm_connector *connector,
@@ -1511,6 +1518,17 @@ struct edid *drm_do_get_edid(struct drm_connector *connector,
 	int i, j = 0, valid_extensions = 0;
 	u8 *block, *new;
 	bool print_bad_edid = !connector->bad_edid_counter || (drm_debug & DRM_UT_KMS);
+	struct edid *override = NULL;
+
+	if (connector->override_edid)
+		override = drm_edid_duplicate((const struct edid *)
+					      connector->edid_blob_ptr->data);
+
+	if (!override)
+		override = drm_load_edid_firmware(connector);
+
+	if (!IS_ERR_OR_NULL(override))
+		return override;
 
 	if ((block = kmalloc(EDID_LENGTH, GFP_KERNEL)) == NULL)
 		return NULL;

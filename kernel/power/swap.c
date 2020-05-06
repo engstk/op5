@@ -36,6 +36,15 @@
 
 #define HIBERNATE_SIG	"S1SUSPEND"
 
+static int goldenimage;
+/*
+ * When reading an {un,}compressed image, we may restore pages in place,
+ * in which case some architectures need these pages cleaning before they
+ * can be executed. We don't know which pages these may be, so clean the lot.
+ */
+static bool clean_pages_on_read;
+static bool clean_pages_on_decompress;
+
 /*
  * When reading an {un,}compressed image, we may restore pages in place,
  * in which case some architectures need these pages cleaning before they
@@ -1531,7 +1540,13 @@ int swsusp_check(void)
 			goto put;
 
 		if (!memcmp(HIBERNATE_SIG, swsusp_header->sig, 10)) {
-			memcpy(swsusp_header->sig, swsusp_header->orig_sig, 10);
+			if (!goldenimage) {
+				pr_debug("PM: corrupt hibernate image header\n");
+				memcpy(swsusp_header->sig,
+					swsusp_header->orig_sig, 10);
+			} else {
+				pr_debug("PM: Header corruption avoided\n");
+			}
 			/* Reset swap signature now */
 			error = hib_submit_io(WRITE_SYNC, swsusp_resume_block,
 						swsusp_header, NULL);
@@ -1605,3 +1620,10 @@ static int swsusp_header_init(void)
 }
 
 core_initcall(swsusp_header_init);
+
+static int __init golden_image_setup(char *str)
+{
+	goldenimage = 1;
+	return 1;
+}
+__setup("golden_image", golden_image_setup);

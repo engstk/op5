@@ -1583,6 +1583,27 @@ static void sdhci_notify_halt(struct mmc_host *mmc, bool halt)
 	}
 }
 
+static int sdhci_reg_temp_callback(struct mmc_host *mmc)
+{
+	struct sdhci_host *host = mmc_priv(mmc);
+
+	return host->ops->reg_temp_callback(host);
+}
+
+static int sdhci_check_temp(struct mmc_host *mmc)
+{
+	struct sdhci_host *host = mmc_priv(mmc);
+
+	return host->ops->check_temp(host);
+}
+
+static int sdhci_dereg_temp_callback(struct mmc_host *mmc)
+{
+	struct sdhci_host *host = mmc_priv(mmc);
+
+	return host->ops->dereg_temp_callback(host);
+}
+
 static inline void sdhci_update_power_policy(struct sdhci_host *host,
 		enum sdhci_power_policy policy)
 {
@@ -1824,7 +1845,9 @@ void sdhci_set_uhs_signaling(struct sdhci_host *host, unsigned timing)
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR104;
 	else if (timing == MMC_TIMING_UHS_SDR12)
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR12;
-	else if (timing == MMC_TIMING_UHS_SDR25)
+	else if (timing == MMC_TIMING_SD_HS ||
+		 timing == MMC_TIMING_MMC_HS ||
+		 timing == MMC_TIMING_UHS_SDR25)
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR25;
 	else if (timing == MMC_TIMING_UHS_SDR50)
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR50;
@@ -2769,6 +2792,9 @@ static const struct mmc_host_ops sdhci_ops = {
 	.notify_load	= sdhci_notify_load,
 	.notify_halt	= sdhci_notify_halt,
 	.force_err_irq	= sdhci_force_err_irq,
+	.check_temp     = sdhci_check_temp,
+	.dereg_temp_callback    = sdhci_dereg_temp_callback,
+	.reg_temp_callback      = sdhci_reg_temp_callback,
 };
 
 /*****************************************************************************\

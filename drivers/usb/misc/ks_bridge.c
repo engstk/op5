@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014, 2017-2018, Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2014, 2017-2019, Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -30,6 +30,7 @@
 #include <linux/list.h>
 #include <linux/wait.h>
 #include <linux/poll.h>
+#include <linux/kobject.h>
 
 #define DRIVER_DESC	"USB host ks bridge driver"
 
@@ -47,7 +48,8 @@ static enum bus_id str_to_busid(const char *name)
 		return BUS_HSIC;
 	if (!strncasecmp("msm_ehci_host.0", name, BUSNAME_LEN))
 		return BUS_USB;
-	if (!strncasecmp("xhci-hcd.0.auto", name, BUSNAME_LEN))
+	if (!strncasecmp("xhci-hcd.0.auto", name, BUSNAME_LEN) ||
+	    !strncasecmp("xhci-hcd.1.auto", name, BUSNAME_LEN))
 		return BUS_USB;
 
 	return BUS_UNDEF;
@@ -420,11 +422,35 @@ static unsigned int ksb_fs_poll(struct file *file, poll_table *wait)
 static int ksb_fs_release(struct inode *ip, struct file *fp)
 {
 	struct ks_bridge	*ksb = fp->private_data;
+	struct data_pkt *pkt;
+	unsigned long flags;
 
 	if (test_bit(USB_DEV_CONNECTED, &ksb->flags))
 		dev_dbg(ksb->device, ":%s", ksb->id_info.name);
 	dbg_log_event(ksb, "FS-RELEASE", 0, 0);
 
+	usb_kill_anchored_urbs(&ksb->submitted);
+
+	wait_event_interruptible_timeout(
+					ksb->pending_urb_wait,
+					!atomic_read(&ksb->tx_pending_cnt) &&
+					!atomic_read(&ksb->rx_pending_cnt),
+					msecs_to_jiffies(PENDING_URB_TIMEOUT));
+
+	spin_lock_irqsave(&ksb->lock, flags);
+	while (!list_empty(&ksb->to_ks_list)) {
+		pkt = list_first_entry(&ksb->to_ks_list,
+				struct data_pkt, list);
+		list_del_init(&pkt->list);
+		ksb_free_data_pkt(pkt);
+	}
+	while (!list_empty(&ksb->to_mdm_list)) {
+		pkt = list_first_entry(&ksb->to_mdm_list,
+				struct data_pkt, list);
+		list_del_init(&pkt->list);
+		ksb_free_data_pkt(pkt);
+	}
+	spin_unlock_irqrestore(&ksb->lock, flags);
 	clear_bit(FILE_OPENED, &ksb->flags);
 	fp->private_data = NULL;
 
@@ -462,9 +488,14 @@ static const struct usb_device_id ksb_usb_ids[] = {
 	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x9025, 0), },
 	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x9091, 0), },
 	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x901D, 0), },
+	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x901F, 0), },
 	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x900E, 0), },
 	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x9900, 0), },
 	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x9901, 0), },
+	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x9902, 3),
+	.driver_info = (unsigned long)&ksb_fboot_dev, },
+	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x9903, 5),
+	.driver_info = (unsigned long)&ksb_fboot_dev, },
 	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x9048, 2),
 	.driver_info = (unsigned long)&ksb_efs_hsic_dev, },
 	{ USB_DEVICE_INTERFACE_NUMBER(0x5c6, 0x904C, 2),
@@ -664,6 +695,17 @@ static void ksb_start_rx_work(struct work_struct *w)
 		usb_autopm_put_interface_async(ksb->ifc);
 }
 
+static void ks_bridge_notify_status(struct kobject *kobj,
+						const struct usb_device_id *id)
+{
+	char product_info[32];
+	char *envp[2] = { product_info, NULL };
+
+	snprintf(product_info, sizeof(product_info), "PRODUCT=%x/%x/%x",
+			id->idVendor, id->idProduct, id->bDeviceProtocol);
+	kobject_uevent_env(kobj, KOBJ_ONLINE, envp);
+}
+
 static int
 ksb_usb_probe(struct usb_interface *ifc, const struct usb_device_id *id)
 {
@@ -698,6 +740,7 @@ ksb_usb_probe(struct usb_interface *ifc, const struct usb_device_id *id)
 	case 0x9025:
 	case 0x9091:
 	case 0x901D:
+	case 0x901F:
 		/* 1-1 mapping between ksb and udev port which starts with 1 */
 		ksb_port_num = udev->portnum - 1;
 		dev_dbg(&udev->dev, "ifc_count: %u, port_num:%u\n", ifc_count,
@@ -721,6 +764,8 @@ ksb_usb_probe(struct usb_interface *ifc, const struct usb_device_id *id)
 		mdev->name = ksb->name;
 		break;
 	case 0x9008:
+	case 0x9902:
+	case 0x9903:
 		ksb = __ksb[bus_id];
 		mdev = &fbdev[bus_id];
 		break;
@@ -845,6 +890,8 @@ ksb_usb_probe(struct usb_interface *ifc, const struct usb_device_id *id)
 
 	if (free_mdev)
 		kfree(mdev);
+
+	ks_bridge_notify_status(&ksb->device->kobj, id);
 	dev_dbg(&udev->dev, "usb dev connected");
 
 	return 0;
@@ -916,6 +963,7 @@ static void ksb_usb_disconnect(struct usb_interface *ifc)
 	dbg_log_event(ksb, "PID-DETACH", 0, 0);
 
 	clear_bit(USB_DEV_CONNECTED, &ksb->flags);
+	kobject_uevent(&ksb->device->kobj, KOBJ_OFFLINE);
 	wake_up(&ksb->ks_wait_q);
 	cancel_work_sync(&ksb->to_mdm_work);
 	cancel_work_sync(&ksb->start_rx_work);

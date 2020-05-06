@@ -671,8 +671,11 @@ int get_registers(struct r8152 *tp, u16 value, u16 index, u16 size, void *data)
 	ret = usb_control_msg(tp->udev, usb_rcvctrlpipe(tp->udev, 0),
 			      RTL8152_REQ_GET_REGS, RTL8152_REQT_READ,
 			      value, index, tmp, size, 500);
+	if (ret < 0)
+		memset(data, 0xff, size);
+	else
+		memcpy(data, tmp, size);
 
-	memcpy(data, tmp, size);
 	kfree(tmp);
 
 	return ret;
@@ -3662,6 +3665,9 @@ static int rtl8152_set_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
 
 	if (!rtl_can_wakeup(tp))
 		return -EOPNOTSUPP;
+
+	if (wol->wolopts & ~WAKE_ANY)
+		return -EINVAL;
 
 	ret = usb_autopm_get_interface(tp->intf);
 	if (ret < 0)

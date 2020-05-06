@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2018-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -24,6 +24,22 @@
 #define QCA6290_DEVICE_ID		0x1100
 #define QCA6290_EMULATION_VENDOR_ID	0x168C
 #define QCA6290_EMULATION_DEVICE_ID	0xABCD
+#define QCN7605_VENDOR_ID		0x17CB
+#define QCN7605_DEVICE_ID		0x1102
+#define QCN7605_SDIO_VENDOR_ID		0x70
+#define QCN7605_SDIO_DEVICE_ID		0x400B
+
+#define QCN7605_USB_VENDOR_ID             0x05C6
+#define QCN7605_COMPOSITE_DEVICE_ID     QCN7605_COMPOSITE_PRODUCT_ID
+#define QCN7605_STANDALONE_DEVICE_ID    QCN7605_STANDALONE_PRODUCT_ID
+#define QCN7605_VER20_STANDALONE_DEVICE_ID	QCN7605_VER20_STANDALONE_PID
+#define QCN7605_VER20_COMPOSITE_DEVICE_ID	QCN7605_VER20_COMPOSITE_PID
+
+#define QCN7605_STANDALONE_PRODUCT_ID    0x9900
+#define QCN7605_COMPOSITE_PRODUCT_ID     0x9901
+
+#define QCN7605_VER20_STANDALONE_PID     0x9902
+#define QCN7605_VER20_COMPOSITE_PID     0x9903
 
 enum cnss_dev_bus_type cnss_get_dev_bus_type(struct device *dev);
 enum cnss_dev_bus_type cnss_get_bus_type(unsigned long device_id);
@@ -33,7 +49,7 @@ int cnss_bus_init(struct cnss_plat_data *plat_priv);
 void cnss_bus_deinit(struct cnss_plat_data *plat_priv);
 int cnss_bus_load_m3(struct cnss_plat_data *plat_priv);
 int cnss_bus_alloc_fw_mem(struct cnss_plat_data *plat_priv);
-u32 cnss_bus_get_wake_irq(struct cnss_plat_data *plat_priv);
+int cnss_bus_get_wake_irq(struct cnss_plat_data *plat_priv);
 int cnss_bus_force_fw_assert_hdlr(struct cnss_plat_data *plat_priv);
 void cnss_bus_fw_boot_timeout_hdlr(unsigned long data);
 void cnss_bus_collect_dump_info(struct cnss_plat_data *plat_priv);

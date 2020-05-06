@@ -1216,6 +1216,16 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 		lock_page(hpage);
 	}
 
+	/*
+	 * Check for pages which are in the process of being freed.  Without
+	 * page_mapping() set, hugetlbfs specific move page routine will not
+	 * be called and we could leak usage counts for subpools.
+	 */
+	if (page_private(hpage) && !page_mapping(hpage)) {
+		rc = -EBUSY;
+		goto out_unlock;
+	}
+
 	if (PageAnon(hpage))
 		anon_vma = page_get_anon_vma(hpage);
 
@@ -1247,6 +1257,7 @@ put_anon:
 		set_page_owner_migrate_reason(new_hpage, reason);
 	}
 
+out_unlock:
 	unlock_page(hpage);
 out:
 	if (rc != -EAGAIN)
@@ -1936,7 +1947,7 @@ int migrate_misplaced_transhuge_page(struct mm_struct *mm,
 		flush_tlb_range(vma, mmun_start, mmun_end);
 
 	/* Prepare a page as a migration target */
-	__set_page_locked(new_page);
+	__SetPageLocked(new_page);
 	SetPageSwapBacked(new_page);
 
 	/* anon mapping, we can simply copy page->mapping to the new page: */

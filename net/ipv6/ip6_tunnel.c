@@ -622,7 +622,7 @@ ip4ip6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 					   IPPROTO_IPIP,
 					   RT_TOS(eiph->tos), 0);
 		if (IS_ERR(rt) ||
-		    rt->dst.dev->type != ARPHRD_TUNNEL) {
+		    rt->dst.dev->type != ARPHRD_TUNNEL6) {
 			if (!IS_ERR(rt))
 				ip_rt_put(rt);
 			goto out;
@@ -632,7 +632,7 @@ ip4ip6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 		ip_rt_put(rt);
 		if (ip_route_input(skb2, eiph->daddr, eiph->saddr, eiph->tos,
 				   skb2->dev) ||
-		    skb_dst(skb2)->dev->type != ARPHRD_TUNNEL)
+		    skb_dst(skb2)->dev->type != ARPHRD_TUNNEL6)
 			goto out;
 	}
 
@@ -1096,7 +1096,7 @@ static inline int
 ip4ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct ip6_tnl *t = netdev_priv(dev);
-	const struct iphdr  *iph = ip_hdr(skb);
+	const struct iphdr  *iph;
 	int encap_limit = -1;
 	struct flowi6 fl6;
 	__u8 dsfield;
@@ -1104,6 +1104,11 @@ ip4ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev)
 	u8 tproto;
 	int err;
 
+	/* ensure we can access the full inner ip header */
+	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
+		return -1;
+
+	iph = ip_hdr(skb);
 	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
 
 	tproto = ACCESS_ONCE(t->parms.proto);
@@ -1142,7 +1147,7 @@ static inline int
 ip6ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct ip6_tnl *t = netdev_priv(dev);
-	struct ipv6hdr *ipv6h = ipv6_hdr(skb);
+	struct ipv6hdr *ipv6h;
 	int encap_limit = -1;
 	__u16 offset;
 	struct flowi6 fl6;
@@ -1151,6 +1156,10 @@ ip6ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev)
 	u8 tproto;
 	int err;
 
+	if (unlikely(!pskb_may_pull(skb, sizeof(*ipv6h))))
+		return -1;
+
+	ipv6h = ipv6_hdr(skb);
 	tproto = ACCESS_ONCE(t->parms.proto);
 	if ((tproto != IPPROTO_IPV6 && tproto != 0) ||
 	    ip6_tnl_addr_conflict(t, ipv6h))

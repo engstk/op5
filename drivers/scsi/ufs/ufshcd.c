@@ -3,7 +3,7 @@
  *
  * This code is based on drivers/scsi/ufs/ufshcd.c
  * Copyright (C) 2011-2013 Samsung India Software Operations
- * Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2019, The Linux Foundation. All rights reserved.
  *
  * Authors:
  *	Santosh Yaraganavi <santosh.sy@samsung.com>
@@ -43,6 +43,7 @@
 #include <linux/nls.h>
 #include <linux/of.h>
 #include <linux/blkdev.h>
+#include <asm/unaligned.h>
 
 #include "ufshcd.h"
 #include "ufshci.h"
@@ -249,6 +250,7 @@ static u32 ufs_query_desc_max_size[] = {
 	QUERY_DESC_RFU_MAX_SIZE,
 	QUERY_DESC_GEOMETRY_MAZ_SIZE,
 	QUERY_DESC_POWER_MAX_SIZE,
+	QUERY_DESC_HEALTH_MAX_SIZE,
 	QUERY_DESC_RFU_MAX_SIZE,
 };
 
@@ -2380,7 +2382,8 @@ int ufshcd_copy_query_response(struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
 	memcpy(&query_res->upiu_res, &lrbp->ucd_rsp_ptr->qr, QUERY_OSF_SIZE);
 
 	/* Get the descriptor */
-	if (lrbp->ucd_rsp_ptr->qr.opcode == UPIU_QUERY_OPCODE_READ_DESC) {
+	if (hba->dev_cmd.query.descriptor &&
+	    lrbp->ucd_rsp_ptr->qr.opcode == UPIU_QUERY_OPCODE_READ_DESC) {
 		u8 *descp = (u8 *)lrbp->ucd_rsp_ptr +
 				GENERAL_UPIU_REQUEST_SIZE;
 		u16 resp_len;
@@ -5611,7 +5614,6 @@ static void __ufshcd_transfer_req_compl(struct ufs_hba *hba,
 					lrbp, cmd->request);
 			}
 
-			clear_bit_unlock(index, &hba->lrb_in_use);
 			req = cmd->request;
 			if (req) {
 				/* Update IO svc time latency histogram */
@@ -6287,8 +6289,8 @@ static void ufshcd_rls_handler(struct work_struct *work)
 	u32 mode;
 
 	hba = container_of(work, struct ufs_hba, rls_work);
-	ufshcd_scsi_block_requests(hba);
 	pm_runtime_get_sync(hba->dev);
+	ufshcd_scsi_block_requests(hba);
 	ret = ufshcd_wait_for_doorbell_clr(hba, U64_MAX);
 	if (ret) {
 		dev_err(hba->dev,
@@ -7163,19 +7165,19 @@ static u32 ufshcd_find_max_sup_active_icc_level(struct ufs_hba *hba,
 		goto out;
 	}
 
-	if (hba->vreg_info.vcc)
+	if (hba->vreg_info.vcc && hba->vreg_info.vcc->max_uA)
 		icc_level = ufshcd_get_max_icc_level(
 				hba->vreg_info.vcc->max_uA,
 				POWER_DESC_MAX_ACTV_ICC_LVLS - 1,
 				&desc_buf[PWR_DESC_ACTIVE_LVLS_VCC_0]);
 
-	if (hba->vreg_info.vccq)
+	if (hba->vreg_info.vccq && hba->vreg_info.vccq->max_uA)
 		icc_level = ufshcd_get_max_icc_level(
 				hba->vreg_info.vccq->max_uA,
 				icc_level,
 				&desc_buf[PWR_DESC_ACTIVE_LVLS_VCCQ_0]);
 
-	if (hba->vreg_info.vccq2)
+	if (hba->vreg_info.vccq2 && hba->vreg_info.vccq2->max_uA)
 		icc_level = ufshcd_get_max_icc_level(
 				hba->vreg_info.vccq2->max_uA,
 				icc_level,
@@ -7951,6 +7953,15 @@ static int ufshcd_config_vreg_load(struct device *dev, struct ufs_vreg *vreg,
 	if (!vreg)
 		return 0;
 
+	/*
+	 * "set_load" operation shall be required on those regulators
+	 * which specifically configured current limitation. Otherwise
+	 * zero max_uA may cause unexpected behavior when regulator is
+	 * enabled or set as high power mode.
+	 */
+	if (!vreg->max_uA)
+		return 0;
+
 	ret = regulator_set_load(vreg->reg, ua);
 	if (ret < 0) {
 		dev_err(dev, "%s: %s set load (ua=%d) failed, err=%d\n",
@@ -7997,18 +8008,21 @@ static int ufshcd_config_vreg(struct device *dev,
 	name = vreg->name;
 
 	if (regulator_count_voltages(reg) > 0) {
-		min_uV = on ? vreg->min_uV : 0;
-		ret = regulator_set_voltage(reg, min_uV, vreg->max_uV);
-		if (ret) {
-			dev_err(dev, "%s: %s set voltage failed, err=%d\n",
-					__func__, name, ret);
-			goto out;
-		}
-
 		uA_load = on ? vreg->max_uA : 0;
 		ret = ufshcd_config_vreg_load(dev, vreg, uA_load);
 		if (ret)
 			goto out;
+
+		if (vreg->min_uV && vreg->max_uV) {
+			min_uV = on ? vreg->min_uV : 0;
+			ret = regulator_set_voltage(reg, min_uV, vreg->max_uV);
+			if (ret) {
+				dev_err(dev,
+					"%s: %s set voltage failed, err=%d\n",
+					__func__, name, ret);
+				goto out;
+			}
+		}
 	}
 out:
 	return ret;
@@ -9222,10 +9236,99 @@ static void ufshcd_add_spm_lvl_sysfs_nodes(struct ufs_hba *hba)
 		dev_err(hba->dev, "Failed to create sysfs for spm_lvl\n");
 }
 
+static ssize_t ufs_sysfs_read_desc_param(struct ufs_hba *hba,
+				  enum desc_idn desc_id,
+				  u8 desc_index,
+				  u8 param_offset,
+				  u8 *sysfs_buf,
+				  u8 param_size)
+{
+	u8 desc_buf[8] = {0};
+	int ret;
+
+	if (param_size > 8)
+		return -EINVAL;
+
+	pm_runtime_get_sync(hba->dev);
+	ret = ufshcd_read_desc_param(hba, desc_id, desc_index,
+				param_offset, desc_buf, param_size);
+	pm_runtime_put_sync(hba->dev);
+
+	if (ret)
+		return -EINVAL;
+	switch (param_size) {
+	case 1:
+		ret = snprintf(sysfs_buf, PAGE_SIZE, "0x%02X\n", *desc_buf);
+		break;
+	case 2:
+		ret = snprintf(sysfs_buf, PAGE_SIZE, "0x%04X\n",
+			get_unaligned_be16(desc_buf));
+		break;
+	case 4:
+		ret = snprintf(sysfs_buf, PAGE_SIZE, "0x%08X\n",
+			get_unaligned_be32(desc_buf));
+		break;
+	case 8:
+		ret = snprintf(sysfs_buf, PAGE_SIZE, "0x%016llX\n",
+			get_unaligned_be64(desc_buf));
+		break;
+	}
+
+	return ret;
+}
+
+
+#define UFS_DESC_PARAM(_name, _puname, _duname, _size)			\
+	static ssize_t _name##_show(struct device *dev,			\
+		struct device_attribute *attr, char *buf)			\
+{									\
+	struct ufs_hba *hba = dev_get_drvdata(dev); 		\
+	return ufs_sysfs_read_desc_param(hba, QUERY_DESC_IDN_##_duname, \
+		0, _duname##_DESC_PARAM##_puname, buf, _size);		\
+}									\
+static DEVICE_ATTR_RO(_name)
+
+#define UFS_HEALTH_DESC_PARAM(_name, _uname, _size)			\
+		UFS_DESC_PARAM(_name, _uname, HEALTH, _size)
+
+UFS_HEALTH_DESC_PARAM(eol_info, _EOL_INFO, 1);
+UFS_HEALTH_DESC_PARAM(life_time_estimation_a, _LIFE_TIME_EST_A, 1);
+UFS_HEALTH_DESC_PARAM(life_time_estimation_b, _LIFE_TIME_EST_B, 1);
+
+static struct attribute *ufs_sysfs_health_descriptor[] = {
+	&dev_attr_eol_info.attr,
+	&dev_attr_life_time_estimation_a.attr,
+	&dev_attr_life_time_estimation_b.attr,
+	NULL,
+};
+
+static const struct attribute_group ufs_sysfs_health_descriptor_group = {
+	.name = "health_descriptor",
+	.attrs = ufs_sysfs_health_descriptor,
+};
+
+static const struct attribute_group *ufs_sysfs_groups[] = {
+	&ufs_sysfs_health_descriptor_group,
+	NULL,
+};
+
+
+static void ufshcd_add_desc_sysfs_nodes(struct device *dev)
+{
+	int ret;
+
+	ret = sysfs_create_groups(&dev->kobj, ufs_sysfs_groups);
+	if (ret)
+		dev_err(dev,
+			"%s: sysfs groups creation failed (err = %d)\n",
+			__func__, ret);
+}
+
 static inline void ufshcd_add_sysfs_nodes(struct ufs_hba *hba)
 {
 	ufshcd_add_rpm_lvl_sysfs_nodes(hba);
 	ufshcd_add_spm_lvl_sysfs_nodes(hba);
+	ufshcd_add_desc_sysfs_nodes(hba->dev);
 }
 
 static void ufshcd_shutdown_clkscaling(struct ufs_hba *hba)
@@ -9268,6 +9371,9 @@ static void ufshcd_shutdown_clkscaling(struct ufs_hba *hba)
 int ufshcd_shutdown(struct ufs_hba *hba)
 {
 	int ret = 0;
+
+	if (!hba->is_powered)
+		goto out;
 
 	if (ufshcd_is_ufs_dev_poweroff(hba) && ufshcd_is_link_off(hba))
 		goto out;

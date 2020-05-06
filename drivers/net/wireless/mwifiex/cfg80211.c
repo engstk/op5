@@ -365,11 +365,20 @@ mwifiex_cfg80211_set_tx_power(struct wiphy *wiphy,
 	struct mwifiex_power_cfg power_cfg;
 	int dbm = MBM_TO_DBM(mbm);
 
-	if (type == NL80211_TX_POWER_FIXED) {
+	switch (type) {
+	case NL80211_TX_POWER_FIXED:
 		power_cfg.is_power_auto = 0;
+		power_cfg.is_power_fixed = 1;
 		power_cfg.power_level = dbm;
-	} else {
+		break;
+	case NL80211_TX_POWER_LIMITED:
+		power_cfg.is_power_auto = 0;
+		power_cfg.is_power_fixed = 0;
+		power_cfg.power_level = dbm;
+		break;
+	case NL80211_TX_POWER_AUTOMATIC:
 		power_cfg.is_power_auto = 1;
+		break;
 	}
 
 	priv = mwifiex_get_priv(adapter, MWIFIEX_BSS_ROLE_ANY);
@@ -1150,6 +1159,12 @@ mwifiex_cfg80211_change_virtual_intf(struct wiphy *wiphy,
 			priv->adapter->curr_iface_comb.p2p_intf--;
 			priv->adapter->curr_iface_comb.sta_intf++;
 			dev->ieee80211_ptr->iftype = type;
+			if (mwifiex_deinit_priv_params(priv))
+				return -1;
+			if (mwifiex_init_new_priv_params(priv, dev, type))
+				return -1;
+			if (mwifiex_sta_init_cmd(priv, false, false))
+				return -1;
 			break;
 		case NL80211_IFTYPE_ADHOC:
 			if (mwifiex_cfg80211_deinit_p2p(priv))
@@ -2839,8 +2854,10 @@ int mwifiex_del_virtual_intf(struct wiphy *wiphy, struct wireless_dev *wdev)
 
 	mwifiex_stop_net_dev_queue(priv->netdev, adapter);
 
-	skb_queue_walk_safe(&priv->bypass_txq, skb, tmp)
+	skb_queue_walk_safe(&priv->bypass_txq, skb, tmp) {
+		skb_unlink(skb, &priv->bypass_txq);
 		mwifiex_write_data_complete(priv->adapter, skb, 0, -1);
+	}
 
 	if (netif_carrier_ok(priv->netdev))
 		netif_carrier_off(priv->netdev);

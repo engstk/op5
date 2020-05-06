@@ -997,6 +997,12 @@ struct nfs4_opendata {
 	int cancelled;
 };
 
+struct nfs4_open_createattrs {
+	struct nfs4_label *label;
+	struct iattr *sattr;
+	const __u32 verf[2];
+};
+
 static bool nfs4_clear_cap_atomic_open_v1(struct nfs_server *server,
 		int err, struct nfs4_exception *exception)
 {
@@ -1066,8 +1072,7 @@ static void nfs4_init_opendata_res(struct nfs4_opendata *p)
 
 static struct nfs4_opendata *nfs4_opendata_alloc(struct dentry *dentry,
 		struct nfs4_state_owner *sp, fmode_t fmode, int flags,
-		const struct iattr *attrs,
-		struct nfs4_label *label,
+		const struct nfs4_open_createattrs *c,
 		enum open_claim_type4 claim,
 		gfp_t gfp_mask)
 {
@@ -1075,6 +1080,7 @@ static struct nfs4_opendata *nfs4_opendata_alloc(struct dentry *dentry,
 	struct inode *dir = d_inode(parent);
 	struct nfs_server *server = NFS_SERVER(dir);
 	struct nfs_seqid *(*alloc_seqid)(struct nfs_seqid_counter *, gfp_t);
+	struct nfs4_label *label = (c != NULL) ? c->label : NULL;
 	struct nfs4_opendata *p;
 
 	p = kzalloc(sizeof(*p), gfp_mask);
@@ -1131,15 +1137,11 @@ static struct nfs4_opendata *nfs4_opendata_alloc(struct dentry *dentry,
 	case NFS4_OPEN_CLAIM_DELEG_PREV_FH:
 		p->o_arg.fh = NFS_FH(d_inode(dentry));
 	}
-	if (attrs != NULL && attrs->ia_valid != 0) {
-		__u32 verf[2];
-
+	if (c != NULL && c->sattr != NULL && c->sattr->ia_valid != 0) {
 		p->o_arg.u.attrs = &p->attrs;
-		memcpy(&p->attrs, attrs, sizeof(p->attrs));
+		memcpy(&p->attrs, c->sattr, sizeof(p->attrs));
 
-		verf[0] = jiffies;
-		verf[1] = current->pid;
-		memcpy(p->o_arg.u.verifier.data, verf,
+		memcpy(p->o_arg.u.verifier.data, c->verf,
 				sizeof(p->o_arg.u.verifier.data));
 	}
 	p->c_arg.fh = &p->o_res.fh;
@@ -1240,8 +1242,6 @@ static int can_open_delegated(struct nfs_delegation *delegation, fmode_t fmode,
 	if (delegation == NULL)
 		return 0;
 	if ((delegation->type & fmode) != fmode)
-		return 0;
-	if (test_bit(NFS_DELEGATION_RETURNING, &delegation->flags))
 		return 0;
 	switch (claim) {
 	case NFS4_OPEN_CLAIM_NULL:
@@ -1471,7 +1471,6 @@ static void nfs4_return_incompatible_delegation(struct inode *inode, fmode_t fmo
 static struct nfs4_state *nfs4_try_open_cached(struct nfs4_opendata *opendata)
 {
 	struct nfs4_state *state = opendata->state;
-	struct nfs_inode *nfsi = NFS_I(state->inode);
 	struct nfs_delegation *delegation;
 	int open_mode = opendata->o_arg.open_flags;
 	fmode_t fmode = opendata->o_arg.fmode;
@@ -1488,7 +1487,7 @@ static struct nfs4_state *nfs4_try_open_cached(struct nfs4_opendata *opendata)
 		}
 		spin_unlock(&state->owner->so_lock);
 		rcu_read_lock();
-		delegation = rcu_dereference(nfsi->delegation);
+		delegation = nfs4_get_valid_delegation(state->inode);
 		if (!can_open_delegated(delegation, fmode, claim)) {
 			rcu_read_unlock();
 			break;
@@ -1653,7 +1652,7 @@ static struct nfs4_opendata *nfs4_open_recoverdata_alloc(struct nfs_open_context
 	struct nfs4_opendata *opendata;
 
 	opendata = nfs4_opendata_alloc(ctx->dentry, state->owner, 0, 0,
-			NULL, NULL, claim, GFP_NOFS);
+			NULL, claim, GFP_NOFS);
 	if (opendata == NULL)
 		return ERR_PTR(-ENOMEM);
 	opendata->state = state;
@@ -1979,7 +1978,7 @@ static void nfs4_open_prepare(struct rpc_task *task, void *calldata)
 		if (can_open_cached(data->state, data->o_arg.fmode, data->o_arg.open_flags))
 			goto out_no_action;
 		rcu_read_lock();
-		delegation = rcu_dereference(NFS_I(data->state->inode)->delegation);
+		delegation = nfs4_get_valid_delegation(data->state->inode);
 		if (can_open_delegated(delegation, data->o_arg.fmode, claim))
 			goto unlock_no_action;
 		rcu_read_unlock();
@@ -2488,8 +2487,7 @@ out:
 static int _nfs4_do_open(struct inode *dir,
 			struct nfs_open_context *ctx,
 			int flags,
-			struct iattr *sattr,
-			struct nfs4_label *label,
+			const struct nfs4_open_createattrs *c,
 			int *opened)
 {
 	struct nfs4_state_owner  *sp;
@@ -2501,6 +2499,8 @@ static int _nfs4_do_open(struct inode *dir,
 	struct nfs4_threshold **ctx_th = &ctx->mdsthreshold;
 	fmode_t fmode = ctx->mode & (FMODE_READ|FMODE_WRITE|FMODE_EXEC);
 	enum open_claim_type4 claim = NFS4_OPEN_CLAIM_NULL;
+	struct iattr *sattr = c->sattr;
+	struct nfs4_label *label = c->label;
 	struct nfs4_label *olabel = NULL;
 	int status;
 
@@ -2519,8 +2519,8 @@ static int _nfs4_do_open(struct inode *dir,
 	status = -ENOMEM;
 	if (d_really_is_positive(dentry))
 		claim = NFS4_OPEN_CLAIM_FH;
-	opendata = nfs4_opendata_alloc(dentry, sp, fmode, flags, sattr,
-			label, claim, GFP_KERNEL);
+	opendata = nfs4_opendata_alloc(dentry, sp, fmode, flags,
+			c, claim, GFP_KERNEL);
 	if (opendata == NULL)
 		goto err_put_state_owner;
 
@@ -2596,10 +2596,18 @@ static struct nfs4_state *nfs4_do_open(struct inode *dir,
 	struct nfs_server *server = NFS_SERVER(dir);
 	struct nfs4_exception exception = { };
 	struct nfs4_state *res;
+	struct nfs4_open_createattrs c = {
+		.label = label,
+		.sattr = sattr,
+		.verf = {
+			[0] = (__u32)jiffies,
+			[1] = (__u32)current->pid,
+		},
+	};
 	int status;
 
 	do {
-		status = _nfs4_do_open(dir, ctx, flags, sattr, label, opened);
+		status = _nfs4_do_open(dir, ctx, flags, &c, opened);
 		res = ctx->state;
 		trace_nfs4_open_file(ctx, flags, status);
 		if (status == 0)
@@ -5244,6 +5252,7 @@ int nfs4_proc_setclientid(struct nfs_client *clp, u32 program,
 	}
 	status = task->tk_status;
 	if (setclientid.sc_cred) {
+		kfree(clp->cl_acceptor);
 		clp->cl_acceptor = rpcauth_stringify_acceptor(setclientid.sc_cred);
 		put_rpccred(setclientid.sc_cred);
 	}

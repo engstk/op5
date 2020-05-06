@@ -2447,7 +2447,7 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 	unsigned long flags;
 	int cpu;
 
-	init_new_task_load(p, false);
+	init_new_task_load(p);
 	cpu = get_cpu();
 
 	__sched_fork(clone_flags, p);
@@ -4205,8 +4205,8 @@ static int __sched_setscheduler(struct task_struct *p,
 	int reset_on_fork;
 	int queue_flags = DEQUEUE_SAVE | DEQUEUE_MOVE;
 
-	/* may grab non-irq protected spin_locks */
-	BUG_ON(in_interrupt());
+	/* The pi code expects interrupts enabled */
+	BUG_ON(pi && in_interrupt());
 recheck:
 	/* double check policy once rq lock held */
 	if (policy < 0) {
@@ -5407,18 +5407,14 @@ void init_idle_bootup_task(struct task_struct *idle)
  * init_idle - set up an idle thread for a given CPU
  * @idle: task in question
  * @cpu: cpu the idle task belongs to
- * @cpu_up: differentiate between initial boot vs hotplug
  *
  * NOTE: this function does not set the idle thread's NEED_RESCHED
  * flag, to make booting more robust.
  */
-void init_idle(struct task_struct *idle, int cpu, bool cpu_up)
+void init_idle(struct task_struct *idle, int cpu)
 {
 	struct rq *rq = cpu_rq(cpu);
 	unsigned long flags;
-
-	if (!cpu_up)
-		init_new_task_load(idle, true);
 
 	raw_spin_lock_irqsave(&idle->pi_lock, flags);
 	raw_spin_lock(&rq->lock);
@@ -6373,6 +6369,10 @@ static void set_cpu_rq_start_time(void)
 	rq->age_stamp = sched_clock_cpu(cpu);
 }
 
+#ifdef CONFIG_SCHED_SMT
+atomic_t sched_smt_present = ATOMIC_INIT(0);
+#endif
+
 static int sched_cpu_active(struct notifier_block *nfb,
 				      unsigned long action, void *hcpu)
 {
@@ -6389,11 +6389,23 @@ static int sched_cpu_active(struct notifier_block *nfb,
 		 * set_cpu_online(). But it might not yet have marked itself
 		 * as active, which is essential from here on.
 		 */
+#ifdef CONFIG_SCHED_SMT
+		/*
+		 * When going up, increment the number of cores with SMT present.
+		 */
+		if (cpumask_weight(cpu_smt_mask(cpu)) == 2)
+			atomic_inc(&sched_smt_present);
+#endif
 		set_cpu_active(cpu, true);
 		stop_machine_unpark(cpu);
 		return NOTIFY_OK;
 
 	case CPU_DOWN_FAILED:
+#ifdef CONFIG_SCHED_SMT
+		/* Same as for CPU_ONLINE */
+		if (cpumask_weight(cpu_smt_mask(cpu)) == 2)
+			atomic_inc(&sched_smt_present);
+#endif
 		set_cpu_active(cpu, true);
 		return NOTIFY_OK;
 
@@ -6408,7 +6420,15 @@ static int sched_cpu_inactive(struct notifier_block *nfb,
 	switch (action & ~CPU_TASKS_FROZEN) {
 	case CPU_DOWN_PREPARE:
 		set_cpu_active((long)hcpu, false);
+#ifdef CONFIG_SCHED_SMT
+		/*
+		 * When going down, decrement the number of cores with SMT present.
+		 */
+		if (cpumask_weight(cpu_smt_mask((long)hcpu)) == 2)
+			atomic_dec(&sched_smt_present);
+#endif
 		return NOTIFY_OK;
+
 	default:
 		return NOTIFY_DONE;
 	}
@@ -8547,7 +8567,8 @@ void __init sched_init(void)
 	 * but because we are the idle thread, we just pick up running again
 	 * when this runqueue becomes "idle".
 	 */
-	init_idle(current, smp_processor_id(), false);
+	init_idle(current, smp_processor_id());
+	init_new_task_load(current);
 
 	calc_load_update = jiffies + LOAD_FREQ;
 
@@ -9318,10 +9339,6 @@ static int cpu_cgroup_can_attach(struct cgroup_taskset *tset)
 #ifdef CONFIG_RT_GROUP_SCHED
 		if (!sched_rt_can_attach(css_tg(css), task))
 			return -EINVAL;
-#else
-		/* We don't support RT-tasks being in separate groups */
-		if (task->sched_class != &fair_sched_class)
-			return -EINVAL;
 #endif
 		/*
 		 * Serialize against wake_up_new_task() such that if its
@@ -9356,6 +9373,8 @@ static void cpu_cgroup_attach(struct cgroup_taskset *tset)
 static int cpu_shares_write_u64(struct cgroup_subsys_state *css,
 				struct cftype *cftype, u64 shareval)
 {
+	if (shareval > scale_load_down(ULONG_MAX))
+		shareval = MAX_SHARES;
 	return sched_group_set_shares(css_tg(css), scale_load(shareval));
 }
 
@@ -9455,8 +9474,10 @@ int tg_set_cfs_quota(struct task_group *tg, long cfs_quota_us)
 	period = ktime_to_ns(tg->cfs_bandwidth.period);
 	if (cfs_quota_us < 0)
 		quota = RUNTIME_INF;
-	else
+	else if ((u64)cfs_quota_us <= U64_MAX / NSEC_PER_USEC)
 		quota = (u64)cfs_quota_us * NSEC_PER_USEC;
+	else
+		return -EINVAL;
 
 	return tg_set_cfs_bandwidth(tg, period, quota);
 }
@@ -9477,6 +9498,9 @@ long tg_get_cfs_quota(struct task_group *tg)
 int tg_set_cfs_period(struct task_group *tg, long cfs_period_us)
 {
 	u64 quota, period;
+
+	if ((u64)cfs_period_us > U64_MAX / NSEC_PER_USEC)
+		return -EINVAL;
 
 	period = (u64)cfs_period_us * NSEC_PER_USEC;
 	quota = tg->cfs_bandwidth.quota;

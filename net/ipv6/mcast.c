@@ -276,16 +276,14 @@ static struct inet6_dev *ip6_mc_find_dev_rcu(struct net *net,
 	return idev;
 }
 
-void ipv6_sock_mc_close(struct sock *sk)
+void __ipv6_sock_mc_close(struct sock *sk)
 {
 	struct ipv6_pinfo *np = inet6_sk(sk);
 	struct ipv6_mc_socklist *mc_lst;
 	struct net *net = sock_net(sk);
 
-	if (!rcu_access_pointer(np->ipv6_mc_list))
-		return;
+	ASSERT_RTNL();
 
-	rtnl_lock();
 	while ((mc_lst = rtnl_dereference(np->ipv6_mc_list)) != NULL) {
 		struct net_device *dev;
 
@@ -303,8 +301,17 @@ void ipv6_sock_mc_close(struct sock *sk)
 
 		atomic_sub(sizeof(*mc_lst), &sk->sk_omem_alloc);
 		kfree_rcu(mc_lst, rcu);
-
 	}
+}
+
+void ipv6_sock_mc_close(struct sock *sk)
+{
+	struct ipv6_pinfo *np = inet6_sk(sk);
+
+	if (!rcu_access_pointer(np->ipv6_mc_list))
+		return;
+	rtnl_lock();
+	__ipv6_sock_mc_close(sk);
 	rtnl_unlock();
 }
 
@@ -2390,17 +2397,17 @@ static int ip6_mc_leave_src(struct sock *sk, struct ipv6_mc_socklist *iml,
 {
 	int err;
 
-	/* callers have the socket lock and rtnl lock
-	 * so no other readers or writers of iml or its sflist
-	 */
+	write_lock_bh(&iml->sflock);
 	if (!iml->sflist) {
 		/* any-source empty exclude case */
-		return ip6_mc_del_src(idev, &iml->addr, iml->sfmode, 0, NULL, 0);
+		err = ip6_mc_del_src(idev, &iml->addr, iml->sfmode, 0, NULL, 0);
+	} else {
+		err = ip6_mc_del_src(idev, &iml->addr, iml->sfmode,
+				iml->sflist->sl_count, iml->sflist->sl_addr, 0);
+		sock_kfree_s(sk, iml->sflist, IP6_SFLSIZE(iml->sflist->sl_max));
+		iml->sflist = NULL;
 	}
-	err = ip6_mc_del_src(idev, &iml->addr, iml->sfmode,
-		iml->sflist->sl_count, iml->sflist->sl_addr, 0);
-	sock_kfree_s(sk, iml->sflist, IP6_SFLSIZE(iml->sflist->sl_max));
-	iml->sflist = NULL;
+	write_unlock_bh(&iml->sflock);
 	return err;
 }
 

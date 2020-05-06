@@ -123,9 +123,11 @@ struct output_meta_data_st {
 
 struct msm_plat_data {
 	int perf_mode;
+	bool avs_ver;
 	struct snd_pcm *pcm;
 	struct snd_pcm *pcm_device[MSM_FRONTEND_DAI_MM_SIZE];
 	struct msm_pcm_channel_mixer chmixer_pspd[MSM_FRONTEND_DAI_MM_SIZE][2];
+	struct mutex lock;
 };
 
 #endif /*_MSM_PCM_H*/

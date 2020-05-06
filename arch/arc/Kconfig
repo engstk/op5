@@ -96,7 +96,7 @@ endmenu
 
 choice
 	prompt "ARC Instruction Set"
-	default ISA_ARCOMPACT
+	default ISA_ARCV2
 
 config ISA_ARCOMPACT
 	bool "ARCompact ISA"
@@ -277,14 +277,6 @@ config ARC_DCCM_BASE
 	hex "DCCM map address"
 	default "0xA0000000"
 	depends on ARC_HAS_DCCM
-
-config ARC_HAS_HW_MPY
-	bool "Use Hardware Multiplier (Normal or Faster XMAC)"
-	default y
-	help
-	  Influences how gcc generates code for MPY operations.
-	  If enabled, MPYxx insns are generated, provided by Standard/XMAC
-	  Multipler. Otherwise software multipy lib is used
 
 choice
 	prompt "MMU Version"

@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -45,6 +45,9 @@
 #include <linux/reboot.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
+#include <linux/delay.h>
+#include <linux/version.h>
+#include <soc/qcom/boot_stats.h>
 
 enum hab_payload_type {
 	HAB_PAYLOAD_TYPE_MSG = 0x0,
@@ -56,6 +59,10 @@ enum hab_payload_type {
 	HAB_PAYLOAD_TYPE_PROFILE,
 	HAB_PAYLOAD_TYPE_CLOSE,
 	HAB_PAYLOAD_TYPE_INIT_CANCEL,
+	HAB_PAYLOAD_TYPE_SCHE_MSG,
+	HAB_PAYLOAD_TYPE_SCHE_MSG_ACK,
+	HAB_PAYLOAD_TYPE_SCHE_RESULT_REQ,
+	HAB_PAYLOAD_TYPE_SCHE_RESULT_RSP,
 	HAB_PAYLOAD_TYPE_MAX,
 };
 #define LOOPBACK_DOM 0xFF
@@ -80,11 +87,9 @@ enum hab_payload_type {
 #define DEVICE_DISP5_NAME "hab_disp5"
 #define DEVICE_GFX_NAME "hab_ogles"
 #define DEVICE_VID_NAME "hab_vid"
+#define DEVICE_VID2_NAME "hab_vid2"
 #define DEVICE_MISC_NAME "hab_misc"
 #define DEVICE_QCPE1_NAME "hab_qcpe_vm1"
-#define DEVICE_QCPE2_NAME "hab_qcpe_vm2"
-#define DEVICE_QCPE3_NAME "hab_qcpe_vm3"
-#define DEVICE_QCPE4_NAME "hab_qcpe_vm4"
 #define DEVICE_CLK1_NAME "hab_clock_vm1"
 #define DEVICE_CLK2_NAME "hab_clock_vm2"
 #define DEVICE_FDE1_NAME "hab_fde1"
@@ -157,13 +162,13 @@ struct hab_header {
 
 #define HAB_HEADER_SET_SIZE(header, size) \
 	((header).id_type_size = ((header).id_type_size & \
-			(~HAB_HEADER_SIZE_MASK)) | \
+			(uint32_t)(~HAB_HEADER_SIZE_MASK)) |	\
 			(((size) << HAB_HEADER_SIZE_SHIFT) & \
 			HAB_HEADER_SIZE_MASK))
 
 #define HAB_HEADER_SET_TYPE(header, type) \
 	((header).id_type_size = ((header).id_type_size & \
-			(~HAB_HEADER_TYPE_MASK)) | \
+			(uint32_t)(~HAB_HEADER_TYPE_MASK)) | \
 			(((type) << HAB_HEADER_TYPE_SHIFT) & \
 			HAB_HEADER_TYPE_MASK))
 
@@ -188,6 +193,7 @@ struct hab_header {
 #define HAB_HEADER_GET_SESSION_ID(header) ((header).session_id)
 
 #define HAB_HS_TIMEOUT (10*1000*1000)
+#define HAB_HS_INIT_DONE_TIMEOUT (3*1000)
 
 struct physical_channel {
 	struct list_head node;
@@ -214,6 +220,7 @@ struct physical_channel {
 	/* debug only */
 	uint32_t sequence_tx;
 	uint32_t sequence_rx;
+	uint32_t status;
 
 	/* vchans on this pchan */
 	struct list_head vchannels;
@@ -255,9 +262,14 @@ struct hab_export_ack_recvd {
 };
 
 struct hab_message {
-	size_t sizebytes;
 	struct list_head node;
+	size_t sizebytes;
 	uint32_t data[];
+};
+
+struct hab_forbidden_node {
+	struct list_head node;
+	uint32_t mmid;
 };
 
 /* for all the pchans of same kind */
@@ -296,6 +308,9 @@ struct uhab_context {
 
 	struct list_head pending_open; /* sent to remote */
 	int pending_cnt;
+
+	struct list_head forbidden_chans;
+	spinlock_t forbidden_lock;
 
 	rwlock_t ctx_lock;
 	int closing;
@@ -345,6 +360,8 @@ struct hab_driver {
 };
 
 struct virtual_channel {
+	struct list_head node; /* for ctx */
+	struct list_head pnode; /* for pchan */
 	/*
 	 * refcount is used to track the references from hab core to the virtual
 	 * channel such as references from physical channels,
@@ -353,8 +370,6 @@ struct virtual_channel {
 	struct kref refcount;
 	struct physical_channel *pchan;
 	struct uhab_context *ctx;
-	struct list_head node; /* for ctx */
-	struct list_head pnode; /* for pchan */
 	struct list_head rx_list;
 	wait_queue_head_t rx_queue;
 	spinlock_t rx_lock;
@@ -398,6 +413,9 @@ struct export_desc {
 	unsigned char       payload[1];
 } __packed;
 
+int hab_is_forbidden(struct uhab_context *ctx,
+		struct hab_device *dev,
+		uint32_t sub_id);
 int hab_vchan_open(struct uhab_context *ctx,
 		unsigned int mmid, int32_t *vcid,
 		int32_t timeout, uint32_t flags);
@@ -493,7 +511,7 @@ struct virtual_channel *hab_vchan_get(struct physical_channel *pchan,
 void hab_vchan_put(struct virtual_channel *vchan);
 
 struct virtual_channel *hab_get_vchan_fromvcid(int32_t vcid,
-		struct uhab_context *ctx);
+		struct uhab_context *ctx, int ignore_remote);
 struct physical_channel *hab_pchan_alloc(struct hab_device *habdev,
 		int otherend_id);
 struct physical_channel *hab_pchan_find_domid(struct hab_device *dev,
@@ -516,7 +534,7 @@ static inline void hab_ctx_get(struct uhab_context *ctx)
 static inline void hab_ctx_put(struct uhab_context *ctx)
 {
 	if (ctx)
-		kref_put(&ctx->refcount, hab_ctx_free);
+		kref_put(&ctx->refcount, &hab_ctx_free);
 }
 
 void hab_send_close_msg(struct virtual_channel *vchan);

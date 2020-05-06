@@ -1414,8 +1414,12 @@ EXPORT_SYMBOL_GPL(ip6_update_pmtu);
 
 void ip6_sk_update_pmtu(struct sk_buff *skb, struct sock *sk, __be32 mtu)
 {
-	ip6_update_pmtu(skb, sock_net(sk), mtu,
-			sk->sk_bound_dev_if, sk->sk_mark, sk->sk_uid);
+	int oif = sk->sk_bound_dev_if;
+
+	if (!oif && skb->dev)
+		oif = l3mdev_master_ifindex(skb->dev);
+
+	ip6_update_pmtu(skb, sock_net(sk), mtu, oif, sk->sk_mark, sk->sk_uid);
 }
 EXPORT_SYMBOL_GPL(ip6_sk_update_pmtu);
 
@@ -3080,7 +3084,7 @@ static int rt6_fill_node(struct net *net,
 		table = rt->rt6i_table->tb6_id;
 	else
 		table = RT6_TABLE_UNSPEC;
-	rtm->rtm_table = table;
+	rtm->rtm_table = table < 256 ? table : RT_TABLE_COMPAT;
 	if (nla_put_u32(skb, RTA_TABLE, table))
 		goto nla_put_failure;
 	if (rt->rt6i_flags & RTF_REJECT) {

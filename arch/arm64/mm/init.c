@@ -128,11 +128,13 @@ static void __init zone_sizes_init(unsigned long min, unsigned long max)
 }
 
 #ifdef CONFIG_HAVE_ARCH_PFN_VALID
-#define PFN_MASK ((1UL << (64 - PAGE_SHIFT)) - 1)
-
 int pfn_valid(unsigned long pfn)
 {
-	return (pfn & PFN_MASK) == pfn && memblock_is_map_memory(pfn << PAGE_SHIFT);
+	phys_addr_t addr = pfn << PAGE_SHIFT;
+
+	if ((addr >> PAGE_SHIFT) != pfn)
+		return 0;
+	return memblock_is_map_memory(addr);
 }
 EXPORT_SYMBOL(pfn_valid);
 #endif
@@ -227,7 +229,7 @@ void __init arm64_memblock_init(void)
 		 * memory spans, randomize the linear region as well.
 		 */
 		if (memstart_offset_seed > 0 && range >= ARM64_MEMSTART_ALIGN) {
-			range = range / ARM64_MEMSTART_ALIGN + 1;
+			range /= ARM64_MEMSTART_ALIGN;
 			memstart_addr -= ARM64_MEMSTART_ALIGN *
 					 ((range * memstart_offset_seed) >> 16);
 		}
