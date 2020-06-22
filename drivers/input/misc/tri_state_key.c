@@ -83,41 +83,11 @@ static void switch_dev_work(struct work_struct *work)
 	int i, j;
 	bool have_wrong_key = false;
 	int state_same = 0;
-	static int pre_key0 = 1, pre_key1 = 1, pre_key2 = 1;
 
 	msleep(delay_time);
 	key[0] = gpio_get_value(switch_data->key1_gpio);
 	key[1] = gpio_get_value(switch_data->key2_gpio);
 	key[2] = gpio_get_value(switch_data->key3_gpio);
-	pr_err("key[0]=%d,key[1]=%d,key[2]=%d\n",
-			 key[0], key[1], key[2]);
-
-	if (!key[0] || !key[1] || !key[2]) {
-		if (pre_key0 == key[0] && pre_key1 == key[1]
-				&& pre_key2 == key[2]) {
-			pre_key0 = key[0];
-			pre_key1 = key[1];
-			pre_key2 = key[2];
-			pr_info("threekey same value return\n");
-			return;
-		}
-	}
-
-	if ((key[0] && key[1] && key[2])
-		|| (!key[0] && !key[1] && !key[2])
-		|| (!key[0] && !key[1] && key[2])
-		|| (!key[0] && key[1] && !key[2])
-		|| (key[0] && !key[1] && !key[2])) {
-		pre_key0 = key[0];
-		pre_key1 = key[1];
-		pre_key2 = key[2];
-		pr_info("threekey invalid value return\n");
-		return;
-	}
-
-	pre_key0 = key[0];
-	pre_key1 = key[1];
-	pre_key2 = key[2];
 
 	for (i = 0; i < 3; i++) {
 	/*if 3 gpio status  is the same as before ,ignore them*/
